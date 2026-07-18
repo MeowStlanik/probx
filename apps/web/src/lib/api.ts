@@ -29,33 +29,18 @@ export function apiBaseUrl(): string {
   if (raw === "same" || raw === "/") {
     return typeof window === "undefined" ? serverOrigin() : "";
   }
+  // Explicit base always wins (split API on :3001, remote, etc.)
   if (raw) return raw.replace(/\/$/, "");
 
-  // Production on Vercel: browser same-origin; server absolute
-  if (process.env.VERCEL) {
-    return typeof window === "undefined" ? serverOrigin() : "";
-  }
-
+  // Browser: always same-origin. Next hosts `/api/*` via app/api/[[...path]].
+  // Do NOT rewrite Codespace `*-3000.app.github.dev` → `*-3001` — that port is
+  // not forwarded and causes "Failed to fetch" on Admin / markets.
   if (typeof window !== "undefined") {
-    const { protocol, hostname } = window.location;
-    if (hostname === "localhost" || hostname === "127.0.0.1") {
-      // Prefer same-origin if Next hosts /api (unified), else legacy :3001
-      if (process.env.NEXT_PUBLIC_UNIFIED_API === "1") return "";
-      return `${protocol}//${hostname}:3001`;
-    }
-    if (hostname.includes("-3000.")) {
-      return `${protocol}//${hostname.replace("-3000.", "-3001.")}`;
-    }
-    // Deployed non-local without env: same origin
     return "";
   }
 
-  // Node SSR outside Vercel (local next start / unified API on same port)
-  if (process.env.NEXT_PUBLIC_UNIFIED_API === "1" || process.env.VERCEL === "1") {
-    return serverOrigin();
-  }
-  const port = process.env.API_PORT || process.env.PORT_API || "3001";
-  return `http://127.0.0.1:${port}`;
+  // SSR / Node: absolute origin for this deployment
+  return serverOrigin();
 }
 
 /** Join API base + path; works with empty base (same-origin). */

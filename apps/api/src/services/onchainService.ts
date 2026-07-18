@@ -279,8 +279,8 @@ export async function listOnchainMarkets(options: {
 
   // Public markets desk:
   // - only open / locked / observation (never RESOLVED/CANCELLED)
-  // - auto-cycle BTC + weather: only the single freshest market each
-  //   so old locked rounds don't stack when a new OPEN is created.
+  // - BTC + London weather only (no demo "GREEN signal" / admin leftovers)
+  // - one freshest market each so the grid stays 2 cards centered
   // Portfolio still loads tickets by address for claims.
   const live = all.filter(
     (market) =>
@@ -291,7 +291,7 @@ export async function listOnchainMarkets(options: {
 
 /**
  * Keep at most one BTC and one London-weather market (prefer OPEN, then newest openTime).
- * Manual/admin markets (other roles) are left as-is.
+ * Drop non-reference markets (demo GREEN, arc-block, etc.) from the public desk.
  */
 function collapseAutoCycleMarkets(markets: Market[]): Market[] {
   const isBtc = (m: Market) => m.demoRole === "btc_price" || m.category === "crypto-candle";
@@ -299,7 +299,6 @@ function collapseAutoCycleMarkets(markets: Market[]): Market[] {
 
   const btc = markets.filter(isBtc);
   const weather = markets.filter(isWeather);
-  const other = markets.filter((m) => !isBtc(m) && !isWeather(m));
 
   const pickOne = (group: Market[]): Market[] => {
     if (group.length <= 1) return group;
@@ -315,7 +314,8 @@ function collapseAutoCycleMarkets(markets: Market[]): Market[] {
     return [sorted[0]!];
   };
 
-  return [...other, ...pickOne(btc), ...pickOne(weather)];
+  // BTC then weather — stable two-card desk (no third demo market)
+  return [...pickOne(btc), ...pickOne(weather)];
 }
 
 export async function getOnchainMarket(id: string): Promise<Market | undefined> {

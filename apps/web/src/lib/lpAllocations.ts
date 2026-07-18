@@ -15,8 +15,6 @@ const money = (value: number) =>
     maximumFractionDigits: 2
   })}`;
 
-const minutesAgo = (index: number) => `~${(index + 1) * 3}m`;
-
 /** Short human label for a market row (e.g. "BTC ≥ $118,500", "London ≥ 21°C"). */
 function shortMarketLabel(market: Market): string {
   const q = market.question.toLowerCase();
@@ -32,45 +30,48 @@ function shortMarketLabel(market: Market): string {
   return market.question.length > 22 ? `${market.question.slice(0, 20)}…` : market.question;
 }
 
-/**
- * Build a "recent reserve allocations" table from live markets. Active markets
- * (OPEN / LOCKED / OBSERVATION) show as reserve held; resolved markets show as
- * released. When no live markets exist we fall back to a representative demo
- * set so the panel is never empty in the demo.
- */
-export function deriveAllocations(markets: Market[]): ReserveAllocation[] {
-  const rows = markets
-    .filter((m) => m.status !== "CANCELLED" && m.status !== "ARCHIVED")
-    .slice(0, 8)
-    .map((market, index) => {
-      const active =
-        market.status === "OPEN" ||
-        market.status === "LOCKED" ||
-        market.status === "OBSERVATION";
-      const side: Outcome =
-        market.winningOutcome ?? (market.yesPrice >= market.noPrice ? "YES" : "NO");
-      const amount = Math.max(120, Math.round((market.volume || 400) / 2));
-      return {
-        id: market.id,
-        time: minutesAgo(index),
-        market: shortMarketLabel(market),
-        side,
-        amount: money(amount),
-        status: active ? ("Active" as const) : ("Released" as const)
-      };
-    });
-
-  return rows.length ? rows : demoAllocations;
+function relativeOpen(market: Market, now = Date.now()): string {
+  const open = Date.parse(market.openTime || "");
+  if (!Number.isFinite(open)) return "—";
+  const mins = Math.max(0, Math.round((now - open) / 60_000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `~${mins}m`;
+  return `~${Math.floor(mins / 60)}h`;
 }
 
-/** Representative allocations matching the design reference. */
-export const demoAllocations: ReserveAllocation[] = [
-  { id: "a1", time: "~1m", market: "BTC ≥ $118,500", side: "YES", amount: "$1,240.00", status: "Active" },
-  { id: "a2", time: "~3m", market: "London ≥ 21°C", side: "NO", amount: "$640.00", status: "Active" },
-  { id: "a3", time: "~6m", market: "ETH ≥ $4,150", side: "YES", amount: "$2,110.00", status: "Released" },
-  { id: "a4", time: "~9m", market: "Arc block < 2.0s", side: "YES", amount: "$380.00", status: "Released" },
-  { id: "a5", time: "~12m", market: "BTC ≥ $118,200", side: "NO", amount: "$920.00", status: "Released" },
-  { id: "a6", time: "~15m", market: "SOL ≥ $208", side: "YES", amount: "$560.00", status: "Released" },
-  { id: "a7", time: "~18m", market: "London ≥ 20°C", side: "YES", amount: "$410.00", status: "Released" },
-  { id: "a8", time: "~21m", market: "ETH ≥ $4,100", side: "NO", amount: "$780.00", status: "Released" }
-];
+/**
+ * Recent reserve rows from real markets only.
+ * - No demo placeholder rows
+ * - No invented $200 when volume is 0 (show $0.00 or skip)
+ * - Prefer markets with volume / tickets; still list live cycle markets honestly
+ */
+export function deriveAllocations(markets: Market[]): ReserveAllocation[] {
+  const now = Date.now();
+  const live = markets
+    .filter(
+      (m) =>
+        m.status === "OPEN" ||
+        m.status === "LOCKED" ||
+        m.status === "OBSERVATION" ||
+        m.status === "RESOLVED"
+    )
+    .sort((a, b) => (Date.parse(b.openTime || "") || 0) - (Date.parse(a.openTime || "") || 0))
+    .slice(0, 8);
+
+  return live.map((market) => {
+    const active =
+      market.status === "OPEN" || market.status === "LOCKED" || market.status === "OBSERVATION";
+    const side: Outcome =
+      market.winningOutcome ?? (market.yesPrice >= market.noPrice ? "YES" : "NO");
+    // Honest amount: actual reported volume (0 if none) — never invent 400/2
+    const amount = Number(market.volume) || 0;
+    return {
+      id: market.id,
+      time: relativeOpen(market, now),
+      market: shortMarketLabel(market),
+      side,
+      amount: money(amount),
+      status: active ? ("Active" as const) : ("Released" as const)
+    };
+  });
+}

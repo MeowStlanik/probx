@@ -2414,13 +2414,25 @@ input.amountInput,
 
 .marketsLoadingSpinner,
 .spinIcon {
-  animation: spin 0.9s linear infinite;
+  /* 1.1s feels calm on 60–144 Hz displays; 0.9s read as “broken” on high refresh */
+  animation: spin 1.15s linear infinite;
   color: var(--blue);
+  will-change: transform;
 }
 
 @keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marketsLoadingSpinner,
+  .spinIcon {
+    animation: none;
   }
 }
 

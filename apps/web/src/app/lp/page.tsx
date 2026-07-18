@@ -1,30 +1,23 @@
-import { LPStatsPanel } from "@/components/LPStatsPanel";
-import { OnchainLpVault } from "@/components/OnchainLpVault";
 import { fetchLpStats } from "@/lib/api.server";
+import { LpShell } from "@/nextjs/shells/LpShell";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function LpPage() {
-  let initial;
+  let stats;
   try {
-    initial = await fetchLpStats();
+    stats = await fetchLpStats();
   } catch {
-    initial = undefined;
+    stats = undefined;
   }
 
   return (
-    <main className="pageShell">
-      <div className="sectionHeader">
-        <div>
-          <h1>LP vault</h1>
-          <p className="pageLead">Liquidity backing every ticket&apos;s payout on Arc.</p>
-        </div>
-      </div>
-
-      <LPStatsPanel stats={initial} showWaterfall={false} />
-
-      <OnchainLpVault />
-    </main>
+    <LpShell
+      initialTvl={stats?.tvl}
+      initialReserved={stats?.reservedLiquidity}
+      initialAvailable={stats?.availableLiquidity}
+      initialApy={stats?.simulatedApy}
+    />
   );
 }

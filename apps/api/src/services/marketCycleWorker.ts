@@ -1,7 +1,8 @@
 /**
  * Continuous BTC + London weather market cycle:
- * - ~60s OPEN (entry) → ~60s observation → resolve + settle
- * - A new OPEN market is created as soon as the previous one locks (≈ every minute)
+ * - ~60s OPEN (entry) → lock → observation → resolve + settle
+ * - A new OPEN market is created only after the previous one is fully RESOLVED
+ *   (not while the prior round is still LOCKED / OBSERVATION — avoids UI jumps)
  * - Finished markets leave the main Markets UI; Portfolio can still claim by address
  */
 import { runtimeFile } from "../runtimePaths.js";
@@ -102,17 +103,18 @@ export async function runMarketCycleOnce(): Promise<{
       }
     }
 
-    // 2) Ensure an OPEN market for BTC and weather.
-    //    LOCKED/OBSERVATION of the previous cycle does NOT block creation → ~1 new market / minute / type.
+    // 2) Ensure an OPEN market for BTC and weather ONLY when no active round exists.
+    //    Active = OPEN | LOCKED | OBSERVATION. Do not spawn a new market until the
+    //    previous one is fully RESOLVED (or cancelled/hidden) — prevents list jumps.
     const live = await listOnchainMarkets({ forCycle: true });
-    const hasOpenBtc = live.some(
-      (m) => isReferenceBtc(m.demoRole, m.category) && m.status === "OPEN"
+    const hasActiveBtc = live.some(
+      (m) => isReferenceBtc(m.demoRole, m.category) && isActiveRoundStatus(m.status)
     );
-    const hasOpenWeather = live.some(
-      (m) => isReferenceWeather(m.demoRole, m.category) && m.status === "OPEN"
+    const hasActiveWeather = live.some(
+      (m) => isReferenceWeather(m.demoRole, m.category) && isActiveRoundStatus(m.status)
     );
 
-    if (!hasOpenBtc) {
+    if (!hasActiveBtc) {
       try {
         const result = await createMarketOnchain({
           demoRole: "btc_price",
@@ -131,7 +133,7 @@ export async function runMarketCycleOnce(): Promise<{
       }
     }
 
-    if (!hasOpenWeather) {
+    if (!hasActiveWeather) {
       try {
         const result = await createMarketOnchain({
           demoRole: "london_weather",
@@ -149,33 +151,24 @@ export async function runMarketCycleOnce(): Promise<{
       }
     }
 
-    // 3) Hide finished + superseded reference markets from browse UI.
-    //    Public list also collapses to 1 BTC + 1 weather (see listOnchainMarkets).
+    // 3) Hide finished reference markets + legacy demo ("next demo signal GREEN") from browse UI.
+    //    Public list is BTC + weather only (see listOnchainMarkets).
     //    Claim still works: Portfolio loads tickets by address; getMarket accepts raw 0x ids.
     const refreshed = await listOnchainMarkets({ forCycle: true });
-    const openBtcId = refreshed.find(
-      (m) => isReferenceBtc(m.demoRole, m.category) && m.status === "OPEN"
-    )?.id;
-    const openWeatherId = refreshed.find(
-      (m) => isReferenceWeather(m.demoRole, m.category) && m.status === "OPEN"
-    )?.id;
 
     for (const market of refreshed) {
-      if (!isReferenceRole(market.demoRole, market.category)) continue;
+      const isLegacyDemo =
+        !isReferenceRole(market.demoRole, market.category) &&
+        (market.demoRole === "open" ||
+          market.demoRole === "legacy" ||
+          market.id === "mkt_demo_green" ||
+          /demo signal be GREEN/i.test(market.question || ""));
 
-      const finished = market.status === "RESOLVED" || market.status === "CANCELLED";
-      const supersededBtc =
-        isReferenceBtc(market.demoRole, market.category) &&
-        Boolean(openBtcId) &&
-        market.id !== openBtcId &&
-        market.status !== "OPEN";
-      const supersededWeather =
-        isReferenceWeather(market.demoRole, market.category) &&
-        Boolean(openWeatherId) &&
-        market.id !== openWeatherId &&
-        market.status !== "OPEN";
+      const finishedReference =
+        isReferenceRole(market.demoRole, market.category) &&
+        (market.status === "RESOLVED" || market.status === "CANCELLED");
 
-      if (!finished && !supersededBtc && !supersededWeather) continue;
+      if (!isLegacyDemo && !finishedReference) continue;
 
       try {
         await hideMarketOnchain(market.id);
@@ -206,7 +199,7 @@ export function getMarketCycleStatus() {
     observationSeconds: OBSERVATION_SECONDS,
     hasResolverKey: hasResolverKey(),
     onchain: onchainEnabled(),
-    note: "New OPEN BTC/weather when previous locks (~1/min). Markets UI shows 1 live BTC + 1 weather; claim via Portfolio."
+    note: "New OPEN BTC/weather only after previous fully RESOLVED. Markets UI shows 1 BTC + 1 weather; claim via Portfolio."
   };
 }
 
@@ -233,6 +226,11 @@ function isReferenceWeather(role?: string, category?: string): boolean {
 
 function isResolvableStatus(status: string): boolean {
   return status === "OPEN" || status === "LOCKED" || status === "OBSERVATION";
+}
+
+/** Round still in flight — blocks creating a replacement market. */
+function isActiveRoundStatus(status: string): boolean {
+  return status === "OPEN" || status === "LOCKED" || status === "OBSERVATION" || status === "CREATED";
 }
 
 function isReadyToResolve(

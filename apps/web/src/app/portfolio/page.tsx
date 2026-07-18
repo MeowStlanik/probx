@@ -1,16 +1,5 @@
-import { PortfolioClient } from "@/components/PortfolioClient";
+import { PortfolioShell } from "@/nextjs/shells/PortfolioShell";
 
-export default async function PortfolioPage() {
-  return (
-    <main className="pageShell pageShellPortfolio">
-      <div className="sectionHeader">
-        <div>
-          <span className="eyebrow">Positions</span>
-          <h1>Portfolio</h1>
-        </div>
-      </div>
-
-      <PortfolioClient />
-    </main>
-  );
+export default function PortfolioPage() {
+  return <PortfolioShell />;
 }

@@ -602,29 +602,15 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
               {copied ? "Address copied" : "Copy Arc address"}
             </button>
           ) : (
-            <>
-              {demoFundEnabled ? (
-                <button
-                  type="button"
-                  className="fundFooterBtn secondary"
-                  disabled={busy || !mintTo}
-                  onClick={() => void runDemoFund()}
-                  title="Burns from server treasury on Base Sepolia"
-                >
-                  {busy ? <Loader2 size={16} className="spinIcon" /> : null}
-                  Server fund
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="fundFooterBtn primary"
-                disabled={busy || !mintTo || !cctpSourceAddress || amountUnits <= 0n}
-                onClick={() => void runFund()}
-              >
-                {busy ? <Loader2 size={16} className="spinIcon" /> : <ArrowRightLeft size={16} />}
-                {busy ? "Working…" : "Bridge CCTP"}
-              </button>
-            </>
+            <button
+              type="button"
+              className="fundFooterBtn primary"
+              disabled={busy || !mintTo || !cctpSourceAddress || amountUnits <= 0n}
+              onClick={() => void runFund()}
+            >
+              {busy ? <Loader2 size={16} className="spinIcon" /> : <ArrowRightLeft size={16} />}
+              {busy ? "Working…" : "Bridge CCTP"}
+            </button>
           )}
         </footer>
       </div>

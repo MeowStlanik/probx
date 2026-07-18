@@ -212,21 +212,99 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, [address, publicClient]);
 
+  /**
+   * Force injected wallet onto Arc Testnet.
+   * `wallet_addEthereumChain` alone often only *registers* the chain and leaves
+   * the user on Base/Eth — UI said “switched” but writes still went to the wrong net.
+   * Correct flow: switch → if 4902 add → switch again → verify eth_chainId.
+   */
   const ensureArcChain = useCallback(async () => {
     if (!window.ethereum) throw new Error("Install a browser wallet to continue.");
-    await window.ethereum.request({
-      method: "wallet_addEthereumChain",
-      params: [
-        {
-          chainId: `0x${arcDeployment.chainId.toString(16)}`,
-          chainName: arcDeployment.chainName,
-          rpcUrls: arcRpcUrls,
-          nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
-          blockExplorerUrls: [arcDeployment.explorerUrl]
+
+    const targetHex = `0x${arcDeployment.chainId.toString(16)}` as const;
+
+    const readChainId = async (): Promise<number | null> => {
+      try {
+        const hex = (await window.ethereum!.request({ method: "eth_chainId" })) as string;
+        return Number.parseInt(hex, 16);
+      } catch {
+        return null;
+      }
+    };
+
+    const already = await readChainId();
+    if (already === arcDeployment.chainId) {
+      setChainId(arcDeployment.chainId);
+      return;
+    }
+
+    const switchToArc = async () => {
+      await window.ethereum!.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: targetHex }]
+      });
+    };
+
+    const addArc = async () => {
+      await window.ethereum!.request({
+        method: "wallet_addEthereumChain",
+        params: [
+          {
+            chainId: targetHex,
+            chainName: arcDeployment.chainName,
+            rpcUrls: arcRpcUrls,
+            nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+            blockExplorerUrls: [arcDeployment.explorerUrl]
+          }
+        ]
+      });
+    };
+
+    try {
+      await switchToArc();
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? Number((error as { code?: number }).code)
+          : undefined;
+      const msg =
+        error instanceof Error
+          ? error.message
+          : typeof error === "object" && error !== null && "message" in error
+            ? String((error as { message?: string }).message)
+            : "";
+      // 4902 = chain not added yet; some wallets use nested originalError
+      const nested =
+        typeof error === "object" &&
+        error !== null &&
+        "data" in error &&
+        typeof (error as { data?: { originalError?: { code?: number } } }).data?.originalError?.code ===
+          "number"
+          ? (error as { data: { originalError: { code: number } } }).data.originalError.code
+          : undefined;
+      if (code === 4902 || nested === 4902 || /unrecognized chain|unknown chain/i.test(msg)) {
+        await addArc();
+        // After add, many wallets stay on the previous chain — force switch.
+        try {
+          await switchToArc();
+        } catch {
+          // Some wallets switch as part of add; verify below.
         }
-      ]
-    });
-    await refreshChain();
+      } else if (code === 4001) {
+        throw new Error("Network switch rejected in wallet. Select Arc Testnet manually and retry.");
+      } else {
+        throw error instanceof Error ? error : new Error(msg || "Failed to switch network");
+      }
+    }
+
+    // Brief wait for MetaMask chainChanged to settle
+    await new Promise((r) => setTimeout(r, 150));
+    const verified = (await refreshChain()) ?? (await readChainId());
+    if (verified !== arcDeployment.chainId) {
+      throw new Error(
+        `Wallet is still on chain ${verified ?? "unknown"}, not Arc Testnet (${arcDeployment.chainId}). Open the wallet and switch network, then retry.`
+      );
+    }
   }, [refreshChain]);
 
   const connect = useCallback(async () => {
@@ -426,15 +504,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
 
     if (!window.ethereum) return null;
-    const client = createWalletClient({
-      account: address,
-      chain: arcChain,
-      transport: custom(window.ethereum)
-    });
-    return {
-      writeContract: (args) => client.writeContract(args as never)
+    // Capture ensureArcChain in closure — always re-switch before writes so a
+    // stale "switched" UI state cannot send LP withdraw/deposit to Base/Eth.
+    const switchThenWrite = async (args: Record<string, unknown>) => {
+      await ensureArcChain();
+      const client = createWalletClient({
+        account: address,
+        chain: arcChain,
+        transport: custom(window.ethereum!)
+      });
+      return client.writeContract(args as never);
     };
-  }, [address, embedded, mode]);
+    return {
+      writeContract: (args) => switchThenWrite(args)
+    };
+  }, [address, embedded, ensureArcChain, mode]);
 
   // Restore session: embedded first, then injected MetaMask flag.
   useEffect(() => {
