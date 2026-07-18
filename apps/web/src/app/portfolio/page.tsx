@@ -2,7 +2,7 @@ import { PortfolioClient } from "@/components/PortfolioClient";
 
 export default async function PortfolioPage() {
   return (
-    <main className="pageShell">
+    <main className="pageShell pageShellPortfolio">
       <div className="sectionHeader">
         <div>
           <span className="eyebrow">Positions</span>

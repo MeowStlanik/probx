@@ -10,44 +10,57 @@ export default function AdminPage() {
         <div>
           <span className="eyebrow">Controls</span>
           <h1>Admin</h1>
+          <p className="pageLead">Create markets and manage resolution tools on Arc Testnet.</p>
         </div>
       </div>
 
       <section className="adminGrid">
         <OnchainAdminPanel />
-        <div className="adminPanel">
-          <h2>Network</h2>
-          <div className="adminStatusRow">
-            <span>Network</span>
-            <strong>Arc Testnet</strong>
-            <span>{arcDeployment.chainId}</span>
+        <div className="adminSideCol">
+          <div className="adminPanel">
+            <h2>Network</h2>
+            <div className="adminStatusRow">
+              <span>Network</span>
+              <strong>Arc Testnet</strong>
+              <span className="mono">{arcDeployment.chainId}</span>
+            </div>
+            <div className="adminStatusRow">
+              <span>Factory</span>
+              <strong className="mono">{shortHex(arcDeployment.marketFactory)}</strong>
+              <a
+                className="miniLinkButton"
+                href={`${arcDeployment.explorerUrl}/address/${arcDeployment.marketFactory}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View
+              </a>
+            </div>
+            <div className="adminStatusRow">
+              <span>Resolver</span>
+              <strong className="mono">{shortHex(arcDeployment.oracleAdapter)}</strong>
+              <a
+                className="miniLinkButton"
+                href={`${arcDeployment.explorerUrl}/address/${arcDeployment.oracleAdapter}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                View
+              </a>
+            </div>
+            <div className="adminInfoList">
+              <span>
+                <ShieldCheck size={16} aria-hidden />
+                Create test market is the main demo control — opens a live MicroMarket on Arc.
+              </span>
+              <span>
+                <ExternalLink size={16} aria-hidden />
+                Resolver tools stay collapsed below for manual override if needed.
+              </span>
+            </div>
           </div>
-          <div className="adminStatusRow">
-            <span>Factory</span>
-            <strong>{shortHex(arcDeployment.marketFactory)}</strong>
-            <a className="miniLinkButton" href={`${arcDeployment.explorerUrl}/address/${arcDeployment.marketFactory}`} target="_blank">
-              View
-            </a>
-          </div>
-          <div className="adminStatusRow">
-            <span>Resolver</span>
-            <strong>{shortHex(arcDeployment.oracleAdapter)}</strong>
-            <a className="miniLinkButton" href={`${arcDeployment.explorerUrl}/address/${arcDeployment.oracleAdapter}`} target="_blank">
-              View
-            </a>
-          </div>
-          <div className="adminInfoList">
-            <span>
-              <ShieldCheck size={16} aria-hidden />
-              Create test market is the main demo control — opens a live MicroMarket on Arc.
-            </span>
-            <span>
-              <ExternalLink size={16} aria-hidden />
-              Resolver tools stay collapsed below for manual override if needed.
-            </span>
-          </div>
+          <LiveReferencePanel compact />
         </div>
-        <LiveReferencePanel compact />
       </section>
     </main>
   );

@@ -362,12 +362,14 @@ export function OnchainTradeTicket({ market }: { market?: Market }) {
     <section className="tradeSurface onchainSurface tradeSurfaceCompact" aria-label="Arc onchain trade ticket">
       <div className="surfaceHeader surfaceHeaderCompact">
         <div>
-          <span className="eyebrow">Trade</span>
           <h2>Buy ticket</h2>
         </div>
-        <button className="iconOnly" onClick={() => void refresh()} type="button" aria-label="Refresh onchain quote">
-          <RefreshCcw size={16} aria-hidden />
-        </button>
+        <div className="tradeHeaderMeta">
+          <span className="tradeMaxLoss">max loss = stake</span>
+          <button className="iconOnly" onClick={() => void refresh()} type="button" aria-label="Refresh onchain quote">
+            <RefreshCcw size={16} aria-hidden />
+          </button>
+        </div>
       </div>
 
       {(liveMarket?.lockTime || market?.lockTime) ? (
@@ -490,7 +492,7 @@ export function OnchainTradeTicket({ market }: { market?: Market }) {
           </div>
 
           <label className="fieldLabel" htmlFor="onchainRisk">
-            Risk amount
+            Stake (USDC)
           </label>
           <div className="amountInput">
             <input

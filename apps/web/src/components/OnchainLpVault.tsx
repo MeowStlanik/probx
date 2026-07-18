@@ -32,6 +32,8 @@ const emptySnapshot: VaultSnapshot = {
   reservedAssets: 0n
 };
 
+type LpTab = "deposit" | "withdraw";
+
 export function OnchainLpVault() {
   const {
     address: account,
@@ -42,24 +44,39 @@ export function OnchainLpVault() {
     publicClient
   } = useWallet();
 
-  const [depositAmount, setDepositAmount] = useState("1");
-  const [withdrawAmount, setWithdrawAmount] = useState("0.1");
+  const [tab, setTab] = useState<LpTab>("deposit");
+  const [amount, setAmount] = useState("1");
   const [snapshot, setSnapshot] = useState<VaultSnapshot>(emptySnapshot);
   const [message, setMessage] = useState("Connect wallet once in the header — LP uses the same session.");
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [busy, setBusy] = useState(false);
+  const [doneMsg, setDoneMsg] = useState<string | null>(null);
 
-  const depositAssets = useMemo(() => parseUsdcSafe(depositAmount), [depositAmount]);
-  const withdrawAssets = useMemo(() => parseUsdcSafe(withdrawAmount), [withdrawAmount]);
+  const amountAssets = useMemo(() => parseUsdcSafe(amount), [amount]);
   const maxWithdrawAssets = useMemo(() => maxWithdrawableAssets(snapshot), [snapshot]);
-  const withdrawShares = useMemo(() => sharesForAssets(withdrawAssets, snapshot), [snapshot, withdrawAssets]);
+  const withdrawShares = useMemo(
+    () => sharesForAssets(tab === "withdraw" ? amountAssets : 0n, snapshot),
+    [amountAssets, snapshot, tab]
+  );
 
-  const needsApproval = account && depositAssets > 0n && snapshot.allowance < depositAssets;
-  const depositError = depositValidation(depositAssets, snapshot.usdcBalance, wrongNetwork);
-  const withdrawError = withdrawValidation(withdrawAssets, withdrawShares, maxWithdrawAssets, snapshot.shares, wrongNetwork);
-  const canDeposit = Boolean(account && !depositError && !needsApproval && !busy);
-  const canApprove = Boolean(account && !depositError && needsApproval && !busy);
-  const canWithdraw = Boolean(account && !withdrawError && !busy);
+  const needsApproval = account && tab === "deposit" && amountAssets > 0n && snapshot.allowance < amountAssets;
+  const depositError = depositValidation(amountAssets, snapshot.usdcBalance, wrongNetwork);
+  const withdrawError = withdrawValidation(
+    amountAssets,
+    withdrawShares,
+    maxWithdrawAssets,
+    snapshot.shares,
+    wrongNetwork
+  );
+  const canDeposit = Boolean(account && tab === "deposit" && !depositError && !needsApproval && !busy);
+  const canApprove = Boolean(account && tab === "deposit" && !depositError && needsApproval && !busy);
+  const canWithdraw = Boolean(account && tab === "withdraw" && !withdrawError && !busy);
+
+  const sharePct = useMemo(() => {
+    if (snapshot.totalShares <= 0n || snapshot.shares <= 0n) return "0%";
+    const pct = (Number(snapshot.shares) / Number(snapshot.totalShares)) * 100;
+    return `${pct.toFixed(2)}%`;
+  }, [snapshot.shares, snapshot.totalShares]);
 
   const refresh = useCallback(async (address = account) => {
     try {
@@ -136,23 +153,24 @@ export function OnchainLpVault() {
   }
 
   async function approveDeposit() {
-    if (!account || depositAssets <= 0n) return;
+    if (!account || amountAssets <= 0n) return;
     const walletClient = getWalletClient();
     if (!walletClient) {
       setMessage("Wallet provider unavailable.");
       return;
     }
     setBusy(true);
+    setDoneMsg(null);
     try {
       const hash = await walletClient.writeContract({
         address: getAddress(arcDeployment.usdc),
         abi: usdcAbi,
         functionName: "approve",
-        args: [getAddress(arcDeployment.liquidityPool), depositAssets]
+        args: [getAddress(arcDeployment.liquidityPool), amountAssets]
       });
       setTxHash(hash);
       await publicClient.waitForTransactionReceipt({ hash });
-      setMessage(`Approved ${formatUsdc6(depositAssets)} for LP vault.`);
+      setMessage(`Approved ${formatUsdc6(amountAssets)} for LP vault.`);
       await refresh(account);
     } catch (error) {
       setMessage(readableVaultError(error));
@@ -169,16 +187,18 @@ export function OnchainLpVault() {
       return;
     }
     setBusy(true);
+    setDoneMsg(null);
     try {
       const hash = await walletClient.writeContract({
         address: getAddress(arcDeployment.liquidityPool),
         abi: poolAbi,
         functionName: "deposit",
-        args: [depositAssets]
+        args: [amountAssets]
       });
       setTxHash(hash);
       await publicClient.waitForTransactionReceipt({ hash });
-      setMessage(`Deposited ${formatUsdc6(depositAssets)} into LP vault.`);
+      setDoneMsg(`Deposited ${formatUsdc6(amountAssets)} to the LP vault.`);
+      setMessage(`Deposited ${formatUsdc6(amountAssets)} into LP vault.`);
       await refresh(account);
     } catch (error) {
       setMessage(readableVaultError(error));
@@ -195,6 +215,7 @@ export function OnchainLpVault() {
       return;
     }
     setBusy(true);
+    setDoneMsg(null);
     try {
       const hash = await walletClient.writeContract({
         address: getAddress(arcDeployment.liquidityPool),
@@ -204,7 +225,8 @@ export function OnchainLpVault() {
       });
       setTxHash(hash);
       await publicClient.waitForTransactionReceipt({ hash });
-      setMessage(`Withdrew about ${formatUsdc6(withdrawAssets)} from LP vault.`);
+      setDoneMsg(`Withdrew ${formatUsdc6(amountAssets)} from the LP vault.`);
+      setMessage(`Withdrew about ${formatUsdc6(amountAssets)} from LP vault.`);
       await refresh(account);
     } catch (error) {
       setMessage(readableVaultError(error));
@@ -213,76 +235,29 @@ export function OnchainLpVault() {
     }
   }
 
+  const activeError = tab === "deposit" ? depositError : withdrawError;
+  const buttonLabel =
+    tab === "deposit"
+      ? busy
+        ? needsApproval
+          ? "Approving…"
+          : "Depositing…"
+        : needsApproval
+          ? `Approve ${formatUsdc6(amountAssets)}`
+          : "Deposit USDC"
+      : busy
+        ? "Withdrawing…"
+        : "Withdraw USDC";
+
   return (
-    <section className="lpActions">
-      <div className="lpActionPanel">
+    <section className="lpWorkspace">
+      <div className="lpAllocPanel">
         <div className="surfaceHeader">
-          <div>
-            <h2>Deposit USDC</h2>
-
-          </div>
+          <span className="lpPanelTitle">Your vault position</span>
           <button className="iconOnly" onClick={() => void refresh()} type="button" aria-label="Refresh LP vault">
-            <RefreshCcw size={18} aria-hidden />
+            <RefreshCcw size={16} aria-hidden />
           </button>
         </div>
-        <div className="amountInput">
-          <input inputMode="decimal" onChange={(event) => setDepositAmount(event.target.value)} type="number" value={depositAmount} />
-          <span>USDC</span>
-        </div>
-        <div className="feeRow">
-          <span>Wallet USDC</span>
-          <strong>{formatUsdc6(snapshot.usdcBalance)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Approved to vault</span>
-          <strong>{formatUsdc6(snapshot.allowance)}</strong>
-        </div>
-        {!account ? (
-          <button className="confirmButton" disabled={busy || connecting} onClick={() => void handleConnect()} type="button">
-            <Wallet size={18} aria-hidden />
-            {connecting ? "Connecting…" : "Connect wallet"}
-          </button>
-        ) : needsApproval ? (
-          <button className="confirmButton" disabled={!canApprove} onClick={() => void approveDeposit()} type="button">
-            <ShieldCheck size={18} aria-hidden />
-            {busy ? "Approving..." : `Approve ${formatUsdc6(depositAssets)}`}
-          </button>
-        ) : (
-          <button className="confirmButton" disabled={!canDeposit} onClick={() => void deposit()} type="button">
-            <ArrowDownToLine size={18} aria-hidden />
-            {busy ? "Depositing..." : "Deposit into vault"}
-          </button>
-        )}
-        {depositError && account ? <p className="settlementNote">{depositError}</p> : null}
-      </div>
-
-      <div className="lpActionPanel">
-        <h2>Withdraw USDC</h2>
-        <div className="amountInput">
-          <input inputMode="decimal" onChange={(event) => setWithdrawAmount(event.target.value)} type="number" value={withdrawAmount} />
-          <span>USDC</span>
-        </div>
-        <div className="feeRow">
-          <span>Your LP shares</span>
-          <strong>{formatUsdc6(snapshot.shares)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Max withdrawable now</span>
-          <strong>{formatUsdc6(maxWithdrawAssets)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Shares to burn</span>
-          <strong>{formatUsdc6(withdrawShares)}</strong>
-        </div>
-        <button className="iconButton" disabled={!canWithdraw} onClick={() => void withdraw()} type="button">
-          <ArrowUpFromLine size={18} aria-hidden />
-          {busy ? "Withdrawing..." : "Withdraw available liquidity"}
-        </button>
-        {withdrawError && account ? <p className="settlementNote">{withdrawError}</p> : null}
-      </div>
-
-      <div className="lpActionPanel lpStatusPanel">
-        <h2>Your vault position</h2>
         <div className="feeRow">
           <span>Wallet</span>
           <strong>{account ? shortHex(account) : "Not connected"}</strong>
@@ -299,12 +274,117 @@ export function OnchainLpVault() {
           <span>Available assets</span>
           <strong>{formatUsdc6(snapshot.availableAssets)}</strong>
         </div>
+        <div className="feeRow">
+          <span>Reserved</span>
+          <strong>{formatUsdc6(snapshot.reservedAssets)}</strong>
+        </div>
+        <div className="feeRow">
+          <span>Your LP shares</span>
+          <strong>{formatUsdc6(snapshot.shares)}</strong>
+        </div>
+        <div className="feeRow">
+          <span>Your LP share</span>
+          <strong>{sharePct}</strong>
+        </div>
+        <div className="feeRow">
+          <span>Max withdrawable now</span>
+          <strong>{formatUsdc6(maxWithdrawAssets)}</strong>
+        </div>
         <p className="settlementNote">{busy ? "Waiting for transaction confirmation..." : message}</p>
         {txHash ? (
-          <a className="txLink" href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank">
+          <a className="txLink" href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank" rel="noreferrer">
             View tx <ExternalLink size={13} aria-hidden />
           </a>
         ) : null}
+      </div>
+
+      <div className="lpActionPanel lpStickyPanel">
+        <div className="lpTabs" role="tablist" aria-label="LP action">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "deposit"}
+            className={`lpTab ${tab === "deposit" ? "isActive" : ""}`}
+            onClick={() => {
+              setTab("deposit");
+              setDoneMsg(null);
+              if (!amount || amount === "0.1") setAmount("1");
+            }}
+          >
+            Deposit
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "withdraw"}
+            className={`lpTab ${tab === "withdraw" ? "isActive" : ""}`}
+            onClick={() => {
+              setTab("withdraw");
+              setDoneMsg(null);
+            }}
+          >
+            Withdraw
+          </button>
+        </div>
+
+        <label className="fieldLabel" htmlFor="lpAmount">
+          Amount
+        </label>
+        <div className="amountInput">
+          <input
+            id="lpAmount"
+            inputMode="decimal"
+            onChange={(event) => setAmount(event.target.value)}
+            type="number"
+            value={amount}
+          />
+          <span>USDC</span>
+        </div>
+
+        <div className="feeRow">
+          <span>Wallet USDC</span>
+          <strong>{formatUsdc6(snapshot.usdcBalance)}</strong>
+        </div>
+        {tab === "deposit" ? (
+          <div className="feeRow">
+            <span>Approved to vault</span>
+            <strong>{formatUsdc6(snapshot.allowance)}</strong>
+          </div>
+        ) : (
+          <div className="feeRow">
+            <span>Shares to burn</span>
+            <strong>{formatUsdc6(withdrawShares)}</strong>
+          </div>
+        )}
+        <div className="feeRow">
+          <span>Your LP share</span>
+          <strong>{sharePct}</strong>
+        </div>
+
+        {!account ? (
+          <button className="confirmButton" disabled={busy || connecting} onClick={() => void handleConnect()} type="button">
+            <Wallet size={18} aria-hidden />
+            {connecting ? "Connecting…" : "Connect wallet"}
+          </button>
+        ) : tab === "deposit" && needsApproval ? (
+          <button className="confirmButton" disabled={!canApprove} onClick={() => void approveDeposit()} type="button">
+            <ShieldCheck size={18} aria-hidden />
+            {buttonLabel}
+          </button>
+        ) : tab === "deposit" ? (
+          <button className="confirmButton" disabled={!canDeposit} onClick={() => void deposit()} type="button">
+            <ArrowDownToLine size={18} aria-hidden />
+            {buttonLabel}
+          </button>
+        ) : (
+          <button className="confirmButton" disabled={!canWithdraw} onClick={() => void withdraw()} type="button">
+            <ArrowUpFromLine size={18} aria-hidden />
+            {buttonLabel}
+          </button>
+        )}
+
+        {activeError && account ? <p className="settlementNote">{activeError}</p> : null}
+        {doneMsg ? <div className="lpDoneBanner">{doneMsg}</div> : null}
       </div>
     </section>
   );

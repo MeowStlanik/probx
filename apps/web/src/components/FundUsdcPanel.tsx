@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRightLeft, Check, Copy, ExternalLink, Loader2, Wallet, X } from "lucide-react";
+import { ArrowRightLeft, Loader2, Wallet, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -27,12 +27,14 @@ import {
 import { arcDeployment } from "@/lib/onchain";
 import { readableWalletError, shortHex, useWallet } from "@/lib/wallet";
 
+type FundTab = "direct" | "bridge";
+
 type Props = {
   open: boolean;
   onClose: () => void;
+  /** Which tab to show when the modal opens (from wallet popover Deposit / Bridge). */
+  initialTab?: FundTab;
 };
-
-type FundTab = "direct" | "bridge";
 
 type Step =
   | "idle"
@@ -44,7 +46,7 @@ type Step =
   | "done"
   | "error";
 
-export function FundUsdcPanel({ open, onClose }: Props) {
+export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
   const {
     address: mintTo,
     refreshBalance,
@@ -52,7 +54,7 @@ export function FundUsdcPanel({ open, onClose }: Props) {
     email: sessionEmail,
     hasProvider
   } = useWallet();
-  const [tab, setTab] = useState<FundTab>("direct");
+  const [tab, setTab] = useState<FundTab>(initialTab);
   const [config, setConfig] = useState<CctpConfig | null>(null);
   const [source, setSource] = useState<CctpSourceKey>("baseSepolia");
   const [amount, setAmount] = useState("1");
@@ -73,9 +75,12 @@ export function FundUsdcPanel({ open, onClose }: Props) {
 
   useEffect(() => {
     if (!open) return;
+    setTab(initialTab);
+    setMessage("");
+    setStep("idle");
     document.body.classList.add("fundModalOpen");
     return () => document.body.classList.remove("fundModalOpen");
-  }, [open]);
+  }, [open, initialTab]);
 
   useEffect(() => {
     if (!open) return;
@@ -384,18 +389,23 @@ export function FundUsdcPanel({ open, onClose }: Props) {
         className={tab === "bridge" ? "fundModal isBridge" : "fundModal"}
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="fundModalHeader">
-          <div>
-            <p className="eyebrow">Fund wallet</p>
-            <h2>Get USDC on Arc</h2>
-            <p className="fundModalSub">
-              {tab === "bridge" ? "Bridge via CCTP from Base / Eth Sepolia." : "Deposit Arc testnet USDC to your session."}
-            </p>
-          </div>
-          <button type="button" className="iconOnly" onClick={onClose} aria-label="Close" disabled={busy}>
-            <X size={18} />
-          </button>
-        </header>
+        <button
+          type="button"
+          className="fundModalClose"
+          onClick={onClose}
+          aria-label="Close"
+          disabled={busy}
+        >
+          <X size={16} />
+        </button>
+
+        <span className="eyebrow">Fund wallet</span>
+        <h3 className="fundModalTitle">Get USDC on Arc</h3>
+        <p className="fundModalSub">
+          {tab === "bridge"
+            ? "Bridge via CCTP from Base / Eth Sepolia."
+            : "Deposit Arc testnet USDC to your session."}
+        </p>
 
         <div className="fundTabs" role="tablist" aria-label="Fund method">
           <button
@@ -409,8 +419,7 @@ export function FundUsdcPanel({ open, onClose }: Props) {
               setStep("idle");
             }}
           >
-            <Wallet size={15} aria-hidden />
-            Direct on Arc
+            ⊟ Direct on Arc
           </button>
           <button
             type="button"
@@ -423,27 +432,25 @@ export function FundUsdcPanel({ open, onClose }: Props) {
               setStep("idle");
             }}
           >
-            <ArrowRightLeft size={15} aria-hidden />
-            Bridge (CCTP)
+            ⇄ Bridge (CCTP)
           </button>
         </div>
 
         <div className="fundModalBody">
           {tab === "direct" ? (
-            <>
+            <div className="fundPanelCard">
               <label className="fundField">
                 <span>Your Arc wallet address</span>
-                <div className="fundAddressRow">
+                <div className="fundAddressRow fundAddressBox">
                   <code className="fundAddressCode" title={mintTo ?? undefined}>
                     {mintTo ?? "Connect wallet first"}
                   </code>
                   <button
                     type="button"
-                    className="iconButton secondary fundCopyBtn"
+                    className="fundCopyBtn"
                     disabled={!mintTo}
                     onClick={() => void copyAddress()}
                   >
-                    {copied ? <Check size={16} aria-hidden /> : <Copy size={16} aria-hidden />}
                     {copied ? "Copied" : "Copy"}
                   </button>
                 </div>
@@ -464,28 +471,28 @@ export function FundUsdcPanel({ open, onClose }: Props) {
               </ul>
               <div className="fundLinkRow">
                 <a
-                  className="iconButton secondary"
+                  className="fundLinkBtn"
                   href={config?.faucetUrl ?? "https://faucet.circle.com"}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Circle faucet <ExternalLink size={14} aria-hidden />
+                  Circle faucet ↗
                 </a>
                 <a
-                  className="iconButton secondary"
+                  className="fundLinkBtn"
                   href={`${arcDeployment.explorerUrl}/address/${mintTo ?? ""}`}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Open in explorer <ExternalLink size={14} aria-hidden />
+                  Open in explorer ↗
                 </a>
               </div>
-              <p className="fundHint">
+              <p className="fundHint fundHintTight">
                 After a transfer lands, hit refresh on your balance in the header.
               </p>
-            </>
+            </div>
           ) : (
-            <>
+            <div className="fundPanelCard">
               <div className="fundBridgeRoles">
                 <div className="fundRoleCard">
                   <span className="fundRoleLabel">Mint to (ProbX session)</span>
@@ -511,7 +518,7 @@ export function FundUsdcPanel({ open, onClose }: Props) {
               <div className="fundBridgeConnect">
                 <button
                   type="button"
-                  className="iconButton secondary"
+                  className="fundLinkBtn fundLinkBtnFull"
                   disabled={busy || cctpConnecting || !hasProvider}
                   onClick={() => void connectCctpSource()}
                 >
@@ -520,7 +527,7 @@ export function FundUsdcPanel({ open, onClose }: Props) {
                     ? "Install wallet"
                     : cctpSourceAddress
                       ? `Source · ${shortHex(cctpSourceAddress)}`
-                      : "Connect source wallet"}
+                      : "⊟ Connect source wallet"}
                 </button>
               </div>
 
@@ -556,10 +563,10 @@ export function FundUsdcPanel({ open, onClose }: Props) {
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Circle faucet <ExternalLink size={12} style={{ display: "inline" }} />
+                  Circle faucet ↗
                 </a>
               </p>
-            </>
+            </div>
           )}
 
           {message ? <p className={`fundStatus step-${step}`}>{message}</p> : null}
@@ -582,17 +589,16 @@ export function FundUsdcPanel({ open, onClose }: Props) {
         </div>
 
         <footer className="fundModalFooter">
-          <button type="button" className="iconButton secondary" disabled={busy} onClick={onClose}>
+          <button type="button" className="fundFooterBtn secondary" disabled={busy} onClick={onClose}>
             Close
           </button>
           {tab === "direct" ? (
             <button
               type="button"
-              className="iconButton primary"
+              className="fundFooterBtn primary"
               disabled={!mintTo}
               onClick={() => void copyAddress()}
             >
-              {copied ? <Check size={16} /> : <Copy size={16} />}
               {copied ? "Address copied" : "Copy Arc address"}
             </button>
           ) : (
@@ -600,7 +606,7 @@ export function FundUsdcPanel({ open, onClose }: Props) {
               {demoFundEnabled ? (
                 <button
                   type="button"
-                  className="iconButton secondary"
+                  className="fundFooterBtn secondary"
                   disabled={busy || !mintTo}
                   onClick={() => void runDemoFund()}
                   title="Burns from server treasury on Base Sepolia"
@@ -611,7 +617,7 @@ export function FundUsdcPanel({ open, onClose }: Props) {
               ) : null}
               <button
                 type="button"
-                className="iconButton primary"
+                className="fundFooterBtn primary"
                 disabled={busy || !mintTo || !cctpSourceAddress || amountUnits <= 0n}
                 onClick={() => void runFund()}
               >

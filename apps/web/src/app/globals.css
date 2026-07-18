@@ -693,15 +693,22 @@ main {
 
 .statusPill.open,
 .resultPill.win,
+.resultPill.resultWin,
 .directionPill.yes {
   background: var(--yes-soft);
   color: var(--yes);
 }
 
 .resultPill.loss,
+.resultPill.resultLoss,
 .directionPill.no {
   background: var(--no-soft);
   color: var(--no);
+}
+
+.resultPill.resultRefund {
+  background: var(--blue-soft);
+  color: var(--blue);
 }
 
 .countdown {
@@ -3506,5 +3513,862 @@ input.amountInput,
   }
   .resolvedRow {
     flex-wrap: wrap;
+  }
+}
+
+/* ============================================================
+   Design port — wallet popover, fund modal, portfolio, LP, ticket
+   ============================================================ */
+
+.walletPillBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 12px 5px 8px;
+  background: var(--white);
+  cursor: pointer;
+  font-family: inherit;
+  min-height: 40px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.walletPillBtn:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--card);
+}
+
+.walletAvatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2775ca, #7c5cff);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.walletAvatar.lg {
+  width: 26px;
+  height: 26px;
+}
+
+.walletPillBalance {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.walletPillUnit {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.walletConnectCta {
+  border-radius: 20px !important;
+}
+
+.walletPopover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: min(320px, calc(100vw - 32px));
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-pop);
+  padding: 16px;
+  z-index: 120;
+}
+
+.walletPopoverTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+.walletDivider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.walletDivider span {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.walletDivider em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.walletOtpInput {
+  letter-spacing: 0.25em !important;
+  font-family: var(--mono) !important;
+  font-size: 14px !important;
+}
+
+.walletPopoverTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.walletPopoverIdentity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.walletPopoverAddr {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.walletPopoverTools {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.walletToolBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  background: var(--white);
+  border-radius: 7px;
+  padding: 5px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  text-decoration: none;
+}
+
+.walletToolBtn:hover {
+  color: var(--ink);
+  border-color: var(--border-strong);
+}
+
+.walletWrongNet {
+  width: 100%;
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--no-soft);
+  color: var(--no);
+  border: 1px solid var(--no-border);
+  border-radius: 9px;
+  padding: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.walletBalanceBlock {
+  margin-top: 16px;
+}
+
+.walletBalanceLabel {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.walletBalanceValue {
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 2px;
+  line-height: 1.15;
+}
+
+.walletBalanceValue span {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.walletFundRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.walletFundDirect,
+.walletFundBridge {
+  flex: 1;
+  border-radius: 9px;
+  padding: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  border: none;
+}
+
+.walletFundDirect {
+  background: var(--blue);
+  color: #fff;
+}
+
+.walletFundDirect:hover {
+  background: var(--blue-hover);
+}
+
+.walletFundBridge {
+  background: var(--purple-soft);
+  color: var(--purple);
+  border: 1px solid var(--purple-border);
+}
+
+.walletDisconnect {
+  width: 100%;
+  margin-top: 14px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.walletDisconnect:hover {
+  color: var(--ink);
+}
+
+.walletMenuHint.errorHint {
+  color: var(--no);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* Fund modal refinements */
+.fundModal {
+  background: var(--white);
+  border-radius: 16px;
+  width: 100%;
+  max-width: 460px;
+  max-height: min(90vh, 760px);
+  overflow: auto;
+  box-shadow: 0 20px 60px rgba(16, 32, 64, 0.25);
+  padding: 24px;
+  position: relative;
+}
+
+.fundModalClose {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--white);
+  color: var(--muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.fundModalTitle {
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 12px 0 3px;
+}
+
+.fundModalBody {
+  padding: 0;
+  max-height: none;
+  overflow: visible;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+  max-width: none;
+}
+
+.fundPanelCard {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.fundAddressBox {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 9px 12px;
+  background: var(--tint);
+}
+
+.fundAddressCode {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  word-break: break-all;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.fundLinkBtn {
+  flex: 1;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--white);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: inherit;
+}
+
+.fundLinkBtn:hover {
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+
+.fundLinkBtnFull {
+  width: 100%;
+  margin-bottom: 14px;
+}
+
+.fundHintTight {
+  margin-top: 12px;
+  font-size: 11px;
+}
+
+.fundFooterBtn {
+  flex: 1;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+}
+
+.fundFooterBtn.primary {
+  background: var(--blue);
+  color: #fff;
+}
+
+.fundFooterBtn.primary:hover:not(:disabled) {
+  background: var(--blue-hover);
+}
+
+.fundFooterBtn.secondary {
+  background: var(--white);
+  border: 1px solid var(--border);
+  color: var(--ink);
+}
+
+.fundFooterBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.fundField select,
+.fundField input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--white);
+  font-family: inherit;
+}
+
+.fundField input {
+  font-family: var(--mono);
+  font-weight: 600;
+}
+
+.fundRoleCard {
+  background: var(--tint);
+}
+
+.fundRoleCard strong {
+  display: block;
+  font-family: var(--mono);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.fundRoleCard small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  font-weight: 500;
+}
+
+/* Portfolio */
+.pageShellPortfolio {
+  max-width: 900px;
+}
+
+.pageLead {
+  color: var(--muted);
+  font-size: 13.5px;
+  margin: 6px 0 0;
+}
+
+.portfolioBody {
+  margin-top: 4px;
+}
+
+.portfolioWalletRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 18px;
+  flex-wrap: wrap;
+}
+
+.portfolioWalletAddr {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.portfolioRefresh {
+  margin-left: auto;
+}
+
+.portfolioStatus {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-top: 10px;
+}
+
+.portfolioEmptyLead {
+  font-size: 13.5px;
+  color: var(--muted);
+  margin: 14px 0 0;
+}
+
+.portfolioSummaryStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-top: 22px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.portfolioSummaryLabel {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.portfolioSummaryLabel strong {
+  font-weight: 600;
+}
+
+.portfolioSummaryStrip small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.portfolioErrorPanel {
+  background: var(--no-soft);
+  border: 1px solid var(--no-border);
+  border-radius: 12px;
+  padding: 32px 20px;
+  text-align: center;
+  margin-top: 20px;
+}
+
+.portfolioErrorTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--no);
+}
+
+.portfolioErrorPanel p {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 6px 0 14px;
+}
+
+.portfolioSkeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.portfolioSkeleton > div {
+  height: 64px;
+  border-radius: 12px;
+  background: var(--tint);
+}
+
+.yesText { color: var(--yes); }
+.noText { color: var(--no); }
+.blueText { color: var(--blue); }
+.mutedText { color: var(--muted); }
+
+.ticketSection {
+  margin-top: 28px;
+}
+
+.ticketSection h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.sectionHint {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+
+.emptyStatePanel {
+  background: var(--tint);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.ticketCard.rowTicket {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 16px 18px;
+}
+
+.ticketCardMain {
+  flex: 1;
+  min-width: 200px;
+}
+
+.ticketCardTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.ticketCardMeta {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.sideChip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+.sideChip.yes {
+  background: var(--yes-soft);
+  color: var(--yes);
+  border: 1px solid var(--yes-border);
+}
+
+.sideChip.no {
+  background: var(--no-soft);
+  color: var(--no);
+  border: 1px solid var(--no-border);
+}
+
+.ticketActions {
+  flex-shrink: 0;
+}
+
+.lockedPill {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-radius: 6px;
+  padding: 4px 9px;
+}
+
+/* LP vault */
+.lpStatTiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.statTileValue {
+  display: block;
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 4px;
+}
+
+.statTileValue em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.statTileValue.blue { color: var(--blue); }
+.statTileValue.yes { color: var(--yes); }
+
+.lpWorkspace {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 20px;
+  align-items: start;
+  margin-top: 8px;
+}
+
+.lpAllocPanel,
+.lpStickyPanel {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--card);
+  padding: 20px;
+}
+
+.lpStickyPanel {
+  position: sticky;
+  top: calc(var(--header-h) + 24px);
+}
+
+.lpPanelTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.lpTabs {
+  display: flex;
+  gap: 6px;
+  background: var(--tint);
+  border-radius: 9px;
+  padding: 4px;
+  margin-bottom: 4px;
+}
+
+.lpTab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.lpTab.isActive {
+  background: var(--white);
+  color: var(--ink);
+  box-shadow: var(--card);
+}
+
+.lpDoneBanner {
+  margin-top: 12px;
+  background: var(--yes-soft);
+  color: var(--yes);
+  border: 1px solid var(--yes-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+}
+
+.confirmButton {
+  width: 100%;
+  margin-top: 16px;
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 13px;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.confirmButton:hover:not(:disabled) {
+  background: var(--blue-hover);
+}
+
+.confirmButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Trade ticket */
+.tradeHeaderMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tradeMaxLoss {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.tradeSurfaceCompact {
+  position: sticky;
+  top: calc(var(--header-h) + 24px);
+}
+
+/* Admin */
+.adminSideCol {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.adminPanel {
+  padding: 20px;
+}
+
+.adminPanel h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.adminStatusRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.adminStatusRow span:first-child {
+  color: var(--muted);
+  min-width: 72px;
+}
+
+.adminStatusRow strong {
+  flex: 1;
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.adminInfoList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.adminInfoList span {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+@media (max-width: 960px) {
+  .lpWorkspace {
+    grid-template-columns: 1fr;
+  }
+
+  .lpStickyPanel,
+  .tradeSurfaceCompact {
+    position: static;
+  }
+}
+
+@media (max-width: 720px) {
+  .walletPopover {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    width: 100%;
+    max-width: none;
+    border-radius: 16px 16px 0 0;
+    padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+    box-shadow: 0 -12px 40px rgba(16, 32, 64, 0.18);
+  }
+
+  .portfolioRefresh {
+    margin-left: 0;
+  }
+
+  .portfolioSummaryStrip {
+    gap: 16px;
+  }
+
+  .fundModal {
+    max-width: none;
+    border-radius: 16px 16px 0 0;
+    margin-top: auto;
+  }
+
+  .fundModalBackdrop {
+    align-items: flex-end;
+    padding: 0;
   }
 }

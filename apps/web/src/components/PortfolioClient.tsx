@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { RefreshCcw, Wallet } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAddress } from "viem";
@@ -24,6 +25,7 @@ export function PortfolioClient() {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [status, setStatus] = useState("Connect your Arc Testnet wallet to load tickets.");
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [settlingTicket, setSettlingTicket] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
 
@@ -47,10 +49,12 @@ export function PortfolioClient() {
   const refresh = useCallback(async (walletAddress = address) => {
     if (!walletAddress) {
       setTickets([]);
-      setStatus("Connect wallet in the header (or below) — session is shared across all pages.");
+      setLoadError(false);
+      setStatus("Connect wallet in the header — session is shared across all pages.");
       return;
     }
     setLoading(true);
+    setLoadError(false);
     setStatus("Loading tickets from Arc indexer...");
     try {
       const nextTickets = await fetchUserTickets(walletAddress);
@@ -64,20 +68,21 @@ export function PortfolioClient() {
         setStatus(`${nextTickets.length} ticket(s) loaded · waiting for market resolution.`);
       }
     } catch (error) {
+      setLoadError(true);
       setStatus(error instanceof Error ? error.message : "Portfolio indexing failed.");
     } finally {
       setLoading(false);
     }
   }, [address]);
 
-  // Auto-load when shared wallet connects / restores.
   useEffect(() => {
     if (!ready) return;
     if (address) {
       void refresh(address);
     } else {
       setTickets([]);
-      setStatus("Connect wallet in the header (or below) — session is shared across all pages.");
+      setLoadError(false);
+      setStatus("Connect wallet in the header — session is shared across all pages.");
     }
   }, [address, ready, refresh]);
 
@@ -146,57 +151,92 @@ export function PortfolioClient() {
     }
   }
 
+  if (loadError) {
+    return (
+      <div className="portfolioErrorPanel">
+        <div className="portfolioErrorTitle">Couldn&apos;t load your positions</div>
+        <p>Arc RPC call failed — your funds are safe, just retry the read.</p>
+        <button className="iconButton primary" type="button" onClick={() => void refresh()}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <>
-      <section className="portfolioToolbar">
-        <div>
-          <span className="eyebrow">Arc wallet</span>
-          <strong>
-            {restoring
-              ? "Restoring session…"
-              : address
-                ? shortHex(address)
-                : "Not connected"}
-          </strong>
-          <p>{loading || connecting ? "Refreshing..." : status}</p>
-          {txHash ? (
-            <a className="txLink" href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank">
-              View claim tx
-            </a>
-          ) : null}
-        </div>
-        <div className="portfolioActions">
-          {!address ? (
-            <button className="iconButton" disabled={loading || connecting || restoring} onClick={() => void handleConnect()} type="button">
-              <Wallet size={18} aria-hidden />
-              {connecting ? "Connecting…" : "Connect wallet"}
-            </button>
-          ) : null}
-          <button className="iconButton secondaryButton" disabled={!address || loading} onClick={() => void refresh()} type="button">
-            <RefreshCcw size={18} aria-hidden />
-            Refresh
+    <div className="portfolioBody">
+      <div className="portfolioWalletRow">
+        <span className="eyebrow">Arc wallet</span>
+        <span className="portfolioWalletAddr mono">
+          {restoring ? "Restoring…" : address ? shortHex(address) : "Not connected"}
+        </span>
+        {!address ? (
+          <button
+            className="iconButton"
+            disabled={loading || connecting || restoring}
+            onClick={() => void handleConnect()}
+            type="button"
+          >
+            <Wallet size={16} aria-hidden />
+            {connecting ? "Connecting…" : "Connect wallet"}
           </button>
-        </div>
-      </section>
+        ) : null}
+        <button
+          className="iconButton secondary portfolioRefresh"
+          disabled={!address || loading}
+          onClick={() => void refresh()}
+          type="button"
+        >
+          <RefreshCcw size={16} aria-hidden />
+          Refresh
+        </button>
+      </div>
+
+      <p className="portfolioStatus">{loading || connecting ? "Refreshing…" : status}</p>
+      {txHash ? (
+        <a className="txLink" href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank" rel="noreferrer">
+          View claim tx
+        </a>
+      ) : null}
+
+      {!address ? null : tickets.length === 0 && !loading ? (
+        <p className="portfolioEmptyLead">
+          No tickets yet. Buy a YES/NO ticket on <Link href="/markets">Markets</Link> first.
+        </p>
+      ) : null}
 
       {address ? (
-        <section className="portfolioSummary">
-          <article>
-            <span>Ready to claim</span>
-            <strong>{claimableTickets.length}</strong>
+        <section className="portfolioSummaryStrip" aria-label="Portfolio summary">
+          <div>
+            <span className="portfolioSummaryLabel">
+              Ready to claim{" "}
+              <strong className="yesText mono">{claimableTickets.length}</strong>
+            </span>
             <small>{formatUsdc(claimablePayoutTotal)} USDC total</small>
-          </article>
-          <article>
-            <span>Waiting</span>
-            <strong>{waitingTickets.length}</strong>
+          </div>
+          <div>
+            <span className="portfolioSummaryLabel">
+              Waiting{" "}
+              <strong className="blueText mono">{waitingTickets.length}</strong>
+            </span>
             <small>locked until resolve</small>
-          </article>
-          <article>
-            <span>History</span>
-            <strong>{historyTickets.length}</strong>
+          </div>
+          <div>
+            <span className="portfolioSummaryLabel">
+              History{" "}
+              <strong className="mutedText mono">{historyTickets.length}</strong>
+            </span>
             <small>already settled</small>
-          </article>
+          </div>
         </section>
+      ) : null}
+
+      {loading && !tickets.length ? (
+        <div className="portfolioSkeleton" aria-hidden>
+          <div />
+          <div />
+          <div />
+        </div>
       ) : null}
 
       <section className="ticketSection">
@@ -228,11 +268,11 @@ export function PortfolioClient() {
               ticket={ticket}
             />
           )) : (
-            <p className="emptyState">
+            <div className="emptyStatePanel">
               {address
                 ? "Nothing to claim yet. When a market resolves, winning tickets appear here with a Claim button."
                 : "Connect a wallet to see claimable tickets."}
-            </p>
+            </div>
           )}
         </div>
       </section>
@@ -250,12 +290,12 @@ export function PortfolioClient() {
         <div className="ticketList">
           {waitingTickets.length ? waitingTickets.map((ticket) => (
             <TicketCard
-              action={<span className="settlementNote">Waiting for market resolution…</span>}
+              action={<span className="lockedPill">Locked</span>}
               key={ticket.id}
               ticket={ticket}
             />
           )) : (
-            <p className="emptyState">No open tickets waiting on resolution.</p>
+            <div className="emptyStatePanel">No open tickets waiting on resolution.</div>
           )}
         </div>
       </section>
@@ -269,11 +309,11 @@ export function PortfolioClient() {
           {historyTickets.length ? historyTickets.map((ticket) => (
             <TicketCard key={ticket.id} ticket={ticket} />
           )) : (
-            <p className="emptyState">No settled tickets yet.</p>
+            <div className="emptyStatePanel">No settled tickets yet.</div>
           )}
         </div>
       </section>
-    </>
+    </div>
   );
 }
 

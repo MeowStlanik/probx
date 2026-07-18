@@ -1,11 +1,17 @@
 "use client";
 
-import { Banknote, Gauge, LockKeyhole, Receipt } from "lucide-react";
 import { useEffect, useState } from "react";
 import { formatUsdc } from "@/lib/format";
 import { readOnchainLpStats } from "@/lib/readOnchainLpStats";
 import { emptyLpStats } from "@/lib/sampleData";
 import type { LpStats } from "@/lib/types";
+
+function money(value: number, digits = 0): string {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits
+  }).format(value || 0);
+}
 
 interface LPStatsPanelProps {
   stats?: LpStats;
@@ -26,7 +32,6 @@ function normalizeLpStats(stats: Partial<LpStats> | null | undefined): LpStats {
 }
 
 async function loadLpStats(): Promise<LpStats> {
-  // 1) Same-origin API (works on Vercel — verified live)
   try {
     const response = await fetch("/api/lp/stats", { cache: "no-store" });
     if (response.ok) {
@@ -39,12 +44,17 @@ async function loadLpStats(): Promise<LpStats> {
     // continue
   }
 
-  // 2) Direct Arc RPC from the browser (no API needed)
   try {
     return await readOnchainLpStats();
   } catch {
     return emptyLpStats;
   }
+}
+
+function utilizationPct(stats: LpStats): string {
+  if (!stats.tvl || stats.tvl <= 0) return "—";
+  const pct = (stats.reservedLiquidity / stats.tvl) * 100;
+  return `${Math.round(pct)}%`;
 }
 
 export function LPStatsPanel({ stats: initial, showWaterfall = false }: LPStatsPanelProps) {
@@ -73,26 +83,28 @@ export function LPStatsPanel({ stats: initial, showWaterfall = false }: LPStatsP
 
   return (
     <>
-      <section className="lpGrid" aria-label="Liquidity pool statistics">
+      <section className="lpStatTiles" aria-label="Liquidity pool statistics">
         <div className="statTile">
-          <Banknote size={21} aria-hidden />
-          <span>LP TVL</span>
-          <strong>{formatUsdc(stats.tvl, 2)}</strong>
+          <span>TVL</span>
+          <strong className="statTileValue">
+            {money(stats.tvl)} <em>USDC</em>
+          </strong>
         </div>
         <div className="statTile">
-          <LockKeyhole size={21} aria-hidden />
           <span>Reserved</span>
-          <strong>{formatUsdc(stats.reservedLiquidity, 2)}</strong>
+          <strong className="statTileValue blue">
+            {money(stats.reservedLiquidity)} <em>USDC</em>
+          </strong>
         </div>
         <div className="statTile">
-          <Gauge size={21} aria-hidden />
           <span>Available</span>
-          <strong>{formatUsdc(stats.availableLiquidity, 2)}</strong>
+          <strong className="statTileValue yes">
+            {money(stats.availableLiquidity)} <em>USDC</em>
+          </strong>
         </div>
         <div className="statTile">
-          <Receipt size={21} aria-hidden />
-          <span>Fees earned</span>
-          <strong>{formatUsdc(stats.feesEarned, 4)}</strong>
+          <span>Utilization</span>
+          <strong className="statTileValue">{utilizationPct(stats)}</strong>
         </div>
       </section>
       {source === "loading" ? (
@@ -123,6 +135,10 @@ export function LPStatsPanel({ stats: initial, showWaterfall = false }: LPStatsP
           <div>
             <span>Fees earned</span>
             <strong>{formatUsdc(stats.feesEarned, 4)}</strong>
+          </div>
+          <div>
+            <span>Simulated APY</span>
+            <strong>{(stats.simulatedApy * 100).toFixed(1)}%</strong>
           </div>
         </section>
       ) : null}

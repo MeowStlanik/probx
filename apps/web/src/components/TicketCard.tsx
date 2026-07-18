@@ -1,6 +1,5 @@
 "use client";
 
-import { BadgeCheck, CircleDollarSign, Gift, Hourglass, RotateCcw, XCircle } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { SettlementCountdown } from "@/components/SettlementCountdown";
 import { formatUsdc } from "@/lib/format";
@@ -13,10 +12,16 @@ interface TicketCardProps {
 }
 
 export function TicketCard({ ticket, action }: TicketCardProps) {
-  const Icon = iconForTicket(ticket);
-  const visibleStatus = ticket.claimable ? "CLAIMABLE" : ticket.status;
   const resultClass = resultClassName(ticket.result);
-  const claimAmount = ticket.claimAmount ?? (ticket.result === "WIN" ? ticket.payout : ticket.result === "REFUND" ? ticket.riskAmount : ticket.result === "LOSS" ? 0 : undefined);
+  const claimAmount =
+    ticket.claimAmount ??
+    (ticket.result === "WIN"
+      ? ticket.payout
+      : ticket.result === "REFUND"
+        ? ticket.riskAmount
+        : ticket.result === "LOSS"
+          ? 0
+          : undefined);
   const [localTimers, setLocalTimers] = useState<{ lockTime?: string; observationEnd?: string }>({});
 
   useEffect(() => {
@@ -27,60 +32,51 @@ export function TicketCard({ ticket, action }: TicketCardProps) {
   }, [ticket.marketId, ticket.id]);
 
   return (
-    <article className={`ticketCard ${ticket.claimable ? "ticketCardClaimable" : ""} ${resultClass}`}>
-      <div className="ticketIcon">
-        <Icon size={20} aria-hidden />
-      </div>
-      <div>
-        <div className="ticketHeader">
-          <strong>{ticket.id}</strong>
-          <span className={ticket.claimable ? "statusPill open" : "statusPill"}>{visibleStatus}</span>
-          {ticket.result ? (
-            <span className={`resultPill ${resultClass}`}>{ticket.result}</span>
-          ) : null}
+    <article className={`ticketCard rowTicket ${ticket.claimable ? "ticketCardClaimable" : ""} ${resultClass}`}>
+      <span className={`sideChip ${ticket.outcome === "YES" ? "yes" : "no"}`}>{ticket.outcome}</span>
+
+      <div className="ticketCardMain">
+        <div className="ticketCardTitle">{ticket.marketQuestion}</div>
+        <div className="ticketCardMeta mono">
+          stake {formatUsdc(ticket.riskAmount)} · boost {ticket.boost}x
+          {ticket.claimable || ticket.result === "WIN" || ticket.payout
+            ? ` · payout ${formatUsdc(ticket.payout)}`
+            : ""}
+          {ticket.id ? ` · #${ticket.id.replace(/^PXLT-/, "")}` : ""}
         </div>
-        <h3>{ticket.marketQuestion}</h3>
-        <div className="ticketMeta">
-          <span>Bought {ticket.outcome}</span>
-          <span>{ticket.boost}x Boost</span>
-          <span>Stake {formatUsdc(ticket.riskAmount)} USDC</span>
-          {ticket.marketStatus ? <span>Market {ticket.marketStatus}</span> : null}
-          {ticket.winningOutcome ? <span>Winner {ticket.winningOutcome}</span> : null}
-          <span>
-            <CircleDollarSign size={15} aria-hidden />
-            Max payout {formatUsdc(ticket.payout)} USDC
-          </span>
-        </div>
+
         {ticket.openReferencePrice !== undefined && Number.isFinite(ticket.openReferencePrice) ? (
           <p className="ticketClaimHint">
             Entry <strong>{formatOpenReference(ticket)}</strong>
-            {ticket.openThreshold !== undefined && Number.isFinite(ticket.openThreshold)
-              ? <> · threshold <strong>{formatThreshold(ticket)}</strong></>
-              : null}
+            {ticket.openThreshold !== undefined && Number.isFinite(ticket.openThreshold) ? (
+              <>
+                {" "}
+                · threshold <strong>{formatThreshold(ticket)}</strong>
+              </>
+            ) : null}
           </p>
         ) : null}
+
         {ticket.claimable ? (
           <p className="ticketClaimHint">
             {ticket.result === "WIN" && (
-              <>You won — claim <strong>{formatUsdc(claimAmount ?? ticket.payout)} USDC</strong> to your wallet.</>
+              <>
+                You won — claim <strong>{formatUsdc(claimAmount ?? ticket.payout)} USDC</strong> to your wallet.
+              </>
             )}
             {ticket.result === "REFUND" && (
-              <>Market cancelled — claim <strong>{formatUsdc(claimAmount ?? ticket.riskAmount)} USDC</strong> risk refund.</>
+              <>
+                Market cancelled — claim <strong>{formatUsdc(claimAmount ?? ticket.riskAmount)} USDC</strong> risk refund.
+              </>
             )}
-            {ticket.result === "LOSS" && (
-              <>You lost — close the ticket to release LP reserve (payout 0 USDC).</>
-            )}
-            {!ticket.result && (
-              <>Market finished — claim available.</>
-            )}
+            {ticket.result === "LOSS" && <>You lost — close the ticket to release LP reserve (payout 0 USDC).</>}
+            {!ticket.result && <>Market finished — claim available.</>}
           </p>
         ) : null}
+
         {!ticket.claimable && ticket.status === "OPEN" ? (
           <>
-            <p className="ticketClaimHint mutedHint">
-              Position open. Wait for lock + observation, then claim payout here.
-            </p>
-            {localTimers.lockTime || localTimers.observationEnd ? (
+            {(localTimers.lockTime || localTimers.observationEnd) ? (
               <SettlementCountdown
                 compact
                 lockTime={localTimers.lockTime}
@@ -89,6 +85,7 @@ export function TicketCard({ ticket, action }: TicketCardProps) {
             ) : null}
           </>
         ) : null}
+
         {ticket.status !== "OPEN" && ticket.result ? (
           <p className="ticketClaimHint mutedHint">
             {ticket.result === "WIN" && <>Settled win · received {formatUsdc(ticket.payout)} USDC.</>}
@@ -96,20 +93,14 @@ export function TicketCard({ ticket, action }: TicketCardProps) {
             {ticket.result === "REFUND" && <>Refunded · returned {formatUsdc(ticket.riskAmount)} USDC risk.</>}
           </p>
         ) : null}
-        {action ? <div className="ticketActions">{action}</div> : null}
       </div>
+
+      {action ? <div className="ticketActions">{action}</div> : null}
+      {ticket.result && !action ? (
+        <span className={`resultPill ${resultClass}`}>{ticket.result}</span>
+      ) : null}
     </article>
   );
-}
-
-function iconForTicket(ticket: Ticket) {
-  if (ticket.claimable && ticket.result === "WIN") return Gift;
-  if (ticket.claimable && ticket.result === "REFUND") return RotateCcw;
-  if (ticket.claimable && ticket.result === "LOSS") return XCircle;
-  if (ticket.status === "OPEN") return Hourglass;
-  if (ticket.result === "REFUND") return RotateCcw;
-  if (ticket.result === "LOSS") return XCircle;
-  return BadgeCheck;
 }
 
 function resultClassName(result: Ticket["result"] | undefined): string {
