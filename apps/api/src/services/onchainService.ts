@@ -868,13 +868,14 @@ export async function createMarketOnchain(body: {
   // BTC / weather markets always get a concrete numeric threshold so auto-resolve works.
   const { question, role } = await materializeReferenceQuestion(rawQuestion, requestedRole);
   // Entry window, sniper buffer (lock before entry ends), pause, then observation.
-  // Example: entry 60s, lock at 48s (12s buffer), 10s pause, 60s observe.
-  const entrySeconds = clampInteger(body.lockSeconds, 30, 86_400, 60);
+  // Pad entry for create+open tx latency so the UI still shows a long OPEN window
+  // after the market appears in the list (~10–20s later).
+  const entrySeconds = clampInteger(body.lockSeconds, 30, 86_400, 75);
   const sniperBuffer = clampInteger(
     body.sniperBufferSeconds ?? process.env.MARKET_SNIPER_BUFFER_SECONDS,
-    5,
+    3,
     30,
-    12
+    5
   );
   const lockPause = clampInteger(
     body.lockPauseSeconds ?? process.env.MARKET_LOCK_PAUSE_SECONDS,
@@ -890,9 +891,11 @@ export async function createMarketOnchain(body: {
   }
   // Constructor treats this as fair mid; contract applies overround margin on-chain.
   const yesPrice = BigInt(Math.round(clampNumber(yesPricePercent, 5, 95, 50) * 10_000));
-  const openTime = BigInt(now - 5);
-  // Lock 10–15s before the nominal entry window ends (anti-sniper).
-  const openDuration = Math.max(20, entrySeconds - sniperBuffer);
+  // Start open at "now" — do not backdate (that ate OPEN time before the market was listed).
+  const openTime = BigInt(now);
+  // Extra slack so lock is still ~55–65s after create+open confirmations.
+  const txSlack = clampInteger(process.env.MARKET_CREATE_TX_SLACK_SECONDS, 0, 45, 18);
+  const openDuration = Math.max(45, entrySeconds - sniperBuffer + txSlack);
   const lockTime = BigInt(now + openDuration);
   // Pause after lock so late prints cannot bleed into observation.
   const observationStart = lockTime + BigInt(lockPause);

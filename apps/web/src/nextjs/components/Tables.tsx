@@ -1,5 +1,5 @@
 import { theme } from '../theme';
-import { ActivityRow, AllocationRow } from '../types';
+import { ActivityRow, AllocationRow, LpLedgerRow } from '../types';
 import { SideChip } from './StatusPill';
 
 const cellStyle = { padding: 8, fontSize: 12.5 } as const;
@@ -63,6 +63,49 @@ export function AllocationTable({ rows }: { rows: AllocationRow[] }) {
             <td style={cellStyle}><SideChip side={a.side} /></td>
             <td style={{ ...cellStyle, fontFamily: theme.font.mono, color: theme.color.ink, textAlign: 'right' }}>{a.amount}</td>
             <td style={{ ...cellStyle, textAlign: 'right', fontSize: 11.5, fontWeight: 600, color: a.status === 'Active' ? theme.color.yes : theme.color.muted }}>{a.status}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** Last deposits / withdraws for the LP vault (matches deposit card height). */
+export function LpLedgerTable({ rows }: { rows: LpLedgerRow[] }) {
+  if (!rows.length) {
+    return (
+      <p style={{ margin: '16px 0 0', fontSize: 13, color: theme.color.muted, textAlign: 'center', padding: '28px 12px' }}>
+        No deposits yet. Deposit USDC on the right — the last few show up here.
+      </p>
+    );
+  }
+  return (
+    <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: 12, minWidth: 280 }}>
+      <thead>
+        <tr style={{ textAlign: 'left' }}>
+          <th style={headStyle}>Time</th>
+          <th style={headStyle}>Type</th>
+          <th style={{ ...headStyle, textAlign: 'right' }}>Amount</th>
+          <th style={{ ...headStyle, textAlign: 'right' }}>Tx</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={r.id || i} style={{ background: i % 2 === 0 ? '#fff' : theme.color.tint }}>
+            <td style={{ ...cellStyle, fontFamily: theme.font.mono, color: theme.color.muted }}>{r.time}</td>
+            <td style={{ ...cellStyle, fontWeight: 600, color: r.kind === 'Deposit' ? theme.color.yes : theme.color.blue }}>
+              {r.kind}
+            </td>
+            <td style={{ ...cellStyle, fontFamily: theme.font.mono, color: theme.color.ink, textAlign: 'right' }}>{r.amount}</td>
+            <td style={{ ...cellStyle, textAlign: 'right' }}>
+              {r.txHref ? (
+                <a href={r.txHref} target="_blank" rel="noreferrer" style={{ fontFamily: theme.font.mono, fontSize: 11, color: theme.color.purple }}>
+                  view ↗
+                </a>
+              ) : (
+                <span style={{ color: theme.color.muted, fontSize: 11 }}>—</span>
+              )}
+            </td>
           </tr>
         ))}
       </tbody>

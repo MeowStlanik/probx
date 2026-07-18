@@ -7,7 +7,8 @@ import { useEffect, useRef } from "react";
  * while the tab is open, hit /api/cron/market-cycle about every 45s.
  * Requires ORACLE_PRIVATE_KEY (or DEPLOYER/PRIVATE_KEY) on the server.
  */
-const INTERVAL_MS = 45_000;
+/** Faster tick so a new OPEN market appears sooner after resolve (Vercel Hobby). */
+const INTERVAL_MS = 20_000;
 
 export function MarketCycleHeartbeat() {
   const inFlight = useRef(false);

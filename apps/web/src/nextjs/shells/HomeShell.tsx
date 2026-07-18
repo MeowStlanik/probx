@@ -46,7 +46,8 @@ export function HomeShell({
 
   useEffect(() => {
     void refresh();
-    const id = window.setInterval(() => void refresh(), 15_000);
+    // Fast poll so new OPEN markets show while the timer still has time left.
+    const id = window.setInterval(() => void refresh(), 5_000);
     return () => window.clearInterval(id);
   }, [refresh]);
 

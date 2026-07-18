@@ -17,8 +17,8 @@ import {
   settleMarketTicketsOnchain
 } from "./onchainService.js";
 
-/** Nominal entry window length (seconds). Lock fires slightly earlier (sniper buffer). */
-const LOCK_SECONDS = 60;
+/** Nominal entry window (seconds). createMarketOnchain adds tx slack + lower sniper buffer. */
+const LOCK_SECONDS = 75;
 const OBSERVATION_SECONDS = 60;
 /** Extra pause after lock before observationStart (set in createMarketOnchain defaults). */
 const STATE_PATH = () => runtimeFile("market-cycle-state.json");

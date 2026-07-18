@@ -9,7 +9,7 @@
  */
 const lastRunByKey = new Map<string, number>();
 
-const DEFAULT_WINDOW_MS = 30_000;
+const DEFAULT_WINDOW_MS = 15_000;
 
 /**
  * Returns true when the call should be SKIPPED (throttled).

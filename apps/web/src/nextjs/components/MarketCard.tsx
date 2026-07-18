@@ -51,9 +51,9 @@ export function LifecycleBar({ nowPct, height = 6 }: { nowPct: number; height?: 
 }
 
 /**
- * Full stage names under the bar.
- * Label columns are equal width so "Lock / Pause / Resolve" never clip or stack —
- * the bar above still uses true stage durations (50/6/8/31/5) for the marker.
+ * Full stage names under the bar — same flex % as LifecycleBar so the marker
+ * sits over the correct word. Narrow bands (Lock/Pause/Resolve) use slightly
+ * tighter type; card min-width keeps full words readable without stacking.
  */
 export function LifecycleLabels({ active }: { active?: MarketSummary["stage"] }) {
   return (
@@ -62,35 +62,38 @@ export function LifecycleLabels({ active }: { active?: MarketSummary["stage"] })
         display: "flex",
         marginTop: 10,
         width: "100%",
-        gap: 4,
-        userSelect: "none"
+        userSelect: "none",
+        minHeight: 18
       }}
       role="list"
       aria-label="Market lifecycle stages"
     >
       {LIFECYCLE_SEGMENTS.map((seg) => {
         const isActive = active === seg.key;
+        const tight = seg.width <= 8;
         return (
           <span
             key={seg.key}
             role="listitem"
             title={`${seg.label} · ${seg.width}% of cycle`}
             style={{
-              flex: "1 1 0",
+              flex: `0 0 ${seg.width}%`,
+              maxWidth: `${seg.width}%`,
               minWidth: 0,
+              boxSizing: "border-box",
               textAlign: "center",
-              fontSize: 11,
-              lineHeight: "14px",
+              fontSize: tight ? 9.5 : 11,
+              lineHeight: "16px",
               fontWeight: isActive ? 700 : 500,
               color: isActive ? theme.color.ink : theme.color.muted,
-              letterSpacing: "0.01em",
+              letterSpacing: tight ? "0" : "0.02em",
               textTransform: "uppercase",
               whiteSpace: "nowrap",
               overflow: "hidden",
-              textOverflow: "ellipsis",
-              padding: "2px 0",
+              textOverflow: "clip",
+              padding: "2px 1px",
               borderRadius: 4,
-              background: isActive ? "rgba(39,117,202,.08)" : "transparent"
+              background: isActive ? "rgba(39,117,202,.1)" : "transparent"
             }}
           >
             {seg.label}

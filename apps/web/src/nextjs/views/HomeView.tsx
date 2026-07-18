@@ -136,8 +136,8 @@ export function HomeView({
             </div>
           </div>
 
-          {/* Hero market — wider so full lifecycle labels breathe */}
-          <div style={{ flex: "1 1 480px", minWidth: 360, maxWidth: 560 }}>
+          {/* Hero market — wide enough for full Open/Lock/Pause/Observe/Resolve */}
+          <div style={{ flex: "1 1 520px", minWidth: 400, maxWidth: 600 }}>
             <MarketCard market={heroMarket} variant="hero" onClick={() => onSelectMarket(heroMarket.id)} />
           </div>
         </div>
@@ -206,7 +206,7 @@ export function HomeView({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 480px))",
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 520px))",
               gap: 22,
               justifyContent: "center"
             }}

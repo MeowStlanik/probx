@@ -545,30 +545,52 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const savedEmbedded = readEmbeddedSession();
       if (savedEmbedded) {
         try {
-          {
-            // Headers keep the session token out of URLs, logs and browser history.
-            const response = await fetch(apiUrl("/api/wallet/session"), {
-              cache: "no-store",
-              headers: {
-                "x-session-email": savedEmbedded.email,
-                "x-session-token": savedEmbedded.sessionToken
-              }
-            });
-            if (response.ok) {
-              if (cancelled) return;
-              setEmbedded(savedEmbedded);
-              setEmail(savedEmbedded.email);
-              setMode("embedded");
-              setChainId(arcDeployment.chainId);
-              setActiveAddress(savedEmbedded.address);
-              await refreshBalance(savedEmbedded.address);
-              if (!cancelled) setRestoring(false);
-              return;
+          // Headers keep the session token out of URLs, logs and browser history.
+          const response = await fetch(apiUrl("/api/wallet/session"), {
+            cache: "no-store",
+            headers: {
+              "x-session-email": savedEmbedded.email,
+              "x-session-token": savedEmbedded.sessionToken
             }
+          });
+          if (response.ok) {
+            if (cancelled) return;
+            // Server may return refreshed public fields; keep local token.
+            setEmbedded(savedEmbedded);
+            setEmail(savedEmbedded.email);
+            setMode("embedded");
+            setChainId(arcDeployment.chainId);
+            setActiveAddress(savedEmbedded.address);
+            await refreshBalance(savedEmbedded.address);
+            if (!cancelled) setRestoring(false);
+            return;
           }
-          clearEmbeddedSession();
+          // Only wipe on hard auth failure. Network/5xx keep local session so a
+          // blip does not force re-login; write path will re-check.
+          if (response.status === 401 || response.status === 403) {
+            clearEmbeddedSession();
+          } else if (!cancelled) {
+            setEmbedded(savedEmbedded);
+            setEmail(savedEmbedded.email);
+            setMode("embedded");
+            setChainId(arcDeployment.chainId);
+            setActiveAddress(savedEmbedded.address);
+            void refreshBalance(savedEmbedded.address);
+            setRestoring(false);
+            return;
+          }
         } catch {
-          clearEmbeddedSession();
+          // Offline / API down — restore optimistically from localStorage.
+          if (!cancelled) {
+            setEmbedded(savedEmbedded);
+            setEmail(savedEmbedded.email);
+            setMode("embedded");
+            setChainId(arcDeployment.chainId);
+            setActiveAddress(savedEmbedded.address);
+            void refreshBalance(savedEmbedded.address);
+            setRestoring(false);
+            return;
+          }
         }
       }
 

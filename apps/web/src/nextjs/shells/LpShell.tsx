@@ -2,16 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatUnits, getAddress, parseUnits } from "viem";
-import { fetchMarkets } from "@/lib/api";
-import { deriveAllocations } from "@/lib/lpAllocations";
+import { fetchRecentLpLedger, recordLocalLpAction, type LpLedgerRow } from "@/lib/lpDeposits";
 import { arcDeployment, poolAbi, usdcAbi } from "@/lib/onchain";
 import { readableWalletError, useWallet } from "@/lib/wallet";
 import { moneyUsdc } from "../mapMarket";
-import type { AllocationRow } from "../types";
 import { LPView, type LpAction } from "../views/LPView";
 
 /**
- * Wires LPView → LiquidityPool deposit/withdraw + /api/lp/stats + deriveAllocations.
+ * Wires LPView → LiquidityPool deposit/withdraw + /api/lp/stats + recent deposits.
  */
 export function LpShell({
   initialTvl,
@@ -30,7 +28,7 @@ export function LpShell({
   const [available, setAvailable] = useState(initialAvailable ?? 0);
   const [apy] = useState(initialApy ?? 0);
   const [yourShare, setYourShare] = useState("0%");
-  const [allocations, setAllocations] = useState<AllocationRow[]>([]);
+  const [ledger, setLedger] = useState<LpLedgerRow[]>([]);
   const [shares, setShares] = useState(0n);
   const [totalShares, setTotalShares] = useState(0n);
   const [managed, setManaged] = useState(0n);
@@ -96,25 +94,25 @@ export function LpShell({
     }
   }, [address, publicClient]);
 
-  // Allocations are optional UI — load off the critical path so LP stats render fast.
-  const refreshAllocations = useCallback(async () => {
+  const refreshLedger = useCallback(async () => {
     try {
-      const markets = await fetchMarkets();
-      setAllocations(deriveAllocations(markets));
+      // Global vault history (all LPs) — last 5 real deposit/withdraw events
+      const rows = await fetchRecentLpLedger(publicClient, { limit: 5 });
+      setLedger(rows);
     } catch {
-      setAllocations([]);
+      setLedger([]);
     }
-  }, []);
+  }, [publicClient]);
 
   useEffect(() => {
     void refresh();
-    void refreshAllocations();
+    void refreshLedger();
     const id = window.setInterval(() => {
       void refresh();
-      void refreshAllocations();
+      void refreshLedger();
     }, 15_000);
     return () => window.clearInterval(id);
-  }, [refresh, refreshAllocations]);
+  }, [refresh, refreshLedger]);
 
   const onAction = useCallback(
     async (action: LpAction, amount: number) => {
@@ -150,7 +148,9 @@ export function LpShell({
             args: [assets]
           });
           await publicClient.waitForTransactionReceipt({ hash });
+          recordLocalLpAction({ kind: "Deposit", amountUsdc: amount, tx: hash });
           await refresh();
+          await refreshLedger();
           return `Deposited ${amount} USDC to the LP vault.`;
         }
 
@@ -168,7 +168,9 @@ export function LpShell({
           args: [sharesNeeded]
         });
         await publicClient.waitForTransactionReceipt({ hash });
+        recordLocalLpAction({ kind: "Withdraw", amountUsdc: amount, tx: hash });
         await refresh();
+        await refreshLedger();
         return `Withdrew ${amount} USDC from the LP vault.`;
       } catch (error) {
         return readableWalletError(error);
@@ -183,6 +185,7 @@ export function LpShell({
       managed,
       publicClient,
       refresh,
+      refreshLedger,
       shares,
       totalShares,
       usdcBal
@@ -195,7 +198,7 @@ export function LpShell({
       reserved={moneyUsdc(reserved, 2)}
       available={moneyUsdc(available, 2)}
       utilization={utilization}
-      allocations={allocations}
+      ledger={ledger}
       apy={apy > 0 ? `${(apy * 100).toFixed(2)}%` : "—"}
       yourShare={yourShare}
       allowanceUsdc={allowanceUsdc}

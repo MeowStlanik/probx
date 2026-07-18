@@ -208,6 +208,24 @@ export const poolAbi = [
     outputs: [{ name: "assets", type: "uint256" }]
   },
   {
+    type: "event",
+    name: "Deposited",
+    inputs: [
+      { name: "lp", type: "address", indexed: true },
+      { name: "assets", type: "uint256", indexed: false },
+      { name: "shares", type: "uint256", indexed: false }
+    ]
+  },
+  {
+    type: "event",
+    name: "Withdrawn",
+    inputs: [
+      { name: "lp", type: "address", indexed: true },
+      { name: "assets", type: "uint256", indexed: false },
+      { name: "shares", type: "uint256", indexed: false }
+    ]
+  },
+  {
     type: "function",
     name: "totalShares",
     stateMutability: "view",

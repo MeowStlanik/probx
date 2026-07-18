@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { decryptSecret, encryptSecret, isEncrypted } from "./keyEncryption.js";
@@ -20,6 +20,7 @@ import {
   circleStatus
 } from "./circleWalletService.js";
 import { getMonorepoRoot, runtimeFile } from "../runtimePaths.js";
+import { issueSignedSession, isLegacyOpaqueToken, verifySignedSession } from "./signedSession.js";
 
 const rootDir = getMonorepoRoot();
 const storePath = runtimeFile("session-wallets.json");
@@ -210,15 +211,18 @@ export async function createOrResumeSession(emailInput: string, opts?: { otpVeri
 
   const store = loadStore();
   const existing = store.sessions[email];
-  const sessionToken = randomBytes(24).toString("hex");
-  const sessionTokenHash = hashToken(sessionToken);
   const now = new Date().toISOString();
 
   if (existing) {
-    existing.sessionTokenHash = sessionTokenHash;
     existing.lastSeenAt = now;
+    existing.sessionTokenHash = existing.sessionTokenHash || hashToken(`local:${email}`);
     store.sessions[email] = existing;
     saveStore(store);
+    const sessionToken = issueSignedSession({
+      email,
+      address: existing.address,
+      provider: "local"
+    });
     return publicSession(existing, sessionToken);
   }
 
@@ -228,27 +232,65 @@ export async function createOrResumeSession(emailInput: string, opts?: { otpVeri
     email,
     address: account.address,
     privateKey,
-    sessionTokenHash,
+    sessionTokenHash: hashToken(`local:${email}`),
     createdAt: now,
     lastSeenAt: now
   };
   store.sessions[email] = record;
   saveStore(store);
+  const sessionToken = issueSignedSession({
+    email,
+    address: record.address,
+    provider: "local"
+  });
   return publicSession(record, sessionToken);
 }
 
 function requireSession(emailInput: string, sessionToken: string): SessionRecord {
   const email = normalizeEmail(emailInput);
+  const token = (sessionToken || "").trim();
   const store = loadStore();
-  const record = store.sessions[email];
-  if (!record) throw new Error("Session not found. Sign in with email again.");
-  if (record.sessionTokenHash !== hashToken(sessionToken)) {
-    throw new Error("Invalid or expired session token.");
+
+  const signed = verifySignedSession(token);
+  if (signed) {
+    if (signed.provider !== "local") {
+      throw new Error("Invalid session provider for local wallet.");
+    }
+    if (signed.email !== email) {
+      throw new Error("Session email mismatch. Sign in with email again.");
+    }
+    const record = store.sessions[email];
+    if (!record) {
+      throw new Error(
+        "Local wallet keys not available on this server instance. Sign in with email again."
+      );
+    }
+    if (getAddress(record.address) !== getAddress(signed.address)) {
+      throw new Error("Session wallet address mismatch. Sign in with email again.");
+    }
+    record.lastSeenAt = new Date().toISOString();
+    store.sessions[email] = record;
+    try {
+      saveStore(store);
+    } catch {
+      /* ignore */
+    }
+    return record;
   }
-  record.lastSeenAt = new Date().toISOString();
-  store.sessions[email] = record;
-  saveStore(store);
-  return record;
+
+  if (isLegacyOpaqueToken(token)) {
+    const record = store.sessions[email];
+    if (!record) throw new Error("Session not found. Sign in with email again.");
+    if (record.sessionTokenHash !== hashToken(token)) {
+      throw new Error("Invalid or expired session token. Sign in again (session upgraded).");
+    }
+    record.lastSeenAt = new Date().toISOString();
+    store.sessions[email] = record;
+    saveStore(store);
+    return record;
+  }
+
+  throw new Error("Invalid or expired session token. Sign in with email again.");
 }
 
 export function getSessionPublic(emailInput: string, sessionToken: string) {

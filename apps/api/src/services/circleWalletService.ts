@@ -1,9 +1,10 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
 import { encodeFunctionData, getAddress, type Abi } from "viem";
 import { runtimeFile } from "../runtimePaths.js";
+import { issueSignedSession, isLegacyOpaqueToken, verifySignedSession } from "./signedSession.js";
 
 const mapPath = runtimeFile("circle-wallet-map.json");
 
@@ -105,16 +106,21 @@ export async function createOrResumeCircleSession(emailInput: string) {
   if (!isValidEmail(email)) throw new Error("Enter a valid email address.");
 
   const store = loadMap();
-  const sessionToken = randomBytes(24).toString("hex");
-  const sessionTokenHash = hashToken(sessionToken);
   const now = new Date().toISOString();
   const existing = store.byEmail[email];
 
   if (existing) {
-    existing.sessionTokenHash = sessionTokenHash;
     existing.lastSeenAt = now;
+    // Keep last hash slot as a soft marker; auth is HMAC token (multi-instance safe).
+    existing.sessionTokenHash = existing.sessionTokenHash || hashToken(`circle:${email}`);
     store.byEmail[email] = existing;
     saveMap(store);
+    const sessionToken = issueSignedSession({
+      email,
+      address: existing.address,
+      walletId: existing.walletId,
+      provider: "circle"
+    });
     return publicCircleSession(existing, sessionToken);
   }
 
@@ -141,13 +147,19 @@ export async function createOrResumeCircleSession(emailInput: string) {
     walletId: wallet.id,
     address: getAddress(wallet.address),
     blockchain: wallet.blockchain || "ARC-TESTNET",
-    sessionTokenHash,
+    sessionTokenHash: hashToken(`circle:${email}`),
     createdAt: now,
     lastSeenAt: now
   };
   store.walletSetId = walletSetId;
   store.byEmail[email] = record;
   saveMap(store);
+  const sessionToken = issueSignedSession({
+    email,
+    address: record.address,
+    walletId: record.walletId,
+    provider: "circle"
+  });
   return publicCircleSession(record, sessionToken);
 }
 
@@ -167,16 +179,63 @@ function publicCircleSession(record: CircleMapRecord, sessionToken?: string) {
 
 function requireCircleSession(emailInput: string, sessionToken: string): CircleMapRecord {
   const email = normalizeEmail(emailInput);
-  const store = loadMap();
-  const record = store.byEmail[email];
-  if (!record) throw new Error("Circle session not found. Sign in with email again.");
-  if (record.sessionTokenHash !== hashToken(sessionToken)) {
-    throw new Error("Invalid or expired session token.");
+  const token = (sessionToken || "").trim();
+
+  // 1) HMAC tokens work on any instance without /tmp session map.
+  const signed = verifySignedSession(token);
+  if (signed) {
+    if (signed.provider !== "circle") {
+      throw new Error("Invalid session provider for Circle wallet.");
+    }
+    if (signed.email !== email) {
+      throw new Error("Session email mismatch. Sign in with email again.");
+    }
+    if (!signed.walletId) {
+      throw new Error("Session missing Circle wallet id. Sign in with email again.");
+    }
+    const address = getAddress(signed.address);
+    const store = loadMap();
+    const existing = store.byEmail[email];
+    const record: CircleMapRecord = existing
+      ? {
+          ...existing,
+          address,
+          walletId: signed.walletId,
+          lastSeenAt: new Date().toISOString()
+        }
+      : {
+          email,
+          walletId: signed.walletId,
+          address,
+          blockchain: "ARC-TESTNET",
+          sessionTokenHash: hashToken(`circle:${email}`),
+          createdAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString()
+        };
+    store.byEmail[email] = record;
+    try {
+      saveMap(store);
+    } catch {
+      // /tmp full — still allow the request using token payload
+    }
+    return record;
   }
-  record.lastSeenAt = new Date().toISOString();
-  store.byEmail[email] = record;
-  saveMap(store);
-  return record;
+
+  // 2) Legacy opaque tokens (pre-HMAC) — need the instance map.
+  if (isLegacyOpaqueToken(token)) {
+    const store = loadMap();
+    const record = store.byEmail[email];
+    if (!record) throw new Error("Circle session not found. Sign in with email again.");
+    if (record.sessionTokenHash !== hashToken(token)) {
+      throw new Error("Invalid or expired session token. Sign in again (session upgraded).");
+    }
+    record.lastSeenAt = new Date().toISOString();
+    store.byEmail[email] = record;
+    saveMap(store);
+    return record;
+  }
+
+  throw new Error("Invalid or expired session token. Sign in with email again.");
 }
 
 export function getCircleSessionPublic(emailInput: string, sessionToken: string) {

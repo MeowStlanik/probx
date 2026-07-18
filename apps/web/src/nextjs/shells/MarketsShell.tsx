@@ -50,7 +50,8 @@ export function MarketsShell({
 
   useEffect(() => {
     void load({ silent: Boolean(initial?.length) });
-    const id = window.setInterval(() => void load({ silent: true }), 12_000);
+    // 5s poll — markets used to appear mid-OPEN after slow refresh.
+    const id = window.setInterval(() => void load({ silent: true }), 5_000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount + interval only
   }, []);

@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { theme } from "../theme";
-import type { AllocationRow } from "../types";
-import { AllocationTable } from "../components/Tables";
+import type { LpLedgerRow } from "../types";
+import { LpLedgerTable } from "../components/Tables";
 import { AmountInput } from "../components/AmountInput";
 import { Button } from "../components/Button";
 
@@ -14,7 +14,7 @@ interface Props {
   reserved: string;
   available: string;
   utilization: string;
-  allocations: AllocationRow[];
+  ledger: LpLedgerRow[];
   apy: string;
   yourShare: string;
   /** Current USDC allowance to the vault (human units). */
@@ -22,13 +22,13 @@ interface Props {
   onAction: (action: LpAction, amount: number) => Promise<string>;
 }
 
-// /lp — vault stats, allocations table, deposit/withdraw panel.
+// /lp — vault stats, recent deposits, deposit/withdraw panel.
 export function LPView({
   tvl,
   reserved,
   available,
   utilization,
-  allocations,
+  ledger,
   apy,
   yourShare,
   allowanceUsdc,
@@ -83,7 +83,7 @@ export function LPView({
       </div>
 
       <div
-        style={{ marginTop: 24, display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20, alignItems: "start" }}
+        style={{ marginTop: 24, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}
         data-breakpoint="720:1fr"
       >
         <div
@@ -93,11 +93,15 @@ export function LPView({
             borderRadius: 12,
             boxShadow: theme.shadow.card,
             padding: 20,
-            overflowX: "auto"
+            overflowX: "auto",
+            minHeight: 280
           }}
         >
-          <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>Recent reserve allocations</span>
-          <AllocationTable rows={allocations} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>Recent deposits</span>
+          <p style={{ margin: "4px 0 0", fontSize: 12, color: theme.color.muted }}>
+            Last vault deposits &amp; withdraws (up to 5)
+          </p>
+          <LpLedgerTable rows={ledger} />
         </div>
 
         <div
@@ -108,7 +112,8 @@ export function LPView({
             boxShadow: theme.shadow.card,
             padding: 20,
             position: "sticky",
-            top: 88
+            top: 88,
+            minHeight: 280
           }}
         >
           <div style={{ display: "flex", gap: 6, background: theme.color.tint, borderRadius: 9, padding: 4 }}>

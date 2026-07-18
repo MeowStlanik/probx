@@ -49,6 +49,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
     () => ({
       connected: Boolean(address),
       address: address ? shortHex(address) : undefined,
+      fullAddress: address ?? undefined,
       balance:
         usdcBalance === null ? "—" : formatUsdcBalance(usdcBalance).replace(/ USDC$/i, ""),
       wrongNetwork: Boolean(wrongNetwork)

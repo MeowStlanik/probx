@@ -49,6 +49,15 @@ export interface AllocationRow {
   status: 'Active' | 'Released';
 }
 
+/** Recent vault deposits / withdrawals (LP page ledger). */
+export interface LpLedgerRow {
+  id?: string;
+  time: string;
+  kind: 'Deposit' | 'Withdraw';
+  amount: string;
+  txHref?: string;
+}
+
 export interface Position {
   id: string;
   market: string;
@@ -72,7 +81,10 @@ export interface CctpStep {
 
 export interface WalletState {
   connected: boolean;
+  /** Short display address (0x1234…abcd). */
   address?: string;
+  /** Full 0x address for copy-to-clipboard. */
+  fullAddress?: string;
   balance?: string; // formatted USDC
   wrongNetwork?: boolean;
 }
