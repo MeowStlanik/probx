@@ -199,14 +199,13 @@ export function MarketDetailView({
               padding: 20
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 16 }}>
               <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>Market lifecycle</span>
               <span style={{ fontSize: 11.5, color: theme.color.muted, fontFamily: theme.font.mono }}>
                 now · {market.stage}
               </span>
             </div>
-            <LifecycleBar nowPct={market.nowPct} height={8} />
-            {/* Same widths as bar segments — equal spacing put "PAUSE" under the OPEN end marker */}
+            <LifecycleBar nowPct={market.nowPct} height={10} />
             <LifecycleLabels active={market.stage} />
           </div>
 

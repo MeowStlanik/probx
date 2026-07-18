@@ -11,9 +11,18 @@ export const LIFECYCLE_SEGMENTS = [
 ];
 
 // Lifecycle bar: OPEN 50% · LOCK 6% · PAUSE 8% · OBSERVE 31% · RESOLVE 5% + marker.
-export function LifecycleBar({ nowPct, height = 4 }: { nowPct: number; height?: number }) {
+export function LifecycleBar({ nowPct, height = 6 }: { nowPct: number; height?: number }) {
   return (
-    <div style={{ position: "relative", height, borderRadius: height / 2, background: "#EDF1F6", display: "flex" }}>
+    <div
+      style={{
+        position: "relative",
+        height,
+        borderRadius: height / 2,
+        background: "#EDF1F6",
+        display: "flex",
+        overflow: "hidden"
+      }}
+    >
       {LIFECYCLE_SEGMENTS.map((seg, i) => (
         <div
           key={seg.key}
@@ -27,14 +36,14 @@ export function LifecycleBar({ nowPct, height = 4 }: { nowPct: number; height?: 
       <div
         style={{
           position: "absolute",
-          top: -3,
-          bottom: -3,
-          width: 2,
+          top: -4,
+          bottom: -4,
+          width: 3,
           background: theme.color.blue,
           borderRadius: 2,
           left: `${Math.min(100, Math.max(0, nowPct))}%`,
-          boxShadow: "0 0 0 3px rgba(39,117,202,.14)",
-          transform: "translateX(-1px)"
+          boxShadow: "0 0 0 3px rgba(39,117,202,.16)",
+          transform: "translateX(-1.5px)"
         }}
       />
     </div>
@@ -42,51 +51,49 @@ export function LifecycleBar({ nowPct, height = 4 }: { nowPct: number; height?: 
 }
 
 /**
- * Labels under the bar — same flex geometry as LifecycleBar (50/6/8/31/5).
- * Absolute + full words on 5–8% bands always overflowed on card width.
- * Tight bands use short labels; full name stays in `title` for hover.
+ * Full stage names under the bar.
+ * Label columns are equal width so "Lock / Pause / Resolve" never clip or stack —
+ * the bar above still uses true stage durations (50/6/8/31/5) for the marker.
  */
-function lifecycleLabelText(key: (typeof LIFECYCLE_SEGMENTS)[number]["key"], width: number) {
-  if (width <= 5) return "Res";
-  if (width <= 6) return "Lk";
-  if (width <= 8) return "Pa";
-  return LIFECYCLE_SEGMENTS.find((s) => s.key === key)?.label ?? key;
-}
-
 export function LifecycleLabels({ active }: { active?: MarketSummary["stage"] }) {
   return (
     <div
       style={{
         display: "flex",
-        marginTop: 8,
+        marginTop: 10,
         width: "100%",
-        lineHeight: "14px",
+        gap: 4,
         userSelect: "none"
       }}
+      role="list"
+      aria-label="Market lifecycle stages"
     >
       {LIFECYCLE_SEGMENTS.map((seg) => {
         const isActive = active === seg.key;
         return (
           <span
             key={seg.key}
-            title={seg.label}
+            role="listitem"
+            title={`${seg.label} · ${seg.width}% of cycle`}
             style={{
-              flex: `0 0 ${seg.width}%`,
-              maxWidth: `${seg.width}%`,
+              flex: "1 1 0",
               minWidth: 0,
-              boxSizing: "border-box",
-              overflow: "hidden",
-              textOverflow: "clip",
-              whiteSpace: "nowrap",
               textAlign: "center",
-              fontSize: seg.width <= 8 ? 9 : 10,
+              fontSize: 11,
+              lineHeight: "14px",
               fontWeight: isActive ? 700 : 500,
               color: isActive ? theme.color.ink : theme.color.muted,
-              letterSpacing: seg.width <= 8 ? "0" : ".02em",
-              textTransform: "uppercase"
+              letterSpacing: "0.01em",
+              textTransform: "uppercase",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              padding: "2px 0",
+              borderRadius: 4,
+              background: isActive ? "rgba(39,117,202,.08)" : "transparent"
             }}
           >
-            {lifecycleLabelText(seg.key, seg.width)}
+            {seg.label}
           </span>
         );
       })}
@@ -141,10 +148,11 @@ export function MarketCard({
         border: `1px solid ${theme.color.border}`,
         borderRadius: theme.radius.xl,
         boxShadow: theme.shadow.card,
-        padding: isHero ? "20px 22px" : 20,
+        padding: isHero ? "24px 26px" : "22px 24px",
         display: "flex",
         flexDirection: "column",
         height: "100%",
+        minWidth: 0,
         transition: "box-shadow .15s, border-color .15s"
       }}
       onMouseEnter={(e) => {
@@ -227,15 +235,15 @@ export function MarketCard({
         </div>
       </div>
 
-      {/* Lifecycle bar + labels aligned to segment widths (50/6/8/31/5) */}
-      <div style={{ marginTop: isHero ? 18 : 16 }}>
-        <LifecycleBar nowPct={market.nowPct} height={isHero ? 6 : 5} />
+      {/* Lifecycle: time-true bar + full equal-width stage names */}
+      <div style={{ marginTop: isHero ? 22 : 20 }}>
+        <LifecycleBar nowPct={market.nowPct} height={isHero ? 8 : 7} />
         <LifecycleLabels active={market.stage} />
       </div>
 
       <div
         style={{
-          marginTop: isHero ? 14 : 10,
+          marginTop: isHero ? 16 : 14,
           fontSize: 12,
           color: theme.color.muted,
           fontFamily: theme.font.mono,

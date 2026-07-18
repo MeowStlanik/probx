@@ -136,8 +136,8 @@ export function HomeView({
             </div>
           </div>
 
-          {/* Hero market — no double card chrome (MarketCard already has border) */}
-          <div style={{ flex: "1 1 420px", minWidth: 320, maxWidth: 480 }}>
+          {/* Hero market — wider so full lifecycle labels breathe */}
+          <div style={{ flex: "1 1 480px", minWidth: 360, maxWidth: 560 }}>
             <MarketCard market={heroMarket} variant="hero" onClick={() => onSelectMarket(heroMarket.id)} />
           </div>
         </div>
@@ -202,12 +202,12 @@ export function HomeView({
               View all markets →
             </Link>
           </div>
-          {/* BTC + weather only — max two cards, centered */}
+          {/* BTC + weather only — max two cards, centered; wider for full stage names */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 400px))",
-              gap: 18,
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 480px))",
+              gap: 22,
               justifyContent: "center"
             }}
           >
