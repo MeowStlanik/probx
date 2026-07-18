@@ -4,8 +4,11 @@ pragma solidity ^0.8.24;
 import "./MiniTest.sol";
 import "./TestHarness.sol";
 
+/// @title Reserve accounting suite (tests 05–08)
+/// @notice LP reserve lock, release, win payout, insufficient reserve.
 contract ReserveAccountingTest is MiniTest, TestHarness {
-    function testReserveIncreasesOnTicketBuy() external {
+    /// @notice 05 — buying a ticket increases reserved assets + locked user risk
+    function test_05_Reserve_IncreasesOnTicketBuy() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(500_000);
@@ -19,7 +22,8 @@ contract ReserveAccountingTest is MiniTest, TestHarness {
         assertEq(pool.lockedUserRisk(), 100 * 1e6, "risk not locked");
     }
 
-    function testReserveReleasesOnLosingTicket() external {
+    /// @notice 06 — losing ticket releases reserve and keeps risk in the pool
+    function test_06_Reserve_ReleasesOnLosingTicket() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(500_000);
@@ -34,7 +38,8 @@ contract ReserveAccountingTest is MiniTest, TestHarness {
         assertEq(pool.totalUserLossesReceived(), 100 * 1e6, "loss not retained");
     }
 
-    function testReservePaysWinningTicket() external {
+    /// @notice 07 — winning ticket is paid from reserve
+    function test_07_Reserve_PaysWinningTicket() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(500_000);
@@ -50,7 +55,8 @@ contract ReserveAccountingTest is MiniTest, TestHarness {
         assertEq(pool.reservedAssets(), 0, "reserve not released");
     }
 
-    function testCannotBuyIfReserveInsufficient() external {
+    /// @notice 08 — cannot buy when LP has no reserve capacity
+    function test_08_Buy_RevertsWhenReserveInsufficient() external {
         _deployWithoutLp();
         vm.warp(10);
         _createOpenMarket(500_000);

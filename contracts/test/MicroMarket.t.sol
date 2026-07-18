@@ -4,8 +4,11 @@ pragma solidity ^0.8.24;
 import "./MiniTest.sol";
 import "./TestHarness.sol";
 
+/// @title MicroMarket suite (tests 01–04)
+/// @notice Lifecycle + on-chain odds after YES/NO buys.
 contract MicroMarketTest is MiniTest, TestHarness {
-    function testLifecycleOpenLockResolveArchive() external {
+    /// @notice 01 — open → lock → resolve → archive
+    function test_01_Lifecycle_OpenLockResolveArchive() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(400_000);
@@ -20,7 +23,8 @@ contract MicroMarketTest is MiniTest, TestHarness {
         assertEq(uint256(market.status()), uint256(MicroMarket.Status.Archived), "not archived");
     }
 
-    function testCannotBuyOutsideOpenWindow() external {
+    /// @notice 02 — buy reverts when market is not open yet
+    function test_02_Buy_RevertsWhenMarketNotOpen() external {
         _deploy();
         vm.warp(9);
         _createOpenMarket(400_000);
@@ -32,7 +36,8 @@ contract MicroMarketTest is MiniTest, TestHarness {
         user.buy(address(market), 1, 100 * 1e6, 10_000);
     }
 
-    function testBuyMovesYesPriceOnchain() external {
+    /// @notice 03 — YES buy raises yesPrice and lowers noPrice
+    function test_03_BuyYes_RaisesYesPriceLowersNoPrice() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(500_000);
@@ -54,7 +59,8 @@ contract MicroMarketTest is MiniTest, TestHarness {
         assertTrue(market.totalYesRisk() > 0, "yes risk tracked");
     }
 
-    function testBuyNoMovesOddsOpposite() external {
+    /// @notice 04 — NO buy raises noPrice and lowers yesPrice
+    function test_04_BuyNo_RaisesNoPriceLowersYesPrice() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(500_000);
