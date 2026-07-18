@@ -11,7 +11,7 @@ import {
 } from "viem";
 import { SettlementCountdown } from "@/components/SettlementCountdown";
 import { apiUrl } from "@/lib/api";
-import { formatUsdc } from "@/lib/format";
+import { formatDisplayOdds, formatUsdc } from "@/lib/format";
 import { arcDeployment, engineAbi, hasArcDeployment, marketAbi, poolAbi, usdcAbi } from "@/lib/onchain";
 import { pushActivity } from "@/lib/activity";
 import { formatFillOdds, latestPositionForMarket, savePosition, type LocalPosition } from "@/lib/positions";
@@ -464,7 +464,13 @@ export function OnchainTradeTicket({ market }: { market?: Market }) {
               type="button"
             >
               <span className="outcomeLabel">YES</span>
-              <span className="outcomePrice">{formatPercentNumber(liveMarket?.yesPrice ?? market?.yesPrice ?? 0.5)}</span>
+              <span className="outcomePrice">
+                {formatDisplayOdds(
+                  liveMarket?.yesPrice ?? market?.yesPrice ?? 0.5,
+                  liveMarket?.noPrice ?? market?.noPrice ?? 0.5,
+                  "YES"
+                )}
+              </span>
             </button>
             <button
               aria-pressed={outcome === "NO"}
@@ -473,7 +479,13 @@ export function OnchainTradeTicket({ market }: { market?: Market }) {
               type="button"
             >
               <span className="outcomeLabel">NO</span>
-              <span className="outcomePrice">{formatPercentNumber(liveMarket?.noPrice ?? market?.noPrice ?? 0.5)}</span>
+              <span className="outcomePrice">
+                {formatDisplayOdds(
+                  liveMarket?.yesPrice ?? market?.yesPrice ?? 0.5,
+                  liveMarket?.noPrice ?? market?.noPrice ?? 0.5,
+                  "NO"
+                )}
+              </span>
             </button>
           </div>
 
@@ -689,13 +701,6 @@ function formatUsdc6(value: bigint): string {
 
 function formatUsdcCompact(value: bigint): string {
   return `${Number(formatUnits(value, 6)).toLocaleString(undefined, { maximumFractionDigits: 2 })} USDC`;
-}
-
-function formatPercentNumber(value: number): string {
-  const pct = value * 100;
-  if (!Number.isFinite(pct)) return "—";
-  const rounded = Math.round(pct * 10) / 10;
-  return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
 }
 
 function formatUsdcPlain(value: number): string {

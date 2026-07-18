@@ -41,12 +41,12 @@ Everything settles in **USDC**. On Arc, **gas is USDC too** — no ETH side-ques
 
 Short-horizon markets die if the book is a pure 50/50 mid with free leverage. ProbX stacks three simple guards so informed flow does not drain LP on every cycle:
 
-### 1. Price margin (overround), not free 100% books
-Quoted **YES + NO ≈ 105–110%** (default **108%** overround).  
-Fair mid `p` becomes `p × 1.08` and `(1−p) × 1.08`. Users always pay a haircut vs fair odds; that margin is the first layer of house edge.
+### 1. Price margin (overround) — on-chain only
+The book keeps a sportsbook-style margin: **on-chain quoted YES+NO ≈ 108%** of fair scale (`OVERROUND_BPS = 10800`). That is the first layer of house edge and funds modest boost.
 
-- **On-chain:** `MicroMarket.OVERROUND_BPS = 10800` applies on create and after each `applyTradeImpact`.
-- **API / demo seed:** `applyPriceMargin()` in `quoteEngine.ts` keeps off-chain quotes consistent.
+- **UI:** odds are shown as **normalized shares that sum to 100%** (relative YES/NO), so users never see a “108% market”.
+- **Pricing / tickets:** still use raw on-chain prices (with overround) for payout math.
+- **API seed:** `applyPriceMargin()` in `quoteEngine.ts` matches contract quoting.
 
 ### 2. Boost is paid for — not free LP marketing by default
 Micro Boost multiplies payout, so without a fee it is pure LP risk. Design:

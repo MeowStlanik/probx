@@ -2,7 +2,7 @@
 
 import { CheckCircle2, LockKeyhole, ShoppingCart } from "lucide-react";
 import { useMemo, useState } from "react";
-import { formatPercent, formatUsdc } from "@/lib/format";
+import { formatDisplayOdds, formatUsdc } from "@/lib/format";
 import { quoteTicket } from "@/lib/quote";
 import type { LpStats, Market, Outcome } from "@/lib/types";
 import { BoostSelector } from "./BoostSelector";
@@ -46,7 +46,7 @@ export function MicroTradeTicket({ market, lpStats }: MicroTradeTicketProps) {
           type="button"
         >
           <span className="outcomeLabel">YES</span>
-          <span className="outcomePrice">{formatPercent(market.yesPrice)}</span>
+          <span className="outcomePrice">{formatDisplayOdds(market.yesPrice, market.noPrice, "YES")}</span>
         </button>
         <button
           aria-pressed={outcome === "NO"}
@@ -55,7 +55,7 @@ export function MicroTradeTicket({ market, lpStats }: MicroTradeTicketProps) {
           type="button"
         >
           <span className="outcomeLabel">NO</span>
-          <span className="outcomePrice">{formatPercent(market.noPrice)}</span>
+          <span className="outcomePrice">{formatDisplayOdds(market.yesPrice, market.noPrice, "NO")}</span>
         </button>
       </div>
 

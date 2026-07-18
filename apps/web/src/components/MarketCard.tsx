@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { CountdownTimer } from "./CountdownTimer";
-import { formatCompact, formatPercent } from "@/lib/format";
+import { formatCompact, formatDisplayOdds } from "@/lib/format";
 import type { Market } from "@/lib/types";
 
 interface MarketCardProps {
@@ -44,11 +44,11 @@ export function MarketCard({ market }: MarketCardProps) {
         <div className="oddsRow">
           <span className="yesText">
             <span>YES</span>
-            {formatPercent(market.yesPrice)}
+            {formatDisplayOdds(market.yesPrice, market.noPrice, "YES")}
           </span>
           <span className="noText">
             <span>NO</span>
-            {formatPercent(market.noPrice)}
+            {formatDisplayOdds(market.yesPrice, market.noPrice, "NO")}
           </span>
         </div>
 

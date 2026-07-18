@@ -6,7 +6,7 @@ import { MarketLiveChart } from "@/components/MarketLiveChart";
 import { MicroTradeTicket } from "@/components/MicroTradeTicket";
 import { OnchainTradeTicket } from "@/components/OnchainTradeTicket";
 import { fetchLpStats, fetchMarket } from "@/lib/api.server";
-import { formatCompact, formatPercent } from "@/lib/format";
+import { formatCompact, formatDisplayOdds } from "@/lib/format";
 import { hasArcDeployment } from "@/lib/onchain";
 
 interface MarketDetailPageProps {
@@ -37,11 +37,11 @@ export default async function MarketDetailPage({ params }: MarketDetailPageProps
         <div className="oddsPanel compactOddsPanel">
           <div>
             <span>YES</span>
-            <strong className="yesText">{formatPercent(market.yesPrice)}</strong>
+            <strong className="yesText">{formatDisplayOdds(market.yesPrice, market.noPrice, "YES")}</strong>
           </div>
           <div>
             <span>NO</span>
-            <strong className="noText">{formatPercent(market.noPrice)}</strong>
+            <strong className="noText">{formatDisplayOdds(market.yesPrice, market.noPrice, "NO")}</strong>
           </div>
           <div>
             <span>Lock</span>

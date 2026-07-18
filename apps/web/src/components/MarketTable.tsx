@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
-import { formatCompact, formatPercent } from "@/lib/format";
+import { formatCompact, formatDisplayOdds } from "@/lib/format";
 import type { Market } from "@/lib/types";
 import { CountdownTimer } from "./CountdownTimer";
 
@@ -52,9 +52,9 @@ export function MarketTable({ markets }: MarketTableProps) {
                 )}
               </td>
               <td className="marketTableOdds">
-                <strong className="yesText">{formatPercent(market.yesPrice)}</strong>
+                <strong className="yesText">{formatDisplayOdds(market.yesPrice, market.noPrice, "YES")}</strong>
                 <span> / </span>
-                <strong className="noText">{formatPercent(market.noPrice)}</strong>
+                <strong className="noText">{formatDisplayOdds(market.yesPrice, market.noPrice, "NO")}</strong>
               </td>
               <td className="marketTableVol">
                 {formatCompact(market.volume)}

@@ -3,7 +3,7 @@ import { LiveHomeMarkets } from "@/components/LiveHomeMarkets";
 import { LiveReferencePanel } from "@/components/LiveReferencePanel";
 import { CountdownTimer } from "@/components/CountdownTimer";
 import { fetchLpStats, fetchMarkets } from "@/lib/api.server";
-import { formatPercent, formatUsdc } from "@/lib/format";
+import { formatDisplayOdds, formatUsdc } from "@/lib/format";
 import { pickLiveMarketHref } from "@/lib/marketLinks";
 import { arcDeployment, hasArcDeployment } from "@/lib/onchain";
 import type { Market } from "@/lib/types";
@@ -123,11 +123,11 @@ export default async function HomePage() {
             <div className="oddsRow">
               <span className="yesText">
                 <span>YES</span>
-                {formatPercent(featuredMarket.yesPrice)}
+                {formatDisplayOdds(featuredMarket.yesPrice, featuredMarket.noPrice, "YES")}
               </span>
               <span className="noText">
                 <span>NO</span>
-                {formatPercent(featuredMarket.noPrice)}
+                {formatDisplayOdds(featuredMarket.yesPrice, featuredMarket.noPrice, "NO")}
               </span>
             </div>
 
