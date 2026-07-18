@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "installCommand": "cd ../.. && npm install -g pnpm@9.12.3 && pnpm install",
+  "buildCommand": "cd ../.. && pnpm --filter @probx/web build",
+  "crons": [
+    {
+      "path": "/api/cron/market-cycle",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/auto-resolve",
+      "schedule": "0 13 * * *"
+    }
+  ]
+}

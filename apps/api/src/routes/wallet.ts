@@ -1,0 +1,192 @@
+import {
+  createOrResumeSession,
+  getSessionPublic,
+  walletModeInfo,
+  writeContractForSession,
+  type WriteContractBody
+} from "../services/sessionWalletService.js";
+import {
+  cctpPublicConfig,
+  fetchIrisMessage,
+  quoteForwardingBurn,
+  type CctpSourceKey,
+  CCTP
+} from "../services/cctpService.js";
+import { cctpSourceAddress, cctpSourceConfigured, demoFundViaCctp } from "../services/cctpDemoFundService.js";
+import { requestEmailOtp, consumeEmailOtp, otpDevEchoEnabled } from "../services/emailOtpService.js";
+
+export function handleWalletGet(
+  path: string,
+  searchParams: URLSearchParams,
+  headers: Record<string, string | undefined> = {}
+) {
+  if (path === "/api/wallet/mode") {
+    return {
+      status: 200,
+      body: {
+        ...walletModeInfo(),
+        cctpDemoFund: {
+          enabled: cctpSourceConfigured(),
+          sourceAddress: cctpSourceAddress()
+        }
+      }
+    };
+  }
+
+  if (path === "/api/cctp/config") {
+    return {
+      status: 200,
+      body: {
+        ...cctpPublicConfig(),
+        demoFund: {
+          enabled: cctpSourceConfigured(),
+          sourceAddress: cctpSourceAddress(),
+          note: "Server burns Base Sepolia USDC from treasury key → mints to your Arc address via CCTP Forwarding."
+        }
+      }
+    };
+  }
+
+  if (path === "/api/cctp/quote") {
+    const source = (searchParams.get("source") ?? "baseSepolia") as CctpSourceKey;
+    const amountRaw = searchParams.get("amount") ?? "1000000";
+    let amount: bigint;
+    try {
+      amount = BigInt(amountRaw);
+    } catch {
+      return { status: 400, body: { error: "amount must be an integer in USDC base units" } };
+    }
+    if (amount <= 0n) return { status: 400, body: { error: "amount must be > 0" } };
+    const domain =
+      source === "ethereumSepolia" ? CCTP.domains.ethereumSepolia : CCTP.domains.baseSepolia;
+    return quoteForwardingBurn(amount, domain).then((quote) => ({
+      status: 200,
+      body: { source, destination: "arcTestnet", ...quote }
+    }));
+  }
+
+  if (path === "/api/cctp/status") {
+    const domain = Number(searchParams.get("domain") ?? "6");
+    const txHash = searchParams.get("txHash") ?? "";
+    if (!txHash.startsWith("0x")) {
+      return { status: 400, body: { error: "txHash required" } };
+    }
+    return fetchIrisMessage(domain, txHash).then((result) => ({ status: 200, body: result }));
+  }
+
+  if (path === "/api/wallet/session") {
+    // Prefer headers (keeps the token out of URLs/logs); query kept for backward compat.
+    const email = (headers["x-session-email"] ?? "").trim() || (searchParams.get("email") ?? "");
+    const sessionToken =
+      (headers["x-session-token"] ?? "").trim() || (searchParams.get("sessionToken") ?? "");
+    if (!email || !sessionToken) {
+      return { status: 400, body: { error: "email and sessionToken required" } };
+    }
+    try {
+      return { status: 200, body: getSessionPublic(email, sessionToken) };
+    } catch (error) {
+      return { status: 401, body: { error: error instanceof Error ? error.message : "unauthorized" } };
+    }
+  }
+
+  return null;
+}
+
+export async function handleWalletPost(path: string, body: Record<string, unknown>) {
+  if (path === "/api/wallet/session/request-otp") {
+    try {
+      const result = await requestEmailOtp(String(body.email ?? ""));
+      return {
+        status: 200,
+        body: {
+          ...result,
+          devEcho: otpDevEchoEnabled(),
+          next: "POST /api/wallet/session/verify-otp with { email, code }"
+        }
+      };
+    } catch (error) {
+      return { status: 400, body: { error: error instanceof Error ? error.message : "otp failed" } };
+    }
+  }
+
+  if (path === "/api/wallet/session/verify-otp") {
+    try {
+      const email = consumeEmailOtp(
+        String(body.email ?? ""),
+        String(body.code ?? ""),
+        body.otpToken !== undefined ? String(body.otpToken) : undefined
+      );
+      const session = await createOrResumeSession(email, { otpVerified: true });
+      return { status: 201, body: { ...session, emailVerified: true } };
+    } catch (error) {
+      return { status: 400, body: { error: error instanceof Error ? error.message : "verify failed" } };
+    }
+  }
+
+  if (path === "/api/wallet/session") {
+    // Legacy: blocked unless EMAIL_OTP_REQUIRED=0
+    const email = String(body.email ?? "");
+    const code = body.code !== undefined ? String(body.code) : "";
+    try {
+      if (code) {
+        const verified = consumeEmailOtp(email, code);
+        const session = await createOrResumeSession(verified, { otpVerified: true });
+        return { status: 201, body: { ...session, emailVerified: true } };
+      }
+      const session = await createOrResumeSession(email);
+      return { status: 201, body: session };
+    } catch (error) {
+      return { status: 400, body: { error: error instanceof Error ? error.message : "session failed" } };
+    }
+  }
+
+  if (path === "/api/wallet/write-contract") {
+    try {
+      const result = await writeContractForSession(body as unknown as WriteContractBody);
+      return { status: 200, body: result };
+    } catch (error) {
+      return {
+        status: 400,
+        body: { error: error instanceof Error ? error.message : "write failed" }
+      };
+    }
+  }
+
+  if (path === "/api/cctp/quote") {
+    try {
+      const source = String(body.source ?? "baseSepolia") as CctpSourceKey;
+      let amount: bigint;
+      try {
+        amount = BigInt(String(body.amount ?? "0"));
+      } catch {
+        return { status: 400, body: { error: "amount must be an integer in USDC base units" } };
+      }
+      if (amount <= 0n) return { status: 400, body: { error: "amount must be > 0" } };
+      const domain =
+        source === "ethereumSepolia" ? CCTP.domains.ethereumSepolia : CCTP.domains.baseSepolia;
+      const quote = await quoteForwardingBurn(amount, domain);
+      return { status: 200, body: { source, destination: "arcTestnet", ...quote } };
+    } catch (error) {
+      return { status: 400, body: { error: error instanceof Error ? error.message : "quote failed" } };
+    }
+  }
+
+  if (path === "/api/cctp/demo-fund") {
+    try {
+      if (!cctpSourceConfigured()) {
+        return { status: 400, body: { error: "CCTP_SOURCE_PRIVATE_KEY not configured" } };
+      }
+      const mintTo = String(body.mintTo ?? body.address ?? "");
+      const amountUsdc = body.amountUsdc !== undefined ? String(body.amountUsdc) : "2";
+      const result = await demoFundViaCctp({ mintTo, amountUsdc });
+      return { status: 200, body: result };
+    } catch (error) {
+      return {
+        status: 400,
+        body: { error: error instanceof Error ? error.message : "demo fund failed" }
+      };
+    }
+  }
+
+  return null;
+}

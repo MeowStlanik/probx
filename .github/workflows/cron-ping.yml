@@ -1,0 +1,83 @@
+# External minute pinger for ProbX production.
+# Vercel Hobby only runs native crons ~once/day — this keeps markets resolving.
+#
+# Repo secrets (Settings → Secrets and variables → Actions):
+#   PROBX_CRON_BASE_URL  = https://probx-rosy.vercel.app   (production only, NOT a *.vercel.app deploy preview)
+#   PROBX_CRON_SECRET    = same value as CRON_SECRET on Vercel
+#
+name: Cron ping (production)
+
+on:
+  schedule:
+    # Every minute (GitHub may delay a few minutes under load)
+    - cron: "* * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: probx-cron-ping
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Require secrets
+        env:
+          BASE: ${{ secrets.PROBX_CRON_BASE_URL }}
+          SECRET: ${{ secrets.PROBX_CRON_SECRET }}
+        run: |
+          if [ -z "$BASE" ] || [ -z "$SECRET" ]; then
+            echo "Missing PROBX_CRON_BASE_URL or PROBX_CRON_SECRET"
+            echo "Set them under Repo → Settings → Secrets → Actions"
+            exit 1
+          fi
+          # Guard against accidentally pointing at a deploy-preview host
+          case "$BASE" in
+            *stlaniks-projects.vercel.app*|*git-*.vercel.app*)
+              echo "BASE looks like a preview deploy URL: $BASE"
+              echo "Use the production alias https://probx-rosy.vercel.app"
+              exit 1
+              ;;
+          esac
+          echo "Pinging $BASE"
+
+      - name: GET /api/cron/auto-resolve
+        env:
+          BASE: ${{ secrets.PROBX_CRON_BASE_URL }}
+          SECRET: ${{ secrets.PROBX_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          BASE="${BASE%/}"
+          code=$(curl -sS -o /tmp/cron-body.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${SECRET}" \
+            -H "Accept: application/json" \
+            --max-time 55 \
+            "${BASE}/api/cron/auto-resolve")
+          echo "HTTP $code"
+          head -c 2000 /tmp/cron-body.json || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "auto-resolve failed"
+            exit 1
+          fi
+
+      - name: GET /api/cron/market-cycle
+        env:
+          BASE: ${{ secrets.PROBX_CRON_BASE_URL }}
+          SECRET: ${{ secrets.PROBX_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          BASE="${BASE%/}"
+          code=$(curl -sS -o /tmp/cycle-body.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${SECRET}" \
+            -H "Accept: application/json" \
+            --max-time 55 \
+            "${BASE}/api/cron/market-cycle")
+          echo "HTTP $code"
+          head -c 2000 /tmp/cycle-body.json || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "market-cycle failed"
+            exit 1
+          fi

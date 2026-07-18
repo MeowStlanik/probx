@@ -1,0 +1,32 @@
+
+# Archives / unrelated
+# Circle / local secrets (extra safety)
+# Dependencies / build
+# Local runtime (sessions, keys, logs)
+# OS / IDE
+# Secrets - never commit
+**/circle-credentials.json
+**/node_modules/
+*.dat
+*.log
+*.tsbuildinfo
+*.zip
+.DS_Store
+.env
+.env.*.local
+.env.local
+.idea/
+.runtime/
+.secrets/
+.vscode/
+CIRCLE_ENTITY_SECRET.txt
+CIRCLE_WALLET_SET_ID.txt
+apps/api/dist/
+apps/web/.next/
+chatgpt.zip
+contracts/cache/
+contracts/out/
+node_modules/
+recovery/
+recovery_file_*.dat
+target/

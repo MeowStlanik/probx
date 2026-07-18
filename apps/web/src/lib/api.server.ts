@@ -1,0 +1,170 @@
+/**
+ * Server-only data loaders for RSC pages.
+ *
+ * Priority:
+ * 1) Direct Arc RPC via web deployment.json (no apps/api bundle quirks)
+ * 2) Absolute HTTP to this deployment's /api/* (proven live on Vercel)
+ * 3) In-process dispatch (local / monorepo)
+ * 4) Offline fallbacks
+ */
+import type { LpStats, Market, Ticket } from "./types";
+import { emptyLpStats, markets as fallbackMarkets } from "./sampleData";
+import { readOnchainLpStats } from "./readOnchainLpStats";
+
+function serverOrigin(): string {
+  const explicit = (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "").trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  const port = process.env.PORT || "3000";
+  return `http://127.0.0.1:${port}`;
+}
+
+async function httpGetJson(path: string): Promise<{ ok: boolean; status: number; body: unknown }> {
+  const origin = serverOrigin();
+  const url = `${origin}${path.startsWith("/") ? path : `/${path}`}`;
+  const response = await fetch(url, {
+    cache: "no-store",
+    headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000)
+  });
+  const body = await response.json().catch(() => null);
+  return { ok: response.ok, status: response.status, body };
+}
+
+export async function fetchMarkets(): Promise<Market[]> {
+  // Prefer HTTP — same code path as the working Vercel /api/markets route
+  try {
+    const result = await httpGetJson("/api/markets");
+    if (result.ok && Array.isArray(result.body) && result.body.length > 0) {
+      const markets = (result.body as Market[]).map(normalizeMarket);
+      // Prefer real Arc addresses over offline placeholders
+      if (markets.some((m) => m.id.startsWith("0x"))) return markets;
+    }
+  } catch {
+    // continue
+  }
+
+  try {
+    const { dispatchApiRequest } = await import("../../../api/src/dispatch");
+    const result = await dispatchApiRequest({ method: "GET", path: "/api/markets" });
+    if (result.status >= 200 && result.status < 300 && Array.isArray(result.body)) {
+      return (result.body as Market[]).map(normalizeMarket);
+    }
+  } catch {
+    // continue
+  }
+
+  return fallbackMarkets;
+}
+
+export async function fetchMarket(id: string): Promise<Market | undefined> {
+  try {
+    const result = await httpGetJson(`/api/markets/${encodeURIComponent(id)}`);
+    if (result.ok && result.body && typeof result.body === "object") {
+      return normalizeMarket(result.body as Market);
+    }
+  } catch {
+    // continue
+  }
+
+  try {
+    const { dispatchApiRequest } = await import("../../../api/src/dispatch");
+    const result = await dispatchApiRequest({
+      method: "GET",
+      path: `/api/markets/${encodeURIComponent(id)}`
+    });
+    if (result.status >= 200 && result.status < 300 && result.body) {
+      return normalizeMarket(result.body as Market);
+    }
+  } catch {
+    // continue
+  }
+
+  return fallbackMarkets.find((market) => market.id === id);
+}
+
+export async function fetchLpStats(): Promise<LpStats> {
+  // 1) Direct chain read from web package (most reliable on Vercel RSC)
+  try {
+    const onchain = await readOnchainLpStats();
+    if (onchain.tvl > 0 || onchain.availableLiquidity > 0 || onchain.feesEarned > 0) {
+      return onchain;
+    }
+  } catch {
+    // continue
+  }
+
+  // 2) HTTP to unified Next API route
+  try {
+    const result = await httpGetJson("/api/lp/stats");
+    if (result.ok && result.body && typeof result.body === "object") {
+      return normalizeLpStats(result.body as LpStats);
+    }
+  } catch {
+    // continue
+  }
+
+  // 3) In-process dispatch (local monorepo)
+  try {
+    const { dispatchApiRequest } = await import("../../../api/src/dispatch");
+    const result = await dispatchApiRequest({ method: "GET", path: "/api/lp/stats" });
+    if (result.status >= 200 && result.status < 300 && result.body) {
+      return normalizeLpStats(result.body as LpStats);
+    }
+  } catch {
+    // continue
+  }
+
+  return emptyLpStats;
+}
+
+export async function fetchUserTickets(address: string): Promise<Ticket[]> {
+  try {
+    const result = await httpGetJson(`/api/users/${encodeURIComponent(address)}/tickets`);
+    if (result.ok && Array.isArray(result.body)) {
+      return (result.body as Ticket[]).map((ticket) => ({
+        ...ticket,
+        marketQuestion: ticket.marketQuestion ?? ticket.marketId
+      }));
+    }
+    throw new Error(`Portfolio endpoint returned HTTP ${result.status}`);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Portfolio")) throw error;
+    const { dispatchApiRequest } = await import("../../../api/src/dispatch");
+    const result = await dispatchApiRequest({
+      method: "GET",
+      path: `/api/users/${encodeURIComponent(address)}/tickets`
+    });
+    if (result.status < 200 || result.status >= 300) {
+      throw new Error(`Portfolio endpoint returned HTTP ${result.status}`);
+    }
+    return ((result.body as Ticket[]) ?? []).map((ticket) => ({
+      ...ticket,
+      marketQuestion: ticket.marketQuestion ?? ticket.marketId
+    }));
+  }
+}
+
+function normalizeMarket(market: Market): Market {
+  return {
+    ...market,
+    maxBoost: market.maxBoost ?? 5,
+    volume: market.volume ?? 0,
+    ticketCount: market.ticketCount ?? 0
+  };
+}
+
+function normalizeLpStats(stats: LpStats): LpStats {
+  return {
+    tvl: Number(stats.tvl) || 0,
+    reservedLiquidity: Number(stats.reservedLiquidity) || 0,
+    lockedUserRisk: Number(stats.lockedUserRisk) || 0,
+    availableLiquidity: Number(stats.availableLiquidity) || 0,
+    feesEarned: Number(stats.feesEarned) || 0,
+    dailyVolume: Number(stats.dailyVolume) || 0,
+    simulatedApy: Number(stats.simulatedApy) || 0
+  };
+}

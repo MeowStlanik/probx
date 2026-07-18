@@ -1,0 +1,36 @@
+{
+  "name": "probx-arc-micro",
+  "version": "0.1.0",
+  "private": true,
+  "description": "USDC-native short prediction markets with LP-backed Micro Boost on Arc EVM.",
+  "scripts": {
+    "dev": "pnpm --parallel dev",
+    "dev:web": "pnpm --filter @probx/web dev",
+    "dev:api": "pnpm --filter @probx/api dev",
+    "build": "pnpm --recursive build",
+    "lint": "pnpm --recursive lint",
+    "test": "pnpm --filter @probx/api test && pnpm contracts:test",
+    "contracts:test": "bash -lc 'cd contracts && PATH=\"$HOME/.foundry/bin:$PATH\" forge test'",
+    "contracts:build": "bash -lc 'cd contracts && PATH=\"$HOME/.foundry/bin:$PATH\" forge build'",
+    "deploy:arc": "node scripts/deploy-arc.mjs",
+    "demo:markets": "node scripts/arc-demo-markets.mjs",
+    "smoke:arc": "node scripts/arc-smoke-test.mjs",
+    "rpc:arc": "node scripts/arc-rpc-preflight.mjs"
+  },
+  "keywords": [
+    "prediction-market",
+    "arc",
+    "usdc",
+    "defi",
+    "foundry",
+    "nextjs"
+  ],
+  "license": "MIT",
+  "packageManager": "pnpm@9.12.3",
+  "devDependencies": {
+    "solc": "^0.8.35"
+  },
+  "dependencies": {
+    "viem": "^2.21.53"
+  }
+}

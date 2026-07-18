@@ -1,0 +1,25 @@
+{
+  "chainId": 5042002,
+  "chainName": "Arc Testnet",
+  "rpcUrl": "https://rpc.testnet.arc.network",
+  "rpcUrls": [
+    "https://rpc.testnet.arc.network",
+    "https://arc-testnet.drpc.org",
+    "https://rpc.quicknode.testnet.arc.network",
+    "https://rpc.blockdaemon.testnet.arc.network"
+  ],
+  "explorerUrl": "https://testnet.arcscan.app",
+  "deployer": "0x4604a582B66431481D5320fed67C785bdb4D7Fe0",
+  "usdc": "0x3600000000000000000000000000000000000000",
+  "liquidityPool": "0xa84b574075f411a066e150fB8dac9b7564DDc4Ad",
+  "insuranceFund": "0x02921Aebf51D7CB93837fe86064b993008D7bEE2",
+  "feeRouter": "0x496b42D4C4fD8593eD143F9e6E1f77210AbcF1c9",
+  "positionTicket": "0x270e85b98d1299704fcbe459a3b1fd5ecA662e92",
+  "microBoostEngine": "0x0FFF38afe02B2476c5066bFe787510856f1ec5eE",
+  "oracleAdapter": "0x0667401772AE42Aa09216dCe7a239DbB51D86c4b",
+  "marketFactory": "0x2a3CCe3173f55A29A9787b40160fb3553C1c36aA",
+  "demoMarket": "0x84Bec56fed02fc99ed360016e25045D425B8417A",
+  "lpSeedUsdc": "15",
+  "fromBlock": 52460114,
+  "deployedAt": "2026-07-18T15:33:32.198Z"
+}
