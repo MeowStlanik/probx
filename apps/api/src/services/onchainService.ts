@@ -1739,7 +1739,7 @@ async function ensureTicketOpeningMeta(input: {
         outcome: input.outcome,
         referencePrice: data.btcUsd.price,
         referenceFeed: "btc",
-        referenceLabel: "BTC/USD at open",
+        referenceLabel: "BTC/USD at ticket open (settle uses observation end)",
         threshold: parseBtcThreshold(input.marketQuestion),
         source: data.btcUsd.source,
         openedAt: input.createdAt
@@ -1752,7 +1752,7 @@ async function ensureTicketOpeningMeta(input: {
         outcome: input.outcome,
         referencePrice: data.londonWeather.temperatureC,
         referenceFeed: "weather",
-        referenceLabel: "London temp at open",
+        referenceLabel: "London temp at ticket open (settle uses observation end)",
         threshold: parseWeatherThreshold(input.marketQuestion),
         source: data.londonWeather.source,
         openedAt: input.createdAt
@@ -1786,7 +1786,12 @@ export async function recordTicketOpening(body: {
     outcome: body.outcome === "NO" ? "NO" : body.outcome === "YES" ? "YES" : undefined,
     referencePrice: Number.isFinite(referencePrice) ? referencePrice : undefined,
     referenceFeed: feed,
-    referenceLabel: feed === "btc" ? "BTC/USD at open" : feed === "weather" ? "London temp at open" : "Reference at open",
+    referenceLabel:
+      feed === "btc"
+        ? "BTC/USD at ticket open (settle uses observation end)"
+        : feed === "weather"
+          ? "London temp at ticket open (settle uses observation end)"
+          : "Reference at ticket open",
     threshold: Number.isFinite(Number(body.threshold)) ? Number(body.threshold) : undefined,
     source: typeof body.source === "string" ? body.source : undefined,
     openedAt: new Date().toISOString()

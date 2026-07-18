@@ -151,7 +151,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 12, color: "#5B6A7D", fontWeight: 600, letterSpacing: "0.02em", textTransform: "uppercase" }}>
-            {isBtc ? "BTC/USD" : "London °C"} · observation only
+            {isBtc ? "BTC/USD · Coinbase" : "London temp · Open-Meteo"} · observation only
           </div>
           <div
             style={{
@@ -166,7 +166,16 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           </div>
           {threshold != null ? (
             <div style={{ marginTop: 6, fontSize: 12.5, color: "#5B6A7D", lineHeight: 1.4 }}>
-              YES if price is <strong style={{ color: "#1F9D6B" }}>≥ {fmt(threshold)}</strong> when observation ends
+              {isBtc ? (
+                <>
+                  YES if BTC is <strong style={{ color: "#1F9D6B" }}>≥ {fmt(threshold)}</strong> when observation ends
+                </>
+              ) : (
+                <>
+                  YES if London temp is <strong style={{ color: "#1F9D6B" }}>≥ {fmt(threshold)}</strong> when
+                  observation ends
+                </>
+              )}
               {vsThreshold ? (
                 <span style={{ marginLeft: 8, fontWeight: 600, color: vsThreshold === "above" ? "#1F9D6B" : "#D6544A" }}>
                   · now {vsThreshold} threshold
@@ -193,7 +202,11 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
         {phase === "before" ? (
           <WaitingPanel
             title="Chart starts at observation"
-            body={`Betting is open now. The price that settles the market is tracked only during the observation window — starting in ${fmtClock(secToObs)}.`}
+            body={
+              isBtc
+                ? `Betting is open now. BTC/USD that settles this market is tracked only during observation — starting in ${fmtClock(secToObs)}.`
+                : `Betting is open now. London temperature that settles this market is tracked only during observation — starting in ${fmtClock(secToObs)}.`
+            }
             threshold={threshold != null ? fmt(threshold) : null}
           />
         ) : chart ? (
@@ -203,7 +216,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             viewBox={`0 0 ${chart.W} ${chart.H}`}
             preserveAspectRatio="none"
             role="img"
-            aria-label="Observation window price chart"
+            aria-label={isBtc ? "Observation window BTC chart" : "Observation window London temperature chart"}
             style={{ display: "block" }}
           >
             <defs>
@@ -285,7 +298,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
                   fontFamily: "'IBM Plex Mono', monospace"
                 }}
               >
-                YES ≥ {fmt(threshold)}
+                {isBtc ? "YES ≥" : "YES ≥"} {fmt(threshold)}
               </span>
             ) : null}
           </>

@@ -228,7 +228,11 @@ export function MarketDetailView({
                 </span>
                 <p style={{ margin: "4px 0 0", fontSize: 12, color: theme.color.muted, lineHeight: 1.4 }}>
                   {chart
-                    ? "Tracks the feed only during Observe — not while the market is open for bets."
+                    ? market.chartFeed === "weather"
+                      ? "London temperature is tracked only during Observe — not while bets are open."
+                      : market.chartFeed === "btc"
+                        ? "BTC/USD is tracked only during Observe — not while bets are open."
+                        : "Feed is tracked only during Observe — not while bets are open."
                     : "Synthetic odds history for this market."}
                 </p>
                 <div style={{ marginTop: 14 }}>
@@ -355,10 +359,14 @@ export function MarketDetailView({
                     <span style={{ color: theme.color.muted }}>Data source</span>
                     <span style={{ color: theme.color.ink }}>{market.resolutionSource}</span>
                   </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                     <span style={{ color: theme.color.muted }}>Rule</span>
-                    <span style={{ color: theme.color.ink, textAlign: "right", maxWidth: "60%" }}>
-                      YES if last print meets the threshold at window close
+                    <span style={{ color: theme.color.ink, textAlign: "right", maxWidth: "65%", lineHeight: 1.35 }}>
+                      {market.chartFeed === "weather"
+                        ? "YES if London temp ≥ threshold when observation ends"
+                        : market.chartFeed === "btc"
+                          ? "YES if BTC/USD ≥ threshold when observation ends"
+                          : "YES if the feed is at/above threshold when observation ends"}
                     </span>
                   </div>
                 </div>
