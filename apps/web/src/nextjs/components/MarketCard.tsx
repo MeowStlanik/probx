@@ -2,14 +2,15 @@ import { theme } from "../theme";
 import type { MarketSummary } from "../types";
 
 /**
- * Lifecycle segments (no Pause — Lock covers the whole post-open pre-observe window).
- * OPEN 50% · LOCK 14% · OBSERVE 31% · RESOLVE 5%
+ * Lifecycle segments (no Pause — Lock covers lock→observe window).
+ * Widths leave room for full words (Resolve was clipping to "RE:").
+ * OPEN 47% · LOCK 14% · OBSERVE 28% · RESOLVE 11%
  */
 export const LIFECYCLE_SEGMENTS = [
-  { key: "OPEN" as const, label: "Open", width: 50 },
+  { key: "OPEN" as const, label: "Open", width: 47 },
   { key: "LOCK" as const, label: "Lock", width: 14 },
-  { key: "OBSERVE" as const, label: "Observe", width: 31 },
-  { key: "RESOLVE" as const, label: "Resolve", width: 5 }
+  { key: "OBSERVE" as const, label: "Observe", width: 28 },
+  { key: "RESOLVE" as const, label: "Resolve", width: 11 }
 ];
 
 export function LifecycleBar({ nowPct, height = 5 }: { nowPct: number; height?: number }) {
@@ -68,7 +69,6 @@ export function LifecycleLabels({ active }: { active?: MarketSummary["stage"] })
     >
       {LIFECYCLE_SEGMENTS.map((seg) => {
         const isActive = activeKey === seg.key;
-        const tight = seg.width <= 8;
         return (
           <span
             key={seg.key}
@@ -80,12 +80,12 @@ export function LifecycleLabels({ active }: { active?: MarketSummary["stage"] })
               minWidth: 0,
               boxSizing: "border-box",
               textAlign: "center",
-              fontSize: tight ? 10 : 11,
+              fontSize: 11,
               lineHeight: "16px",
               fontWeight: isActive ? 700 : 500,
               color: isActive ? theme.color.ink : theme.color.muted,
-              letterSpacing: tight ? "0" : "0.02em",
-              textTransform: "uppercase",
+              letterSpacing: "0.01em",
+              // Title case — full words fit; ALL CAPS made "Resolve" clip to "RE:"
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "clip",
@@ -109,11 +109,22 @@ function fmtClock(sec: number) {
   return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
 }
 
-function phaseVerb(stage: MarketSummary["stage"]) {
+/** Human next-step line under the bar (not cryptic "locks in"). */
+function nextStepLabel(stage: MarketSummary["stage"], sec: number): string {
+  const clock = fmtClock(sec);
   const s = stage === "PAUSE" ? "LOCK" : stage;
-  return { OPEN: "locks in", LOCK: "observes in", OBSERVE: "resolves in", RESOLVE: "reopens in", PAUSE: "observes in" }[
-    s
-  ];
+  switch (s) {
+    case "OPEN":
+      return `Betting open · locks in ${clock}`;
+    case "LOCK":
+      return `Locked · observation starts in ${clock}`;
+    case "OBSERVE":
+      return `Observing · resolves in ${clock}`;
+    case "RESOLVE":
+      return "Resolved · next market soon";
+    default:
+      return clock;
+  }
 }
 
 const stagePillTone: Record<MarketSummary["stage"], { bg: string; fg: string }> = {
@@ -245,13 +256,14 @@ export function MarketCard({
       <div
         style={{
           marginTop: isHero ? 14 : 10,
-          fontSize: 12,
+          fontSize: 12.5,
           color: theme.color.muted,
-          fontFamily: theme.font.mono,
-          flex: 1
+          flex: 1,
+          lineHeight: 1.35
         }}
       >
-        {market.stats} · {phaseVerb(stage)} {fmtClock(market.secondsToNextStage)}
+        <div style={{ fontWeight: 500, color: theme.color.ink }}>{nextStepLabel(stage, market.secondsToNextStage)}</div>
+        <div style={{ marginTop: 3, fontSize: 12, fontFamily: theme.font.mono }}>{market.stats}</div>
       </div>
     </div>
   );

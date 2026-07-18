@@ -5,7 +5,7 @@ import type { MarketDetail, MarketSummary, Position } from "./types";
 
 /**
  * Lifecycle from wall-clock timestamps.
- * Bar: OPEN 50% · LOCK 14% · OBSERVE 31% · RESOLVE 5% (no separate Pause).
+ * Bar: OPEN 47% · LOCK 14% · OBSERVE 28% · RESOLVE 11% (matches MarketCard labels).
  * On-chain status alone lags after lock — bar + pill track wall clock.
  */
 export function deriveLifecycle(
@@ -22,27 +22,27 @@ export function deriveLifecycle(
     market.status === "CANCELLED" ||
     market.status === "ARCHIVED";
   if (finished || now >= obsEnd) {
-    return { stage: "RESOLVE", nowPct: 97, secondsToNextStage: 0 };
+    return { stage: "RESOLVE", nowPct: 96, secondsToNextStage: 0 };
   }
 
   const sec = (t: number) => Math.max(0, Math.ceil((t - now) / 1000));
   const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
-  // OPEN: open → lock  (0–50%)
+  // OPEN: open → lock  (0–47%)
   if (now < lock) {
     const t = clamp01((now - open) / Math.max(1, lock - open));
-    return { stage: "OPEN", nowPct: t * 50, secondsToNextStage: sec(lock) };
+    return { stage: "OPEN", nowPct: t * 47, secondsToNextStage: sec(lock) };
   }
 
-  // LOCK: lock → observationStart (50–64%) — includes former "pause" window
+  // LOCK: lock → observationStart (47–61%)
   if (now < obsStart) {
     const t = clamp01((now - lock) / Math.max(1, obsStart - lock));
-    return { stage: "LOCK", nowPct: 50 + t * 14, secondsToNextStage: sec(obsStart) };
+    return { stage: "LOCK", nowPct: 47 + t * 14, secondsToNextStage: sec(obsStart) };
   }
 
-  // OBSERVE: observationStart → observationEnd (64–95%)
+  // OBSERVE: observationStart → observationEnd (61–89%)
   const t = clamp01((now - obsStart) / Math.max(1, obsEnd - obsStart));
-  return { stage: "OBSERVE", nowPct: 64 + t * 31, secondsToNextStage: sec(obsEnd) };
+  return { stage: "OBSERVE", nowPct: 61 + t * 28, secondsToNextStage: sec(obsEnd) };
 }
 
 /** Map app MarketStatus → design lifecycle stage (prefer wall-clock via deriveLifecycle). */
@@ -90,9 +90,20 @@ export function toMarketSummary(market: Market, now: number = Date.now()): Marke
   const volSum = yesVol + noVol;
   const yesVolPct = volSum > 0 ? (yesVol / volSum) * 100 : 50;
   const tickets = market.ticketCount ?? 0;
-  const vol = Math.round(market.volume || 0).toLocaleString("en-US");
+  const volNum = Math.round(market.volume || 0);
+  const vol = volNum.toLocaleString("en-US");
 
   const life = deriveLifecycle(market, now);
+  // Plain language — "0 tickets · 0 USDC vol" read as garbage on empty markets
+  const stats =
+    tickets === 0 && volNum === 0
+      ? "No bets yet"
+      : tickets === 0
+        ? `${vol} USDC volume`
+        : volNum === 0
+          ? `${tickets} ticket${tickets === 1 ? "" : "s"}`
+          : `${tickets} ticket${tickets === 1 ? "" : "s"} · ${vol} USDC volume`;
+
   return {
     id: market.id,
     question: market.question,
@@ -100,7 +111,7 @@ export function toMarketSummary(market: Market, now: number = Date.now()): Marke
     yesPct: yes,
     noPct: no,
     yesVolPct,
-    stats: `${tickets} tickets · ${vol} USDC vol`,
+    stats,
     stage: life.stage,
     secondsToNextStage: life.secondsToNextStage,
     nowPct: life.nowPct
