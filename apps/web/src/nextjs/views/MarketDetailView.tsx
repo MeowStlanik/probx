@@ -224,8 +224,13 @@ export function MarketDetailView({
                 }}
               >
                 <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>
-                  {chart ? "Live reference" : "Price history"}
+                  {chart ? "Observation chart" : "Price history"}
                 </span>
+                <p style={{ margin: "4px 0 0", fontSize: 12, color: theme.color.muted, lineHeight: 1.4 }}>
+                  {chart
+                    ? "Tracks the feed only during Observe — not while the market is open for bets."
+                    : "Synthetic odds history for this market."}
+                </p>
                 <div style={{ marginTop: 14 }}>
                   {chart ?? <OddsSparkline samples={market.priceHistory} />}
                 </div>
