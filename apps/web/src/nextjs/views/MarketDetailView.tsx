@@ -382,10 +382,10 @@ export function MarketDetailView({
                     <span style={{ color: theme.color.muted }}>Rule</span>
                     <span style={{ color: theme.color.ink, textAlign: "right", maxWidth: "65%", lineHeight: 1.35 }}>
                       {market.chartFeed === "weather"
-                        ? "YES if London temp finishes observation above the open"
+                        ? "YES if temp ends observation higher than it started"
                         : market.chartFeed === "btc"
-                          ? "YES if BTC finishes observation above the open"
-                          : "YES if the feed finishes observation above the open"}
+                          ? "YES if BTC ends observation higher than it started"
+                          : "YES if the feed ends observation higher than it started"}
                     </span>
                   </div>
                 </div>

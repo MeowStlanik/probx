@@ -765,41 +765,64 @@ export async function resolveReferenceMarketOnchain(id: string) {
   if (!market) return undefined;
 
   const data = await getDemoReferenceData();
+  const obsStartMs = Date.parse(market.observationStart || "") || 0;
+
+  // Permanent market rule: YES if end-of-observation print is higher than start-of-observation.
+  // (Not vs price at market create — that was confusing on titles.)
   if (market.demoRole === "btc_price" || market.category === "crypto-candle") {
-    const threshold = parseBtcThreshold(market.question);
     const observedValue = data.btcUsd?.price;
-    if (!Number.isFinite(threshold) || !Number.isFinite(observedValue)) {
-      return { error: "BTC reference or threshold is unavailable.", market };
+    const openValue = valueNearTime(data.btcUsd?.history, obsStartMs) ?? observedValue;
+    if (!Number.isFinite(openValue) || !Number.isFinite(observedValue)) {
+      return { error: "BTC reference is unavailable.", market };
     }
-    const outcome: Outcome = (observedValue as number) > threshold ? "YES" : "NO";
+    const outcome: Outcome = (observedValue as number) > (openValue as number) ? "YES" : "NO";
     const result = await resolveMarketOnchain(id, outcome);
     return {
       ...result,
       outcome,
       observedValue,
-      threshold,
+      threshold: openValue,
+      openValue,
       referenceSource: data.btcUsd?.source ?? "Coinbase spot"
     };
   }
 
   if (market.demoRole === "london_weather" || market.category === "weather") {
-    const threshold = parseWeatherThreshold(market.question);
     const observedValue = data.londonWeather?.temperatureC;
-    if (!Number.isFinite(threshold) || !Number.isFinite(observedValue)) {
-      return { error: "Weather reference or threshold is unavailable.", market };
+    const openValue = valueNearTime(data.londonWeather?.history, obsStartMs) ?? observedValue;
+    if (!Number.isFinite(openValue) || !Number.isFinite(observedValue)) {
+      return { error: "Weather reference is unavailable.", market };
     }
-    const outcome: Outcome = (observedValue as number) >= threshold ? "YES" : "NO";
+    const outcome: Outcome = (observedValue as number) > (openValue as number) ? "YES" : "NO";
     const result = await resolveMarketOnchain(id, outcome);
     return {
       ...result,
       outcome,
       observedValue,
-      threshold,
+      threshold: openValue,
+      openValue,
       referenceSource: data.londonWeather?.source ?? "Open-Meteo"
     };
   }
 
   return { error: "Selected market is not a BTC/weather reference market.", market };
+}
+
+/** Closest sample at/after t, else nearest before. */
+function valueNearTime(
+  history: Array<{ value: number; at: number }> | undefined,
+  t: number
+): number | undefined {
+  if (!history?.length || !Number.isFinite(t) || t <= 0) return undefined;
+  let best: { value: number; dist: number } | undefined;
+  for (const p of history) {
+    if (!Number.isFinite(p?.value) || !Number.isFinite(p?.at)) continue;
+    const dist = Math.abs(p.at - t);
+    // Prefer samples at or after observation open when close
+    const score = p.at >= t - 2_000 ? dist : dist + 60_000;
+    if (!best || score < best.dist) best = { value: p.value, dist: score };
+  }
+  return best?.value;
 }
 
 export async function cancelMarketOnchain(id: string, reason: string) {
@@ -1326,27 +1349,25 @@ function configuredMarketListLimit(): number {
   return Math.min(50, Math.max(3, Math.floor(parsed)));
 }
 
+/** Fixed titles — resolve compares end vs start of observation, not create-time spot. */
+const BTC_OBS_QUESTION = "Will BTC finish observation higher than it started?";
+const WEATHER_OBS_QUESTION = "Will London temp finish observation higher than it started?";
+
 async function demoMarketTemplates() {
-  const data = await getDemoReferenceData();
-  const btcPrice = data.btcUsd?.price ?? 0;
-  const temp = data.londonWeather?.temperatureC ?? 0;
-  const roundedBtc = Math.round(btcPrice);
-  const roundedTemp = Math.round(temp * 10) / 10;
   // Hackathon demo set: only the two auto-resolving reference markets.
-  // Extra markets can still be created from admin and resolved manually.
   const lockSeconds = clampInteger(process.env.DEMO_MARKET_LOCK_SECONDS, 45, 86_400, 3_600);
   const btcFair = await estimateFairYesPercent("btc_price");
   const weatherFair = await estimateFairYesPercent("london_weather");
   return [
     {
-      question: `Will BTC/USD finish observation above the open ($${roundedBtc.toLocaleString("en-US")})?`,
+      question: BTC_OBS_QUESTION,
       demoRole: "btc_price",
       yesPricePercent: btcFair,
       lockSeconds,
       observationSeconds: 60
     },
     {
-      question: `Will London temp finish observation above the open (${roundedTemp}°C)?`,
+      question: WEATHER_OBS_QUESTION,
       demoRole: "london_weather",
       yesPricePercent: weatherFair,
       lockSeconds,
@@ -1394,45 +1415,19 @@ async function estimateFairYesPercent(role: DemoMarketRole): Promise<number> {
 }
 
 /**
- * Ensure BTC / weather questions carry a concrete numeric threshold so the
- * auto-resolve worker (and resolve-from-feed) can compare live data.
+ * Force fixed BTC/weather titles (no create-time spot in the question).
+ * Resolution uses observation start vs end prints from the live feed.
  */
 async function materializeReferenceQuestion(
   question: string,
   role: DemoMarketRole
 ): Promise<{ question: string; role: DemoMarketRole }> {
   if (role === "btc_price") {
-    if (Number.isFinite(parseBtcThreshold(question))) {
-      return { question, role };
-    }
-    const data = await getDemoReferenceData();
-    const price = data.btcUsd?.price;
-    if (!Number.isFinite(price) || (price as number) <= 0) {
-      return { question, role };
-    }
-    const rounded = Math.round(price as number);
-    return {
-      question: `Will BTC/USD finish observation above the open ($${rounded.toLocaleString("en-US")})?`,
-      role
-    };
+    return { question: BTC_OBS_QUESTION, role };
   }
-
   if (role === "london_weather") {
-    if (Number.isFinite(parseWeatherThreshold(question))) {
-      return { question, role };
-    }
-    const data = await getDemoReferenceData();
-    const temp = data.londonWeather?.temperatureC;
-    if (!Number.isFinite(temp)) {
-      return { question, role };
-    }
-    const rounded = Math.round((temp as number) * 10) / 10;
-    return {
-      question: `Will London temp finish observation above the open (${rounded}°C)?`,
-      role
-    };
+    return { question: WEATHER_OBS_QUESTION, role };
   }
-
   return { question, role };
 }
 
@@ -1897,12 +1892,10 @@ function demoResolutionSource(role: DemoMarketRole): string {
 
 function demoRules(role?: DemoMarketRole, question?: string): string {
   if (role === "btc_price") {
-    const threshold = question?.match(/\$[\d,]+(?:\.\d+)?/)?.[0] ?? "the open";
-    return `Bet while OPEN. YES if Coinbase BTC/USD finishes observation above the open (${threshold}). NO if at or below. Claim from Portfolio after resolve.`;
+    return `Bet while OPEN. YES if Coinbase BTC/USD is higher at observation end than at observation start. NO if flat or lower. Claim from Portfolio after resolve.`;
   }
   if (role === "london_weather") {
-    const threshold = question?.match(/(-?[\d.]+)\s*°C/)?.[0] ?? "the open";
-    return `Bet while OPEN. YES if London temp finishes observation above the open (${threshold}). NO if at or below. Claim from Portfolio after resolve.`;
+    return `Bet while OPEN. YES if London temp is higher at observation end than at observation start. NO if flat or lower. Claim from Portfolio after resolve.`;
   }
   if (role === "near_lock") return "Near-lock demo: buy quickly, then resolve after the short observation window.";
   if (role === "resolved") return "Resolved demo market for settlement walkthroughs.";

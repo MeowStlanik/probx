@@ -27,7 +27,9 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
 
   const obsStart = Date.parse(market.observationStart || "") || 0;
   const obsEnd = Date.parse(market.observationEnd || "") || 0;
-  const threshold = useMemo(() => thresholdFromQuestion(market), [market]);
+  // "Open" of observation = first sample in the window (not create-time spot in title).
+  const obsOpen = points.length ? points[0]!.v : null;
+  const threshold = obsOpen;
 
   const phase = useMemo(() => {
     if (!obsStart || !obsEnd) return "unknown" as const;
@@ -134,13 +136,18 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
 
   const isBtc = feed === "btc";
   const fmt = isBtc ? fmtUsd : fmtTemp;
-  const chart = useMemo(() => buildChart(points, threshold, obsStart, obsEnd || now), [points, threshold, obsStart, obsEnd, now]);
+  const chart = useMemo(
+    () => buildChart(points, threshold ?? undefined, obsStart, obsEnd || now),
+    [points, threshold, obsStart, obsEnd, now]
+  );
 
   const vsThreshold =
     price != null && threshold != null
-      ? price >= threshold
+      ? price > threshold
         ? "above"
-        : "below"
+        : price < threshold
+          ? "below"
+          : "flat"
       : null;
 
   const secToObs = Math.max(0, Math.ceil((obsStart - now) / 1000));
@@ -164,25 +171,30 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           >
             {price != null ? fmt(price) : "—"}
           </div>
-          {threshold != null ? (
-            <div style={{ marginTop: 6, fontSize: 12.5, color: "#5B6A7D", lineHeight: 1.4 }}>
-              {isBtc ? (
-                <>
-                  YES if BTC finishes <strong style={{ color: "#1F9D6B" }}>above the open ({fmt(threshold)})</strong>
-                </>
-              ) : (
-                <>
-                  YES if London temp finishes{" "}
-                  <strong style={{ color: "#1F9D6B" }}>above the open ({fmt(threshold)})</strong>
-                </>
-              )}
-              {vsThreshold ? (
-                <span style={{ marginLeft: 8, fontWeight: 600, color: vsThreshold === "above" ? "#1F9D6B" : "#D6544A" }}>
-                  · now {vsThreshold} threshold
-                </span>
-              ) : null}
-            </div>
-          ) : null}
+          <div style={{ marginTop: 6, fontSize: 12.5, color: "#5B6A7D", lineHeight: 1.4 }}>
+            {isBtc
+              ? "YES if BTC ends higher than at observation start"
+              : "YES if London temp ends higher than at observation start"}
+            {threshold != null ? (
+              <>
+                {" "}
+                <strong style={{ color: "#7C5CFF" }}>(start {fmt(threshold)})</strong>
+              </>
+            ) : phase === "before" ? (
+              <span> · start set when Observe begins</span>
+            ) : null}
+            {vsThreshold && vsThreshold !== "flat" ? (
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontWeight: 600,
+                  color: vsThreshold === "above" ? "#1F9D6B" : "#D6544A"
+                }}
+              >
+                · now {vsThreshold} start
+              </span>
+            ) : null}
+          </div>
         </div>
         <PhaseBadge phase={phase} secToObs={secToObs} secLeft={secLeft} />
       </div>
@@ -204,10 +216,10 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             title="Chart starts at observation"
             body={
               isBtc
-                ? `BTC/USD vs the open is tracked only during observation — starting in ${fmtClock(secToObs)}. New tickets are only available while the market is Open.`
-                : `London temp vs the open is tracked only during observation — starting in ${fmtClock(secToObs)}. New tickets are only available while the market is Open.`
+                ? `Compares BTC at observation end vs start — chart runs in ${fmtClock(secToObs)}. Tickets only while Open.`
+                : `Compares London temp at observation end vs start — chart runs in ${fmtClock(secToObs)}. Tickets only while Open.`
             }
-            threshold={threshold != null ? fmt(threshold) : null}
+            threshold={null}
           />
         ) : chart ? (
           <svg
@@ -298,7 +310,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
                   fontFamily: "'IBM Plex Mono', monospace"
                 }}
               >
-                {isBtc ? "YES ≥" : "YES ≥"} {fmt(threshold)}
+                start {fmt(threshold)}
               </span>
             ) : null}
           </>
@@ -492,30 +504,6 @@ function append(hist: Point[], tick: Point, minGap: number): Point[] {
     return [...hist.slice(0, -1), { t: Math.max(last.t, tick.t), v: tick.v }];
   }
   return [...hist, tick];
-}
-
-function thresholdFromQuestion(market: Market): number | undefined {
-  const q = market.question || "";
-  if (market.demoRole === "btc_price" || market.category === "crypto-candle") {
-    const m =
-      q.match(/open\s*\(\$?([\d,]+(?:\.\d+)?)\)/i) ||
-      q.match(/(?:at or above|above|≥)\s+\$?([\d,]+(?:\.\d+)?)/i) ||
-      q.match(/\$([\d,]+(?:\.\d+)?)/);
-    if (!m) return undefined;
-    const v = Number(m[1].replace(/,/g, ""));
-    return Number.isFinite(v) ? v : undefined;
-  }
-  if (market.demoRole === "london_weather" || market.category === "weather") {
-    const m =
-      q.match(/open\s*\((-?[\d.]+)\s*°?C?\)/i) ||
-      q.match(/at least\s+(-?[\d.]+)\s*°?C/i) ||
-      q.match(/≥\s*(-?[\d.]+)\s*°?C/i) ||
-      q.match(/(-?[\d.]+)\s*°C/i);
-    if (!m) return undefined;
-    const v = Number(m[1]);
-    return Number.isFinite(v) ? v : undefined;
-  }
-  return undefined;
 }
 
 function fmtUsd(v: number) {
