@@ -12,8 +12,9 @@ export const metadata: Metadata = {
   description:
     "USDC-native short prediction markets with Micro Boost tickets on Arc testnet. BTC and London weather auto-resolve from live feeds.",
   icons: {
-    icon: "/icon.png",
-    apple: "/icon.png"
+    icon: [{ url: "/icon.png", type: "image/png" }],
+    apple: "/icon.png",
+    shortcut: "/favicon.ico"
   }
 };
 
