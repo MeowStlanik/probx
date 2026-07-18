@@ -78,6 +78,8 @@ export function MarketDetailView({
   const [boost, setBoost] = useState(Math.min(2, maxBoost));
   const [receipt, setReceipt] = useState<{ txHash: string; gas: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // Only OPEN accepts new tickets — Lock / Observe / Resolve are view-only.
+  const tradingOpen = market?.stage === "OPEN";
 
   useEffect(() => {
     // Keep boost within market max when market loads / changes
@@ -112,25 +114,42 @@ export function MarketDetailView({
 
       {state === "error" && !market && (
         <EmptyState
-          tone="error"
-          title="Couldn't load this market"
-          description="It may have been removed, or the Arc RPC call failed."
+          tone="empty"
+          title="This round is no longer on the board"
+          description="The market may have finished and left the live list. Your tickets stay in Portfolio — claim wins there. If this is a network glitch, try again."
           action={
-            <button
-              onClick={onRetry}
-              style={{
-                background: theme.color.ink,
-                color: "#fff",
-                border: "none",
-                borderRadius: 9,
-                padding: "9px 16px",
-                fontSize: 12.5,
-                fontWeight: 600,
-                cursor: "pointer"
-              }}
-            >
-              Retry
-            </button>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+              <button
+                onClick={onRetry}
+                style={{
+                  background: theme.color.ink,
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 9,
+                  padding: "9px 16px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: "pointer"
+                }}
+              >
+                Try again
+              </button>
+              <button
+                onClick={onBack}
+                style={{
+                  background: "#fff",
+                  color: theme.color.ink,
+                  border: `1px solid ${theme.color.border}`,
+                  borderRadius: 9,
+                  padding: "9px 16px",
+                  fontSize: 12.5,
+                  fontWeight: 600,
+                  cursor: "pointer"
+                }}
+              >
+                Back to markets
+              </button>
+            </div>
           }
         />
       )}
@@ -363,10 +382,10 @@ export function MarketDetailView({
                     <span style={{ color: theme.color.muted }}>Rule</span>
                     <span style={{ color: theme.color.ink, textAlign: "right", maxWidth: "65%", lineHeight: 1.35 }}>
                       {market.chartFeed === "weather"
-                        ? "YES if London temp ≥ threshold when observation ends"
+                        ? "YES if London temp finishes observation above the open"
                         : market.chartFeed === "btc"
-                          ? "YES if BTC/USD ≥ threshold when observation ends"
-                          : "YES if the feed is at/above threshold when observation ends"}
+                          ? "YES if BTC finishes observation above the open"
+                          : "YES if the feed finishes observation above the open"}
                     </span>
                   </div>
                 </div>
@@ -389,23 +408,62 @@ export function MarketDetailView({
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                     <h2 style={{ fontSize: 16, fontWeight: 600, color: theme.color.ink, margin: 0 }}>Buy ticket</h2>
                     <span style={{ fontSize: 11, color: theme.color.muted, fontFamily: theme.font.mono }}>
-                      max loss = stake
+                      {tradingOpen ? "max loss = stake" : `stage · ${market.stage}`}
                     </span>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 16 }}>
+                  {!tradingOpen ? (
+                    <div
+                      style={{
+                        marginTop: 16,
+                        padding: "18px 14px",
+                        borderRadius: 12,
+                        background: theme.color.tint,
+                        border: `1px solid ${theme.color.border}`,
+                        textAlign: "center"
+                      }}
+                    >
+                      <div style={{ fontSize: 14, fontWeight: 600, color: theme.color.ink }}>
+                        {market.stage === "LOCK"
+                          ? "Betting is locked"
+                          : market.stage === "OBSERVE"
+                            ? "Observation in progress"
+                            : "This market is not open for tickets"}
+                      </div>
+                      <p style={{ margin: "8px 0 0", fontSize: 12.5, color: theme.color.muted, lineHeight: 1.45 }}>
+                        {market.stage === "LOCK"
+                          ? "New tickets are closed. Wait for observation and resolve — open positions settle afterward."
+                          : market.stage === "OBSERVE"
+                            ? "The feed is tracking the observation window. You can’t place new bets until the next open market."
+                            : "Tickets can only be bought while the market is in Open."}
+                      </p>
+                      <div style={{ marginTop: 12, fontFamily: theme.font.mono, fontSize: 13, color: theme.color.ink }}>
+                        Next step in {fmtClock(market.secondsToNextStage)}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div
+                    style={{
+                      display: tradingOpen ? "grid" : "none",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 10,
+                      marginTop: 16
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={() => setSide("YES")}
+                      disabled={!tradingOpen}
                       style={{
                         display: "flex",
                         flexDirection: "column",
                         gap: 3,
                         padding: 12,
                         borderRadius: 11,
-                        cursor: "pointer",
+                        cursor: tradingOpen ? "pointer" : "not-allowed",
                         color: theme.color.yes,
                         border: side === "YES" ? `1.5px solid ${theme.color.yes}` : `1px solid ${theme.color.border}`,
-                        background: side === "YES" ? "#F1F9F5" : "#fff"
+                        background: side === "YES" ? "#F1F9F5" : "#fff",
+                        opacity: tradingOpen ? 1 : 0.55
                       }}
                     >
                       <span style={{ fontSize: 12, fontWeight: 600 }}>YES</span>
@@ -416,16 +474,18 @@ export function MarketDetailView({
                     <button
                       type="button"
                       onClick={() => setSide("NO")}
+                      disabled={!tradingOpen}
                       style={{
                         display: "flex",
                         flexDirection: "column",
                         gap: 3,
                         padding: 12,
                         borderRadius: 11,
-                        cursor: "pointer",
+                        cursor: tradingOpen ? "pointer" : "not-allowed",
                         color: theme.color.no,
                         border: side === "NO" ? `1.5px solid ${theme.color.no}` : `1px solid ${theme.color.border}`,
-                        background: side === "NO" ? "#FCF5F4" : "#fff"
+                        background: side === "NO" ? "#FCF5F4" : "#fff",
+                        opacity: tradingOpen ? 1 : 0.55
                       }}
                     >
                       <span style={{ fontSize: 12, fontWeight: 600 }}>NO</span>
@@ -434,104 +494,137 @@ export function MarketDetailView({
                       </span>
                     </button>
                   </div>
-                  <label style={{ display: "block", fontSize: 12, color: theme.color.muted, margin: "18px 0 6px", fontWeight: 500 }}>
-                    Stake (USDC)
-                  </label>
-                  <AmountInput value={stake} onChange={setStake} />
-                  <div style={{ marginTop: 18 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-                      <span style={{ fontSize: 12, color: theme.color.muted, fontWeight: 500 }}>
-                        Boost (max {maxBoost.toFixed(1)}×)
-                      </span>
-                      <span style={{ fontFamily: theme.font.mono, fontSize: 14, fontWeight: 600, color: theme.color.ink }}>
-                        {boost.toFixed(1)}×
-                      </span>
-                    </div>
-                    <input
-                      type="range"
-                      min={1}
-                      max={maxBoost}
-                      step={0.1}
-                      value={boost}
-                      onChange={(e) => setBoost(Number(e.target.value))}
-                      style={{ width: "100%" }}
-                    />
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        marginTop: 4,
-                        fontSize: 11,
-                        color: theme.color.muted,
-                        fontFamily: theme.font.mono
-                      }}
-                    >
-                      <span>1×</span>
-                      <span>{maxBoost.toFixed(1)}×</span>
-                    </div>
-                  </div>
-                  <div style={{ marginTop: 20, borderTop: `1px solid ${theme.color.border}`, paddingTop: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
-                      <span style={{ color: theme.color.muted }}>Stake</span>
-                      <span style={{ fontFamily: theme.font.mono, color: theme.color.ink }}>
-                        {money(Number(stake) || 0)}
-                      </span>
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "baseline",
-                        padding: "12px 0 4px",
-                        marginTop: 4,
-                        borderTop: `1px solid ${theme.color.border}`
-                      }}
-                    >
-                      <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>Est. payout</span>
-                      <span style={{ fontFamily: theme.font.mono, fontSize: 26, fontWeight: 600, color: theme.color.yes }}>
-                        {money(
-                          ((Number(stake) || 0) /
-                            Math.max(0.05, side === "YES" ? market.quotedYes : 1 - market.quotedYes)) *
-                            boost
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                  {needsApproval ? (
-                    <p style={{ margin: "12px 0 0", fontSize: 12, color: theme.color.muted, lineHeight: 1.4 }}>
-                      First <strong>Approve USDC</strong> for the engine, then the button becomes Confirm.
-                    </p>
+                  {tradingOpen ? (
+                    <>
+                      <label
+                        style={{
+                          display: "block",
+                          fontSize: 12,
+                          color: theme.color.muted,
+                          margin: "18px 0 6px",
+                          fontWeight: 500
+                        }}
+                      >
+                        Stake (USDC)
+                      </label>
+                      <AmountInput value={stake} onChange={setStake} />
+                      <div style={{ marginTop: 18 }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "baseline",
+                            marginBottom: 8
+                          }}
+                        >
+                          <span style={{ fontSize: 12, color: theme.color.muted, fontWeight: 500 }}>
+                            Boost (max {maxBoost.toFixed(1)}×)
+                          </span>
+                          <span
+                            style={{
+                              fontFamily: theme.font.mono,
+                              fontSize: 14,
+                              fontWeight: 600,
+                              color: theme.color.ink
+                            }}
+                          >
+                            {boost.toFixed(1)}×
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={1}
+                          max={maxBoost}
+                          step={0.1}
+                          value={boost}
+                          onChange={(e) => setBoost(Number(e.target.value))}
+                          style={{ width: "100%" }}
+                        />
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            marginTop: 4,
+                            fontSize: 11,
+                            color: theme.color.muted,
+                            fontFamily: theme.font.mono
+                          }}
+                        >
+                          <span>1×</span>
+                          <span>{maxBoost.toFixed(1)}×</span>
+                        </div>
+                      </div>
+                      <div style={{ marginTop: 20, borderTop: `1px solid ${theme.color.border}`, paddingTop: 16 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
+                          <span style={{ color: theme.color.muted }}>Stake</span>
+                          <span style={{ fontFamily: theme.font.mono, color: theme.color.ink }}>
+                            {money(Number(stake) || 0)}
+                          </span>
+                        </div>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "baseline",
+                            padding: "12px 0 4px",
+                            marginTop: 4,
+                            borderTop: `1px solid ${theme.color.border}`
+                          }}
+                        >
+                          <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>Est. payout</span>
+                          <span
+                            style={{
+                              fontFamily: theme.font.mono,
+                              fontSize: 26,
+                              fontWeight: 600,
+                              color: theme.color.yes
+                            }}
+                          >
+                            {money(
+                              ((Number(stake) || 0) /
+                                Math.max(0.05, side === "YES" ? market.quotedYes : 1 - market.quotedYes)) *
+                                boost
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                      {needsApproval ? (
+                        <p style={{ margin: "12px 0 0", fontSize: 12, color: theme.color.muted, lineHeight: 1.4 }}>
+                          First <strong>Approve USDC</strong> for the engine, then the button becomes Confirm.
+                        </p>
+                      ) : null}
+                      <Button
+                        fullWidth
+                        disabled={busy}
+                        style={{ marginTop: 14 }}
+                        onClick={async () => {
+                          setBusy(true);
+                          try {
+                            if (needsApproval) {
+                              await onApprove(side, Number(stake) || 0, boost);
+                            } else {
+                              setReceipt(await onConfirmTicket(side, Number(stake) || 0, boost));
+                            }
+                          } catch (e) {
+                            window.alert(e instanceof Error ? e.message : "Ticket failed");
+                          } finally {
+                            setBusy(false);
+                          }
+                        }}
+                      >
+                        {busy
+                          ? needsApproval
+                            ? "Approving…"
+                            : "Confirming…"
+                          : needsApproval
+                            ? "Approve USDC"
+                            : `Confirm · $${stake} USDC → payout if ${side}`}
+                      </Button>
+                      <p style={{ textAlign: "center", fontSize: 11, color: theme.color.muted, margin: "10px 0 0" }}>
+                        Gas paid in USDC · you can only lose your stake.
+                      </p>
+                    </>
                   ) : null}
-                  <Button
-                    fullWidth
-                    disabled={busy}
-                    style={{ marginTop: 14 }}
-                    onClick={async () => {
-                      setBusy(true);
-                      try {
-                        if (needsApproval) {
-                          await onApprove(side, Number(stake) || 0, boost);
-                        } else {
-                          setReceipt(await onConfirmTicket(side, Number(stake) || 0, boost));
-                        }
-                      } catch (e) {
-                        window.alert(e instanceof Error ? e.message : "Ticket failed");
-                      } finally {
-                        setBusy(false);
-                      }
-                    }}
-                  >
-                    {busy
-                      ? needsApproval
-                        ? "Approving…"
-                        : "Confirming…"
-                      : needsApproval
-                        ? "Approve USDC"
-                        : `Confirm · $${stake} USDC → payout if ${side}`}
-                  </Button>
-                  <p style={{ textAlign: "center", fontSize: 11, color: theme.color.muted, margin: "10px 0 0" }}>
-                    Gas paid in USDC · you can only lose your stake.
-                  </p>
                 </div>
               ) : (
                 <div>

@@ -10,7 +10,7 @@ export function EmptyState({
 }: {
   title: string;
   description?: string;
-  tone?: 'muted' | 'error';
+  tone?: 'muted' | 'error' | 'empty';
   action?: ReactNode;
 }) {
   const isError = tone === 'error';
@@ -25,7 +25,11 @@ export function EmptyState({
       }}
     >
       <div style={{ fontSize: 14, fontWeight: 600, color: isError ? theme.color.no : theme.color.ink }}>{title}</div>
-      {description && <p style={{ fontSize: 12.5, color: theme.color.muted, margin: '6px 0 0' }}>{description}</p>}
+      {description && (
+        <p style={{ fontSize: 12.5, color: theme.color.muted, margin: '8px auto 0', maxWidth: 420, lineHeight: 1.45 }}>
+          {description}
+        </p>
+      )}
       {action && <div style={{ marginTop: 14 }}>{action}</div>}
     </div>
   );

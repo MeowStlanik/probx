@@ -58,6 +58,7 @@ export function MarketDetailShell({
     async (opts?: { silent?: boolean }) => {
       if (!opts?.silent && !marketRef.current) setState("loading");
       try {
+        // Prefer raw 0x address (portfolio tickets store full address)
         const m = await fetchMarket(marketId);
         if (!m) {
           // Never wipe a good market on a flaky poll (e.g. right after approve)
@@ -195,6 +196,10 @@ export function MarketDetailShell({
     async (side: Side, stake: number, boost: number) => {
       if (!market) throw new Error("Market not loaded");
       if (!address) throw new Error("Connect wallet in the header first.");
+      // Mirror UI: only OPEN accepts buys (lifecycle Lock/Observe block the form).
+      if (market.status !== "OPEN" && market.status !== "CREATED") {
+        throw new Error("Betting is closed for this market — wait for the next open round.");
+      }
       await ensureArcChain();
       const walletClient = getWalletClient();
       if (!walletClient) throw new Error("Wallet provider unavailable.");

@@ -168,12 +168,12 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             <div style={{ marginTop: 6, fontSize: 12.5, color: "#5B6A7D", lineHeight: 1.4 }}>
               {isBtc ? (
                 <>
-                  YES if BTC is <strong style={{ color: "#1F9D6B" }}>≥ {fmt(threshold)}</strong> when observation ends
+                  YES if BTC finishes <strong style={{ color: "#1F9D6B" }}>above the open ({fmt(threshold)})</strong>
                 </>
               ) : (
                 <>
-                  YES if London temp is <strong style={{ color: "#1F9D6B" }}>≥ {fmt(threshold)}</strong> when
-                  observation ends
+                  YES if London temp finishes{" "}
+                  <strong style={{ color: "#1F9D6B" }}>above the open ({fmt(threshold)})</strong>
                 </>
               )}
               {vsThreshold ? (
@@ -204,8 +204,8 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             title="Chart starts at observation"
             body={
               isBtc
-                ? `Betting is open now. BTC/USD that settles this market is tracked only during observation — starting in ${fmtClock(secToObs)}.`
-                : `Betting is open now. London temperature that settles this market is tracked only during observation — starting in ${fmtClock(secToObs)}.`
+                ? `BTC/USD vs the open is tracked only during observation — starting in ${fmtClock(secToObs)}. New tickets are only available while the market is Open.`
+                : `London temp vs the open is tracked only during observation — starting in ${fmtClock(secToObs)}. New tickets are only available while the market is Open.`
             }
             threshold={threshold != null ? fmt(threshold) : null}
           />
@@ -498,6 +498,7 @@ function thresholdFromQuestion(market: Market): number | undefined {
   const q = market.question || "";
   if (market.demoRole === "btc_price" || market.category === "crypto-candle") {
     const m =
+      q.match(/open\s*\(\$?([\d,]+(?:\.\d+)?)\)/i) ||
       q.match(/(?:at or above|above|≥)\s+\$?([\d,]+(?:\.\d+)?)/i) ||
       q.match(/\$([\d,]+(?:\.\d+)?)/);
     if (!m) return undefined;
@@ -506,6 +507,7 @@ function thresholdFromQuestion(market: Market): number | undefined {
   }
   if (market.demoRole === "london_weather" || market.category === "weather") {
     const m =
+      q.match(/open\s*\((-?[\d.]+)\s*°?C?\)/i) ||
       q.match(/at least\s+(-?[\d.]+)\s*°?C/i) ||
       q.match(/≥\s*(-?[\d.]+)\s*°?C/i) ||
       q.match(/(-?[\d.]+)\s*°C/i);

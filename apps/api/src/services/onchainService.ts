@@ -320,8 +320,23 @@ function collapseAutoCycleMarkets(markets: Market[]): Market[] {
 
 export async function getOnchainMarket(id: string): Promise<Market | undefined> {
   assertDeployment();
+  // Prefer direct address read (works for finished/hidden rounds users still open from Portfolio).
+  try {
+    const asAddr = getAddress(id);
+    const market = await readOnchainMarket({
+      id: asAddr,
+      label: "On-chain market",
+      role: "legacy",
+      market: asAddr
+    });
+    if (market) return market;
+  } catch {
+    // id may be a short demo slug
+  }
   const item = findDemoMarket(id);
-  return item ? readOnchainMarket(item) : undefined;
+  if (!item) return undefined;
+  // Include hidden markets when fetched by id (claim / portfolio deep-link).
+  return readOnchainMarket(item);
 }
 
 async function readOnchainMarket(item: DemoMarketDeployment): Promise<Market | undefined> {
@@ -1324,14 +1339,14 @@ async function demoMarketTemplates() {
   const weatherFair = await estimateFairYesPercent("london_weather");
   return [
     {
-      question: `Will BTC/USD be at or above $${roundedBtc.toLocaleString("en-US")} when the observation window ends?`,
+      question: `Will BTC/USD finish observation above the open ($${roundedBtc.toLocaleString("en-US")})?`,
       demoRole: "btc_price",
       yesPricePercent: btcFair,
       lockSeconds,
       observationSeconds: 60
     },
     {
-      question: `Will London temperature be at least ${roundedTemp}°C when the observation window ends?`,
+      question: `Will London temp finish observation above the open (${roundedTemp}°C)?`,
       demoRole: "london_weather",
       yesPricePercent: weatherFair,
       lockSeconds,
@@ -1397,7 +1412,7 @@ async function materializeReferenceQuestion(
     }
     const rounded = Math.round(price as number);
     return {
-      question: `Will BTC/USD be at or above $${rounded.toLocaleString("en-US")} when the observation window ends?`,
+      question: `Will BTC/USD finish observation above the open ($${rounded.toLocaleString("en-US")})?`,
       role
     };
   }
@@ -1413,7 +1428,7 @@ async function materializeReferenceQuestion(
     }
     const rounded = Math.round((temp as number) * 10) / 10;
     return {
-      question: `Will London temperature be at least ${rounded}°C when the observation window ends?`,
+      question: `Will London temp finish observation above the open (${rounded}°C)?`,
       role
     };
   }
@@ -1824,8 +1839,13 @@ function demoMarketId(item: DemoMarketDeployment): string {
   return item.id ?? `mkt_${item.market.slice(2, 10).toLowerCase()}`;
 }
 
+/** Always use checksum 0x address so portfolio links resolve after hide/archive. */
 function marketIdForAddress(address: string): string {
-  return findDemoMarket(address)?.id ?? address;
+  try {
+    return getAddress(address);
+  } catch {
+    return findDemoMarket(address)?.id ?? address;
+  }
 }
 
 function classifyDemoMarket(item: DemoMarketDeployment, question: string): DemoMarketRole {
@@ -1848,6 +1868,7 @@ function normalizeDemoMarketRole(value: unknown): DemoMarketRole | undefined {
 
 function parseBtcThreshold(question: string): number {
   const match =
+    question.match(/open\s*\(\$?([\d,]+(?:\.\d+)?)\)/i) ||
     question.match(/(?:at or above|above|≥)\s+\$?([\d,]+(?:\.\d+)?)/i) ||
     question.match(/\$([\d,]+(?:\.\d+)?)/);
   return match ? Number(match[1].replace(/,/g, "")) : Number.NaN;
@@ -1855,8 +1876,10 @@ function parseBtcThreshold(question: string): number {
 
 function parseWeatherThreshold(question: string): number {
   const match =
+    question.match(/open\s*\((-?[\d.]+)\s*°?C?\)/i) ||
     question.match(/at least\s+(-?[\d.]+)\s*°?C/i) ||
-    question.match(/≥\s*(-?[\d.]+)\s*°?C/i);
+    question.match(/≥\s*(-?[\d.]+)\s*°?C/i) ||
+    question.match(/(-?[\d.]+)\s*°C/);
   return match ? Number(match[1]) : Number.NaN;
 }
 
@@ -1874,12 +1897,12 @@ function demoResolutionSource(role: DemoMarketRole): string {
 
 function demoRules(role?: DemoMarketRole, question?: string): string {
   if (role === "btc_price") {
-    const threshold = question?.match(/\$[\d,]+(?:\.\d+)?/)?.[0] ?? "the threshold";
-    return `Bet while the market is OPEN. Settlement uses Coinbase BTC/USD at the end of the observation window: YES if ≥ ${threshold}, otherwise NO. Claim from Portfolio after resolve.`;
+    const threshold = question?.match(/\$[\d,]+(?:\.\d+)?/)?.[0] ?? "the open";
+    return `Bet while OPEN. YES if Coinbase BTC/USD finishes observation above the open (${threshold}). NO if at or below. Claim from Portfolio after resolve.`;
   }
   if (role === "london_weather") {
-    const threshold = question?.match(/(-?[\d.]+)\s*°?C/i)?.[0] ?? "the threshold";
-    return `Bet while the market is OPEN. Settlement uses Open-Meteo London temp at the end of the observation window: YES if ≥ ${threshold}, otherwise NO. Claim from Portfolio after resolve.`;
+    const threshold = question?.match(/(-?[\d.]+)\s*°C/)?.[0] ?? "the open";
+    return `Bet while OPEN. YES if London temp finishes observation above the open (${threshold}). NO if at or below. Claim from Portfolio after resolve.`;
   }
   if (role === "near_lock") return "Near-lock demo: buy quickly, then resolve after the short observation window.";
   if (role === "resolved") return "Resolved demo market for settlement walkthroughs.";
