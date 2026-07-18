@@ -114,7 +114,7 @@ That cuts the free lunch for anyone who would otherwise only buy mispriced 50/50
 |---------|------|
 | `apps/web` | Markets, portfolio, LP, admin, fund UI + **API route handlers** |
 | `apps/api` | Shared services (quotes, Circle, CCTP, workers); optional standalone server on `:3001` |
-| `contracts` | Foundry sources + tests |
+| `contracts` | Foundry sources + [tests](./contracts/test/) |
 | `scripts/` | `deploy-arc`, smoke, demo markets, RPC preflight |
 
 ---
@@ -137,7 +137,7 @@ Leave `NEXT_PUBLIC_API_BASE_URL` empty to call same-origin `/api/*` (default for
 
 ```bash
 pnpm contracts:build
-pnpm contracts:test
+pnpm contracts:test      # 14 forge tests → contracts/test/
 pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 ```
 
