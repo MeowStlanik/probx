@@ -769,9 +769,26 @@ export async function resolveReferenceMarketOnchain(id: string) {
 
   // Permanent market rule: YES if end-of-observation print is higher than start-of-observation.
   // (Not vs price at market create — that was confusing on titles.)
-  if (market.demoRole === "btc_price" || market.category === "crypto-candle") {
+  const q = (market.question || "").toLowerCase();
+  const isBtc =
+    market.demoRole === "btc_price" ||
+    market.category === "crypto-candle" ||
+    /\bbtc\b/.test(q) ||
+    q.includes("bitcoin");
+  const isWeather =
+    market.demoRole === "london_weather" ||
+    market.category === "weather" ||
+    q.includes("london") ||
+    q.includes("temp") ||
+    q.includes("weather");
+
+  if (isBtc) {
     const observedValue = data.btcUsd?.price;
-    const openValue = valueNearTime(data.btcUsd?.history, obsStartMs) ?? observedValue;
+    // If history has no sample near obs start, use end-ε fallback so resolve never stalls.
+    const openValue =
+      valueNearTime(data.btcUsd?.history, obsStartMs) ??
+      valueNearTime(data.btcUsd?.history, Date.now() - 60_000) ??
+      observedValue;
     if (!Number.isFinite(openValue) || !Number.isFinite(observedValue)) {
       return { error: "BTC reference is unavailable.", market };
     }
@@ -787,9 +804,12 @@ export async function resolveReferenceMarketOnchain(id: string) {
     };
   }
 
-  if (market.demoRole === "london_weather" || market.category === "weather") {
+  if (isWeather) {
     const observedValue = data.londonWeather?.temperatureC;
-    const openValue = valueNearTime(data.londonWeather?.history, obsStartMs) ?? observedValue;
+    const openValue =
+      valueNearTime(data.londonWeather?.history, obsStartMs) ??
+      valueNearTime(data.londonWeather?.history, Date.now() - 60_000) ??
+      observedValue;
     if (!Number.isFinite(openValue) || !Number.isFinite(observedValue)) {
       return { error: "Weather reference is unavailable.", market };
     }
@@ -1849,8 +1869,18 @@ function classifyDemoMarket(item: DemoMarketDeployment, question: string): DemoM
 
 function classifyQuestion(question: string): DemoMarketRole {
   const normalized = question.toLowerCase();
-  if (normalized.includes("btc/usd") || normalized.includes("bitcoin")) return "btc_price";
-  if (normalized.includes("london temperature") || normalized.includes("weather") || normalized.includes("open-meteo")) return "london_weather";
+  // Fixed titles: "Will BTC finish observation…" / "Will London temp finish…"
+  if (/\bbtc\b/.test(normalized) || normalized.includes("bitcoin") || normalized.includes("btc/usd")) {
+    return "btc_price";
+  }
+  if (
+    normalized.includes("london") ||
+    normalized.includes("weather") ||
+    normalized.includes("temp") ||
+    normalized.includes("open-meteo")
+  ) {
+    return "london_weather";
+  }
   return "open";
 }
 

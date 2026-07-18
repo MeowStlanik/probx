@@ -74,13 +74,13 @@ export async function runMarketCycleOnce(): Promise<{
 
     // 1) Resolve + settle ready BTC / weather
     for (const market of markets) {
-      if (!isReferenceRole(market.demoRole, market.category)) continue;
+      if (!isReferenceRole(market.demoRole, market.category, market.question)) continue;
       if (!isResolvableStatus(market.status)) continue;
       if (!isReadyToResolve(market, now)) continue;
-      if (!hasParseableThreshold(market.demoRole, market.category, market.question)) continue;
+      // Resolve compares obs-start vs obs-end feed prints — no $ threshold required in the title.
 
       try {
-        console.log(`[market-cycle] resolving ${market.demoRole} ${market.id}`);
+        console.log(`[market-cycle] resolving ${market.demoRole ?? market.category} ${market.id}`);
         const result = await resolveReferenceMarketOnchain(market.id);
         if (result && "error" in result && result.error) {
           errors.push(`${market.id}: ${result.error}`);
@@ -108,10 +108,12 @@ export async function runMarketCycleOnce(): Promise<{
     //    previous one is fully RESOLVED (or cancelled/hidden) — prevents list jumps.
     const live = await listOnchainMarkets({ forCycle: true });
     const hasActiveBtc = live.some(
-      (m) => isReferenceBtc(m.demoRole, m.category) && isActiveRoundStatus(m.status)
+      (m) =>
+        isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
     );
     const hasActiveWeather = live.some(
-      (m) => isReferenceWeather(m.demoRole, m.category) && isActiveRoundStatus(m.status)
+      (m) =>
+        isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
     );
 
     if (!hasActiveBtc) {
@@ -158,14 +160,14 @@ export async function runMarketCycleOnce(): Promise<{
 
     for (const market of refreshed) {
       const isLegacyDemo =
-        !isReferenceRole(market.demoRole, market.category) &&
+        !isReferenceRole(market.demoRole, market.category, market.question) &&
         (market.demoRole === "open" ||
           market.demoRole === "legacy" ||
           market.id === "mkt_demo_green" ||
           /demo signal be GREEN/i.test(market.question || ""));
 
       const finishedReference =
-        isReferenceRole(market.demoRole, market.category) &&
+        isReferenceRole(market.demoRole, market.category, market.question) &&
         (market.status === "RESOLVED" || market.status === "CANCELLED");
 
       if (!isLegacyDemo && !finishedReference) continue;
@@ -212,16 +214,20 @@ function hasResolverKey(): boolean {
   );
 }
 
-function isReferenceRole(role?: string, category?: string): boolean {
-  return isReferenceBtc(role, category) || isReferenceWeather(role, category);
+function isReferenceRole(role?: string, category?: string, question?: string): boolean {
+  return isReferenceBtc(role, category, question) || isReferenceWeather(role, category, question);
 }
 
-function isReferenceBtc(role?: string, category?: string): boolean {
-  return role === "btc_price" || category === "crypto-candle";
+function isReferenceBtc(role?: string, category?: string, question?: string): boolean {
+  if (role === "btc_price" || category === "crypto-candle") return true;
+  const q = (question || "").toLowerCase();
+  return /\bbtc\b/.test(q) || q.includes("bitcoin");
 }
 
-function isReferenceWeather(role?: string, category?: string): boolean {
-  return role === "london_weather" || category === "weather";
+function isReferenceWeather(role?: string, category?: string, question?: string): boolean {
+  if (role === "london_weather" || category === "weather") return true;
+  const q = (question || "").toLowerCase();
+  return q.includes("london") || q.includes("weather") || q.includes("temp");
 }
 
 function isResolvableStatus(status: string): boolean {
@@ -245,16 +251,6 @@ function isReadyToResolve(
       ? lockTime + OBSERVATION_SECONDS * 1000
       : Number.NaN;
   return Number.isFinite(readyAt) && now >= readyAt;
-}
-
-function hasParseableThreshold(role: string | undefined, category: string | undefined, question: string): boolean {
-  if (isReferenceBtc(role, category)) {
-    return /above\s+\$?[\d,]+(?:\.\d+)?/i.test(question);
-  }
-  if (isReferenceWeather(role, category)) {
-    return /at least\s+-?[\d.]+\s*C/i.test(question);
-  }
-  return false;
 }
 
 function readCycleState(): CycleState {
