@@ -38,7 +38,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           <header className="appHeader">
             <Link className="brand" href="/" aria-label="ProbX Arc home">
               <span className="brandMark" aria-hidden>
-                <img src="/assets/probx-mark.png" alt="" width={36} height={36} />
+                <img src="/assets/probx-mark.png" alt="" width={34} height={34} />
               </span>
               <span className="brandText">
                 ProbX<em>Arc</em>
@@ -68,7 +68,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             <div className="arcFooterInner">
               <div>
                 <div className="arcFooterBrand">
-                  <img src="/assets/probx-mark.png" alt="" width={20} height={20} />
+                  <img src="/assets/probx-mark.png" alt="" width={28} height={28} />
                   ProbX Arc
                 </div>
                 <p>Hackathon demo · USDC-native prediction markets on Arc Testnet.</p>
@@ -154,6 +154,26 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                       style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--purple)" }}
                     >
                       testnet.arcscan.app ↗
+                    </a>
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <h4>Links</h4>
+                <ul>
+                  <li>
+                    <a href="https://github.com/MeowStlanik/probx" target="_blank" rel="noreferrer">
+                      GitHub ↗
+                    </a>
+                  </li>
+                  <li>
+                    <a
+                      href="https://developers.circle.com/wallets/dev-controlled"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Circle docs ↗
                     </a>
                   </li>
                 </ul>

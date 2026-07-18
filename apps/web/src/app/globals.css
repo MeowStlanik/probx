@@ -203,7 +203,7 @@ input[type="range"]::-webkit-slider-thumb {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: 6px;
   flex-shrink: 0;
   color: var(--ink);
   text-decoration: none;
@@ -214,8 +214,8 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .brandMark {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   border-radius: 8px;
   overflow: hidden;
   flex-shrink: 0;
@@ -224,8 +224,8 @@ input[type="range"]::-webkit-slider-thumb {
 }
 
 .brandMark img {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   object-fit: contain;
   border-radius: 8px;
   display: block;
@@ -1066,7 +1066,7 @@ main {
 .arcFooterBrand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-bottom: 14px;
   font-family: var(--font-display);
   font-weight: 700;
@@ -1075,9 +1075,9 @@ main {
 }
 
 .arcFooterBrand img {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
   object-fit: contain;
   display: block;
   background: transparent;
