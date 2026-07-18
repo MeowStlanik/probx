@@ -38,7 +38,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           <header className="appHeader">
             <Link className="brand" href="/" aria-label="ProbX Arc home">
               <span className="brandMark" aria-hidden>
-                <img src="/icon.png" alt="" width={36} height={36} />
+                <img src="/assets/probx-mark.png" alt="" width={36} height={36} />
               </span>
               <span className="brandText">
                 ProbX<em>Arc</em>
@@ -68,7 +68,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
             <div className="arcFooterInner">
               <div>
                 <div className="arcFooterBrand">
-                  <img src="/icon.png" alt="" width={20} height={20} />
+                  <img src="/assets/probx-mark.png" alt="" width={20} height={20} />
                   ProbX Arc
                 </div>
                 <p>Hackathon demo · USDC-native prediction markets on Arc Testnet.</p>

@@ -219,13 +219,17 @@ input[type="range"]::-webkit-slider-thumb {
   border-radius: 8px;
   overflow: hidden;
   flex-shrink: 0;
+  background: transparent;
+  line-height: 0;
 }
 
 .brandMark img {
   width: 36px;
   height: 36px;
-  object-fit: cover;
+  object-fit: contain;
   border-radius: 8px;
+  display: block;
+  background: transparent;
 }
 
 .brandText {
@@ -1074,6 +1078,9 @@ main {
   width: 20px;
   height: 20px;
   border-radius: 5px;
+  object-fit: contain;
+  display: block;
+  background: transparent;
 }
 
 .arcFooter p {
