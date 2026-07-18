@@ -1,13 +1,16 @@
 "use client";
 
-import { ArrowDownToLine, ArrowUpFromLine, ExternalLink, RefreshCcw, ShieldCheck, Wallet } from "lucide-react";
+import { ExternalLink, Wallet } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   formatUnits,
   getAddress,
   parseUnits
 } from "viem";
+import { apiUrl } from "@/lib/api";
+import { deriveAllocations, type ReserveAllocation } from "@/lib/lpAllocations";
 import { arcDeployment, poolAbi, usdcAbi } from "@/lib/onchain";
+import type { Market } from "@/lib/types";
 import { readableWalletError, shortHex, useWallet } from "@/lib/wallet";
 
 type VaultSnapshot = {
@@ -51,6 +54,7 @@ export function OnchainLpVault() {
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [busy, setBusy] = useState(false);
   const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  const [allocations, setAllocations] = useState<ReserveAllocation[]>(() => deriveAllocations([]));
 
   const amountAssets = useMemo(() => parseUsdcSafe(amount), [amount]);
   const maxWithdrawAssets = useMemo(() => maxWithdrawableAssets(snapshot), [snapshot]);
@@ -77,6 +81,15 @@ export function OnchainLpVault() {
     const pct = (Number(snapshot.shares) / Number(snapshot.totalShares)) * 100;
     return `${pct.toFixed(2)}%`;
   }, [snapshot.shares, snapshot.totalShares]);
+
+  // Simulated APY scales lightly with vault utilization, floored at a sensible
+  // demo baseline so the panel always shows a plausible figure.
+  const simulatedApy = useMemo(() => {
+    if (snapshot.totalAssets <= 0n) return "6.4%";
+    const util = Number(snapshot.managedAssets) / Number(snapshot.totalAssets);
+    const apy = 4 + Math.min(6, util * 12);
+    return `${apy.toFixed(1)}%`;
+  }, [snapshot.managedAssets, snapshot.totalAssets]);
 
   const refresh = useCallback(async (address = account) => {
     try {
@@ -130,6 +143,28 @@ export function OnchainLpVault() {
     const interval = window.setInterval(() => void refresh(), 12_000);
     return () => window.clearInterval(interval);
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function pullAllocations() {
+      try {
+        const res = await fetch(apiUrl("/api/markets"), { cache: "no-store" });
+        if (!res.ok) return;
+        const markets = (await res.json()) as Market[];
+        if (!cancelled && Array.isArray(markets)) {
+          setAllocations(deriveAllocations(markets));
+        }
+      } catch {
+        // keep previous / demo allocations
+      }
+    }
+    void pullAllocations();
+    const id = window.setInterval(() => void pullAllocations(), 12_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     if (account) {
@@ -252,53 +287,38 @@ export function OnchainLpVault() {
   return (
     <section className="lpWorkspace">
       <div className="lpAllocPanel">
-        <div className="surfaceHeader">
-          <span className="lpPanelTitle">Your vault position</span>
-          <button className="iconOnly" onClick={() => void refresh()} type="button" aria-label="Refresh LP vault">
-            <RefreshCcw size={16} aria-hidden />
-          </button>
+        <span className="lpPanelTitle">Recent reserve allocations</span>
+        <div className="lpAllocTableWrap">
+          <table className="lpAllocTable">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Market</th>
+                <th>Side</th>
+                <th className="alignRight">Amount</th>
+                <th className="alignRight">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allocations.map((row, index) => (
+                <tr key={row.id} className={index % 2 ? "zebra" : ""}>
+                  <td className="mono muted">{row.time}</td>
+                  <td>{row.market}</td>
+                  <td>
+                    <span className={`sideChip ${row.side === "YES" ? "yes" : "no"}`}>{row.side}</span>
+                  </td>
+                  <td className="mono alignRight">{row.amount}</td>
+                  <td className={`alignRight allocStatus ${row.status === "Active" ? "active" : "released"}`}>
+                    {row.status}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <div className="feeRow">
-          <span>Wallet</span>
-          <strong>{account ? shortHex(account) : "Not connected"}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Vault total assets</span>
-          <strong>{formatUsdc6(snapshot.totalAssets)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Managed assets</span>
-          <strong>{formatUsdc6(snapshot.managedAssets)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Available assets</span>
-          <strong>{formatUsdc6(snapshot.availableAssets)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Reserved</span>
-          <strong>{formatUsdc6(snapshot.reservedAssets)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Your LP shares</span>
-          <strong>{formatUsdc6(snapshot.shares)}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Your LP share</span>
-          <strong>{sharePct}</strong>
-        </div>
-        <div className="feeRow">
-          <span>Max withdrawable now</span>
-          <strong>{formatUsdc6(maxWithdrawAssets)}</strong>
-        </div>
-        <p className="settlementNote">{busy ? "Waiting for transaction confirmation..." : message}</p>
-        {txHash ? (
-          <a className="txLink" href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank" rel="noreferrer">
-            View tx <ExternalLink size={13} aria-hidden />
-          </a>
-        ) : null}
       </div>
 
-      <div className="lpActionPanel lpStickyPanel">
+      <div className="lpStickyPanel">
         <div className="lpTabs" role="tablist" aria-label="LP action">
           <button
             type="button"
@@ -341,24 +361,17 @@ export function OnchainLpVault() {
           <span>USDC</span>
         </div>
 
-        <div className="feeRow">
-          <span>Wallet USDC</span>
-          <strong>{formatUsdc6(snapshot.usdcBalance)}</strong>
+        <div className="lpMetaRow">
+          <span>Simulated APY</span>
+          <strong className="mono">{simulatedApy}</strong>
         </div>
-        {tab === "deposit" ? (
-          <div className="feeRow">
-            <span>Approved to vault</span>
-            <strong>{formatUsdc6(snapshot.allowance)}</strong>
-          </div>
-        ) : (
-          <div className="feeRow">
-            <span>Shares to burn</span>
-            <strong>{formatUsdc6(withdrawShares)}</strong>
-          </div>
-        )}
-        <div className="feeRow">
+        <div className="lpMetaRow">
           <span>Your LP share</span>
-          <strong>{sharePct}</strong>
+          <strong className="mono">{sharePct}</strong>
+        </div>
+        <div className="lpMetaRow">
+          <span>Wallet USDC</span>
+          <strong className="mono">{formatUsdc6(snapshot.usdcBalance)}</strong>
         </div>
 
         {!account ? (
@@ -368,23 +381,25 @@ export function OnchainLpVault() {
           </button>
         ) : tab === "deposit" && needsApproval ? (
           <button className="confirmButton" disabled={!canApprove} onClick={() => void approveDeposit()} type="button">
-            <ShieldCheck size={18} aria-hidden />
             {buttonLabel}
           </button>
         ) : tab === "deposit" ? (
           <button className="confirmButton" disabled={!canDeposit} onClick={() => void deposit()} type="button">
-            <ArrowDownToLine size={18} aria-hidden />
             {buttonLabel}
           </button>
         ) : (
           <button className="confirmButton" disabled={!canWithdraw} onClick={() => void withdraw()} type="button">
-            <ArrowUpFromLine size={18} aria-hidden />
             {buttonLabel}
           </button>
         )}
 
         {activeError && account ? <p className="settlementNote">{activeError}</p> : null}
         {doneMsg ? <div className="lpDoneBanner">{doneMsg}</div> : null}
+        {txHash ? (
+          <a className="txLink" href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank" rel="noreferrer">
+            View tx <ExternalLink size={13} aria-hidden />
+          </a>
+        ) : null}
       </div>
     </section>
   );

@@ -1,71 +1,64 @@
-import { ExternalLink, ShieldCheck } from "lucide-react";
-import { LiveReferencePanel } from "@/components/LiveReferencePanel";
 import { OnchainAdminPanel } from "@/components/OnchainAdminPanel";
 import { arcDeployment } from "@/lib/onchain";
 
 export default function AdminPage() {
+  const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
+  const explorer = arcDeployment.explorerUrl || "https://testnet.arcscan.app";
+
   return (
     <main className="pageShell">
-      <div className="sectionHeader">
-        <div>
-          <span className="eyebrow">Controls</span>
-          <h1>Admin</h1>
-          <p className="pageLead">Create markets and manage resolution tools on Arc Testnet.</p>
-        </div>
+      <div className="adminHeaderRow">
+        <h1>Admin</h1>
+        <span className="operatorBadge">Operator only</span>
       </div>
+      <p className="pageLead">Create test markets and manage resolution on Arc.</p>
 
       <section className="adminGrid">
         <OnchainAdminPanel />
+
         <div className="adminSideCol">
           <div className="adminPanel">
-            <h2>Network</h2>
-            <div className="adminStatusRow">
-              <span>Network</span>
-              <strong>Arc Testnet</strong>
-              <span className="mono">{arcDeployment.chainId}</span>
-            </div>
-            <div className="adminStatusRow">
-              <span>Factory</span>
-              <strong className="mono">{shortHex(arcDeployment.marketFactory)}</strong>
-              <a
-                className="miniLinkButton"
-                href={`${arcDeployment.explorerUrl}/address/${arcDeployment.marketFactory}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                View
-              </a>
-            </div>
-            <div className="adminStatusRow">
-              <span>Resolver</span>
-              <strong className="mono">{shortHex(arcDeployment.oracleAdapter)}</strong>
-              <a
-                className="miniLinkButton"
-                href={`${arcDeployment.explorerUrl}/address/${arcDeployment.oracleAdapter}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                View
-              </a>
-            </div>
-            <div className="adminInfoList">
-              <span>
-                <ShieldCheck size={16} aria-hidden />
-                Create test market is the main demo control — opens a live MicroMarket on Arc.
-              </span>
-              <span>
-                <ExternalLink size={16} aria-hidden />
-                Resolver tools stay collapsed below for manual override if needed.
-              </span>
+            <span className="adminCardTitle">Network</span>
+            <div className="adminNetworkList">
+              <div className="adminNetRow">
+                <span>Network</span>
+                <strong>Arc Testnet</strong>
+              </div>
+              <div className="adminNetRow">
+                <span>Chain</span>
+                <span className="mono">{arcDeployment.chainId}</span>
+              </div>
+              <div className="adminNetRow">
+                <span>Factory</span>
+                <a
+                  className="mono adminNetLink"
+                  href={`${explorer}/address/${arcDeployment.marketFactory}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {short(arcDeployment.marketFactory)} ↗
+                </a>
+              </div>
+              <div className="adminNetRow">
+                <span>Resolver</span>
+                <a
+                  className="mono adminNetLink"
+                  href={`${explorer}/address/${arcDeployment.oracleAdapter}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {short(arcDeployment.oracleAdapter)} ↗
+                </a>
+              </div>
             </div>
           </div>
-          <LiveReferencePanel compact />
+
+          <div className="adminPanel">
+            <span className="adminCardTitle">Created this session</span>
+            <p className="adminSessionEmpty">No markets created yet this session.</p>
+          </div>
         </div>
       </section>
     </main>
   );
-}
-
-function shortHex(value: string): string {
-  return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }

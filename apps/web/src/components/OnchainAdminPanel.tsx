@@ -1,6 +1,5 @@
 "use client";
 
-import { Ban, Check, ExternalLink, RadioTower, RotateCcw, Trash2 } from "lucide-react";
 import {
   createPublicClient,
   fallback,
@@ -68,6 +67,13 @@ export function OnchainAdminPanel() {
   const [status, setStatus] = useState("Ready");
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [busy, setBusy] = useState(false);
+  // Redesigned admin form state (matches the Arc UI spec).
+  const [category, setCategory] = useState<"crypto" | "weather" | "network">("crypto");
+  const [duration, setDuration] = useState("60");
+  const [source, setSource] = useState("Coinbase BTC/USD");
+  const [resolverOpen, setResolverOpen] = useState(false);
+  const [resolverAddress, setResolverAddress] = useState("");
+  const [resolveOutcome, setResolveOutcome] = useState<"YES" | "NO" | null>(null);
 
   function updateAdminSecret(value: string) {
     setAdminSecretState(value);
@@ -320,118 +326,161 @@ export function OnchainAdminPanel() {
     setNewObservationSeconds("30");
   }
 
+  // Map the redesigned category tabs onto the existing backend templates and
+  // default the resolution source + placeholder question.
+  function selectCategory(next: "crypto" | "weather" | "network") {
+    setCategory(next);
+    if (next === "crypto") {
+      applyTemplate("btc");
+      setSource("Coinbase BTC/USD");
+    } else if (next === "weather") {
+      applyTemplate("weather");
+      setSource("Open-Meteo London");
+    } else {
+      applyTemplate("demo");
+      setSource("Arc block time");
+    }
+  }
+
+  // Create using the current form, honoring the selected duration as lock seconds.
+  async function createFromForm() {
+    setNewLockSeconds(duration);
+    await createAndOpenMarket();
+  }
+
+  async function forceResolveSelected() {
+    if (!resolveOutcome) {
+      setStatus("Pick Force YES or Force NO first.");
+      return;
+    }
+    if (resolverAddress.trim()) {
+      setSelectedMarket(resolverAddress.trim());
+    }
+    await resolve(resolveOutcome === "YES" ? 1 : 2);
+  }
+
+  const questionPlaceholder =
+    category === "crypto"
+      ? "BTC/USD above $X in the next window?"
+      : category === "weather"
+        ? "London temperature above X°C in the next window?"
+        : "Arc block time under X seconds?";
+
   return (
-    <section className="adminPanel">
+    <section className="adminPanel adminCreateCol">
       <div className="adminCreatePanel adminCreatePanelPrimary">
-        <h2>Create test market</h2>
-        <p className="adminCreateLead">Spin up a short YES/NO market on Arc for the demo.</p>
-        <label>
-          <span>Admin secret (only if the server has ADMIN_SECRET set)</span>
+        <span className="adminCardTitle">Create test market</span>
+        <div className="adminCategoryTabs">
+          {(["crypto", "weather", "network"] as const).map((key) => (
+            <button
+              key={key}
+              type="button"
+              className={`adminCategoryTab ${category === key ? "isActive" : ""}`}
+              onClick={() => selectCategory(key)}
+            >
+              {key === "crypto" ? "Crypto" : key === "weather" ? "Weather" : "Network"}
+            </button>
+          ))}
+        </div>
+
+        <label className="adminField">
+          <span>Question</span>
           <input
-            type="password"
-            autoComplete="off"
-            value={adminSecret}
-            placeholder="Leave empty for open local dev"
-            onChange={(event) => updateAdminSecret(event.target.value)}
+            value={newQuestion}
+            placeholder={questionPlaceholder}
+            onChange={(event) => setNewQuestion(event.target.value)}
           />
         </label>
-        <div className="templateButtons">
-          <button className="miniLinkButton" disabled={busy} onClick={() => applyTemplate("btc")} type="button">BTC 1m</button>
-          <button className="miniLinkButton" disabled={busy} onClick={() => applyTemplate("weather")} type="button">London weather</button>
-          <button className="miniLinkButton" disabled={busy} onClick={() => applyTemplate("demo")} type="button">Demo signal</button>
-        </div>
-        <label>
-          <span>Question</span>
-          <input value={newQuestion} onChange={(event) => setNewQuestion(event.target.value)} />
-        </label>
-        <div className="adminCreateGrid">
-          <label>
-            <span>YES price %</span>
-            <input inputMode="decimal" value={newYesPrice} onChange={(event) => setNewYesPrice(event.target.value)} />
+
+        <div className="adminCreateGrid two">
+          <label className="adminField">
+            <span>Duration</span>
+            <select value={duration} onChange={(event) => setDuration(event.target.value)}>
+              <option value="60">60 seconds</option>
+              <option value="300">5 minutes</option>
+              <option value="3600">1 hour</option>
+            </select>
           </label>
-          <label>
-            <span>Lock seconds</span>
-            <input inputMode="numeric" value={newLockSeconds} onChange={(event) => setNewLockSeconds(event.target.value)} />
-          </label>
-          <label>
-            <span>Observation seconds</span>
-            <input inputMode="numeric" value={newObservationSeconds} onChange={(event) => setNewObservationSeconds(event.target.value)} />
+          <label className="adminField">
+            <span>Resolution source</span>
+            <input value={source} onChange={(event) => setSource(event.target.value)} />
           </label>
         </div>
-        <button className="iconButton adminActionButton createAction" disabled={busy || !newQuestion.trim()} onClick={() => void createAndOpenMarket()} type="button">
-          <Check size={18} aria-hidden />
-          Create and open market
+
+        <button
+          className="confirmButton"
+          disabled={busy || !newQuestion.trim()}
+          onClick={() => void createFromForm()}
+          type="button"
+        >
+          {busy ? "Creating…" : "Create market on Arc"}
         </button>
+
         {createdMarketAddress ? (
-          <a className="createdMarketLink" href={`/markets/${createdMarketAddress}`}>
-            Open created market {shortHex(createdMarketAddress)}
-          </a>
+          <div className="adminCreatedBanner">
+            Market created ·{" "}
+            <a href={`/markets/${createdMarketAddress}`}>open {shortHex(createdMarketAddress)}</a>
+            {txHash ? (
+              <>
+                {" · "}
+                <a href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank" rel="noreferrer" className="mono">
+                  tx {txHash.slice(0, 6)} ↗
+                </a>
+              </>
+            ) : null}
+          </div>
         ) : null}
-        <p className="settlementNote">{busy ? "Submitting backend transaction..." : status}</p>
-        {txHash ? (
-          <a className="txLink" href={`${arcDeployment.explorerUrl}/tx/${txHash}`} target="_blank">
-            View tx <ExternalLink size={13} aria-hidden />
-          </a>
-        ) : null}
+        {status && status !== "Ready" ? <p className="settlementNote">{status}</p> : null}
       </div>
 
-      <details className="adminResolverDetails">
-        <summary className="adminResolverSummary">Advanced · Resolver tools</summary>
-        <div className="adminResolverBody">
-          <p className="adminCreateLead adminResolverNote">
-            Manual resolve / cancel / settle — usually auto-resolve handles BTC & weather.
-          </p>
-          <select aria-label="Arc demo market" value={selectedMarket} onChange={(event) => setSelectedMarket(event.target.value)}>
-            {adminMarkets.map((market) => (
-              <option key={market.market} value={market.market}>
-                {marketOptionLabel(market)}
-              </option>
-            ))}
-          </select>
-          <div className="adminSelectedMarket">
-            <span>Selected market</span>
-            <strong>{selectedMarketConfig ? marketDisplayName(selectedMarketConfig) : shortHex(selectedMarket)}</strong>
-            <small>{shortHex(selectedMarket)}</small>
-          </div>
-          <div className="adminStatusRow">
-            <span>Market status</span>
-            <strong>{selectedStatus === null ? "Reading..." : marketStatuses[selectedStatus] ?? `Unknown ${selectedStatus}`}</strong>
-            <button className="miniLinkButton" disabled={busy} onClick={() => void refreshMarketStatus()} type="button">
-              Refresh
+      <div className="adminCreatePanel">
+        <button
+          type="button"
+          className="adminResolverToggle"
+          onClick={() => setResolverOpen((open) => !open)}
+        >
+          <span className="adminCardTitle">Resolver tools (manual override)</span>
+          <span className="adminResolverToggleHint">{resolverOpen ? "Hide ▲" : "Show ▼"}</span>
+        </button>
+
+        {resolverOpen ? (
+          <div className="adminResolverBody">
+            <label className="adminField">
+              <span>Market address</span>
+              <input
+                className="mono"
+                value={resolverAddress}
+                placeholder={selectedMarket ? shortHex(selectedMarket) : "0x6644…e900"}
+                onChange={(event) => setResolverAddress(event.target.value)}
+              />
+            </label>
+            <div className="adminForceGrid">
+              <button
+                type="button"
+                className={`adminForceBtn yes ${resolveOutcome === "YES" ? "isActive" : ""}`}
+                onClick={() => setResolveOutcome("YES")}
+              >
+                Force YES
+              </button>
+              <button
+                type="button"
+                className={`adminForceBtn no ${resolveOutcome === "NO" ? "isActive" : ""}`}
+                onClick={() => setResolveOutcome("NO")}
+              >
+                Force NO
+              </button>
+            </div>
+            <button
+              type="button"
+              className="adminForceResolve"
+              disabled={busy || !resolveOutcome}
+              onClick={() => void forceResolveSelected()}
+            >
+              {busy ? "Resolving…" : "Force resolve"}
             </button>
           </div>
-          <div className="adminActions">
-            <button className="iconButton adminActionButton yesAction" disabled={busy || (selectedStatus !== null && selectedStatus !== 1 && selectedStatus !== 2)} onClick={() => void resolve(1)} type="button">
-              <Check size={18} aria-hidden />
-              Resolve YES
-            </button>
-            <button className="iconButton adminActionButton noAction" disabled={busy || (selectedStatus !== null && selectedStatus !== 1 && selectedStatus !== 2)} onClick={() => void resolve(2)} type="button">
-              <Check size={18} aria-hidden />
-              Resolve NO
-            </button>
-            <button className="iconButton adminActionButton referenceAction" disabled={busy || (selectedStatus !== null && selectedStatus !== 1 && selectedStatus !== 2)} onClick={() => void resolveFromReferenceFeed()} type="button">
-              <RadioTower size={18} aria-hidden />
-              Resolve from live feed now
-            </button>
-            <button className="iconButton adminActionButton cancelAction" disabled={busy || selectedStatus === 3 || selectedStatus === 5} onClick={() => void cancel()} type="button">
-              <Ban size={18} aria-hidden />
-              Cancel market
-            </button>
-            <button className="iconButton adminActionButton createAction" disabled={busy || (selectedStatus !== 3 && selectedStatus !== 4)} onClick={() => void settleSelectedMarket()} type="button">
-              <Check size={18} aria-hidden />
-              Settle market tickets
-            </button>
-            <button className="iconButton adminActionButton cancelAction" disabled={busy} onClick={() => void hideSelectedMarket()} type="button">
-              <Trash2 size={18} aria-hidden />
-              Hide market
-            </button>
-            <button className="iconButton adminActionButton createAction" disabled={busy} onClick={() => void resetBaseMarkets()} type="button">
-              <RotateCcw size={18} aria-hidden />
-              Reset demo list
-            </button>
-          </div>
-        </div>
-      </details>
+        ) : null}
+      </div>
     </section>
   );
 }

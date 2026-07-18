@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AppProviders } from "@/components/AppProviders";
 import { MarketCycleHeartbeat } from "@/components/MarketCycleHeartbeat";
+import { TopNav } from "@/components/TopNav";
 import { TxToast } from "@/components/TxToast";
 import { WalletConnectButton } from "@/components/WalletConnectButton";
 import { arcDeployment } from "@/lib/onchain";
@@ -49,12 +50,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 </span>
               </Link>
 
-              <nav className="topNav" aria-label="Main navigation">
-                <Link href="/markets">Markets</Link>
-                <Link href="/markets">Quick trade</Link>
-                <Link href="/lp">LP</Link>
-                <Link href="/portfolio">Portfolio</Link>
-              </nav>
+              <TopNav />
 
               <div className="headerActions">
                 <a className="networkPill" href={explorer} target="_blank" rel="noreferrer">
