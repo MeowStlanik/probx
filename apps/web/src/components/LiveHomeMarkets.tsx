@@ -3,18 +3,19 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { MarketCard } from "@/components/MarketCard";
-import { MarketLifecycleStage } from "@/components/MarketLifecycleStage";
 import { apiUrl } from "@/lib/api";
 import type { Market } from "@/lib/types";
 
 type Props = {
   initial: Market[];
+  /** Home live-markets band (full-width tint section) */
+  band?: boolean;
 };
 
 /**
  * Client-polled open markets so home stays live.
  */
-export function LiveHomeMarkets({ initial }: Props) {
+export function LiveHomeMarkets({ initial, band = false }: Props) {
   const [markets, setMarkets] = useState(initial);
 
   const pull = useCallback(async () => {
@@ -46,47 +47,24 @@ export function LiveHomeMarkets({ initial }: Props) {
     return active.length ? active : [];
   }, [markets]);
 
-  const featured = useMemo(() => pickFeatured(live.length ? live : markets), [live, markets]);
-
   return (
-    <>
-      {featured ? <MarketLifecycleStage market={featured} className="homeLifecycle" /> : null}
+    <section className={band ? "homeLiveMarkets" : "marketStack homeMarketsOnly"}>
+      <div className="sectionHeader sectionHeaderTight">
+        <h2>Live markets</h2>
+        <Link href="/markets">View all markets →</Link>
+      </div>
 
-      <section className="marketStack homeMarketsOnly">
-        <div className="sectionHeader">
-          <div>
-            <h2>Live markets</h2>
-          </div>
-          <Link href="/markets">View all markets →</Link>
+      {live.length ? (
+        <div className="cardGrid">
+          {live.slice(0, 6).map((market) => (
+            <MarketCard key={market.id} market={market} />
+          ))}
         </div>
-
-        {live.length ? (
-          <div className="cardGrid">
-            {live.map((market) => (
-              <MarketCard key={market.id} market={market} />
-            ))}
-          </div>
-        ) : (
-          <div className="marketsEmptyState">
-            <strong>No open markets</strong>
-            <p>Next BTC / London window opens as the cycle rolls (~1–2 min). Pulling live status…</p>
-            <Link className="iconButton secondary" href="/markets">
-              View markets
-            </Link>
-          </div>
-        )}
-      </section>
-    </>
-  );
-}
-
-function pickFeatured(markets: Market[]): Market | undefined {
-  if (!markets.length) return undefined;
-  const open = markets.filter((m) => m.status === "OPEN");
-  const pool = open.length ? open : markets;
-  return (
-    pool.find((m) => m.demoRole === "btc_price") ??
-    pool.find((m) => m.demoRole === "london_weather") ??
-    pool[0]
+      ) : (
+        <div className="emptyStatePanel">
+          No open markets right now. Next BTC / London window opens as the cycle rolls (~1–2 min).
+        </div>
+      )}
+    </section>
   );
 }
