@@ -17,8 +17,11 @@ interface Props {
   onQuickTrade?: () => void | Promise<void>;
   quickTradeBusy?: boolean;
   onConnectBrowser: () => void;
-  onSendCode: (email: string) => void;
-  onVerifyCode: (code: string) => void;
+  onSendCode: (email: string) => Promise<boolean>;
+  onVerifyCode: (email: string, code: string) => Promise<boolean>;
+  onClearOtp?: (email?: string) => void;
+  walletBusy?: boolean;
+  walletError?: string | null;
   onDisconnect: () => void;
   onFixNetwork: () => void;
   onDeposit: (amount: number) => void;
@@ -166,9 +169,12 @@ export function Header(props: Props) {
           </Link>
           <WalletPopover
             wallet={props.wallet}
+            busy={props.walletBusy}
+            error={props.walletError}
             onConnectBrowser={props.onConnectBrowser}
             onSendCode={props.onSendCode}
             onVerifyCode={props.onVerifyCode}
+            onClearOtp={props.onClearOtp}
             onDisconnect={props.onDisconnect}
             onFixNetwork={props.onFixNetwork}
             onDeposit={() => props.onDeposit(0)}

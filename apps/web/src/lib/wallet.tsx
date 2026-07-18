@@ -69,12 +69,11 @@ function readOtpChallenge(email: string): string {
       return "";
     }
   };
+  // Only the exact email key — never reuse another address's challenge via "last".
   for (const storage of [sessionStorage, localStorage]) {
     try {
       const exact = tryParse(storage.getItem(otpSessionKey(emailNorm)));
       if (exact) return exact;
-      const last = tryParse(storage.getItem(OTP_LAST_KEY));
-      if (last) return last;
     } catch {
       // ignore
     }
@@ -82,11 +81,20 @@ function readOtpChallenge(email: string): string {
   return "";
 }
 
-function clearOtpChallenge(email: string): void {
-  const emailNorm = email.trim().toLowerCase();
+function clearOtpChallenge(email?: string): void {
   for (const storage of [sessionStorage, localStorage]) {
     try {
-      storage.removeItem(otpSessionKey(emailNorm));
+      if (email) {
+        storage.removeItem(otpSessionKey(email));
+      } else {
+        // Wipe every probx.otp.* key + last challenge.
+        const keys: string[] = [];
+        for (let i = 0; i < storage.length; i++) {
+          const k = storage.key(i);
+          if (k && (k.startsWith(OTP_STORAGE_PREFIX) || k === OTP_LAST_KEY)) keys.push(k);
+        }
+        for (const k of keys) storage.removeItem(k);
+      }
       storage.removeItem(OTP_LAST_KEY);
     } catch {
       // ignore
@@ -134,6 +142,8 @@ type WalletContextValue = {
   verifyEmailOtp: (email: string, code: string, otpToken?: string) => Promise<`0x${string}` | null>;
   /** @deprecated use requestEmailOtp + verifyEmailOtp */
   connectEmail: (email: string) => Promise<`0x${string}` | null>;
+  /** Drop cached OTP challenge (wrong email / resend / cancel). */
+  clearEmailOtp: (email?: string) => void;
   disconnect: () => void;
   ensureArcChain: () => Promise<void>;
   refreshBalance: () => Promise<void>;
@@ -446,9 +456,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     return null;
   }, []);
 
+  const clearEmailOtp = useCallback((emailInput?: string) => {
+    clearOtpChallenge(emailInput?.trim().toLowerCase() || undefined);
+  }, []);
+
   const disconnect = useCallback(() => {
     writeConnectedFlag(false);
     clearEmbeddedSession();
+    clearOtpChallenge();
     setEmbedded(null);
     setEmail(null);
     setMode(null);
@@ -656,6 +671,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     requestEmailOtp,
     verifyEmailOtp,
     connectEmail,
+    clearEmailOtp,
     disconnect,
     ensureArcChain,
     refreshBalance: () => refreshBalance(address),
@@ -676,6 +692,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     requestEmailOtp,
     verifyEmailOtp,
     connectEmail,
+    clearEmailOtp,
     disconnect,
     ensureArcChain,
     refreshBalance,

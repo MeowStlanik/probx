@@ -28,9 +28,12 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
     address,
     usdcBalance,
     wrongNetwork,
+    connecting,
+    error: walletError,
     connect,
     requestEmailOtp,
     verifyEmailOtp,
+    clearEmailOtp,
     disconnect,
     ensureArcChain
   } = useWallet();
@@ -98,20 +101,44 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
         quickTradeHref={quickTradeHref}
         onQuickTrade={onQuickTrade}
         quickTradeBusy={quickBusy}
+        walletBusy={connecting}
+        walletError={walletError}
         onConnectBrowser={() => {
           void connect();
         }}
-        onSendCode={(email) => {
-          setPendingEmail(email);
-          void (async () => {
-            const res = await requestEmailOtp(email.trim());
-            setOtpToken(res?.otpToken ?? null);
-          })();
+        onSendCode={async (email) => {
+          const normalized = email.trim().toLowerCase();
+          setPendingEmail(normalized);
+          setOtpToken(null);
+          clearEmailOtp(normalized);
+          const res = await requestEmailOtp(normalized);
+          if (!res?.otpToken) {
+            setOtpToken(null);
+            return false;
+          }
+          setOtpToken(res.otpToken);
+          return true;
         }}
-        onVerifyCode={(code) => {
-          void verifyEmailOtp(pendingEmail.trim(), code, otpToken ?? undefined);
+        onVerifyCode={async (email, code) => {
+          const normalized = (email || pendingEmail).trim().toLowerCase();
+          const addr = await verifyEmailOtp(normalized, code, otpToken ?? undefined);
+          if (addr) {
+            setOtpToken(null);
+            setPendingEmail("");
+            return true;
+          }
+          return false;
         }}
-        onDisconnect={() => disconnect()}
+        onClearOtp={(email) => {
+          setOtpToken(null);
+          if (email) setPendingEmail("");
+          clearEmailOtp(email);
+        }}
+        onDisconnect={() => {
+          setOtpToken(null);
+          setPendingEmail("");
+          disconnect();
+        }}
         onFixNetwork={() => {
           void ensureArcChain();
         }}
