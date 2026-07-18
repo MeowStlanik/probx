@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { type ReactNode, useEffect, useState } from "react";
 import { theme } from "../theme";
 import type { ActivityRow, LoadState, MarketDetail, Side } from "../types";
@@ -406,9 +407,15 @@ export function MarketDetailView({
               {!receipt ? (
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                    <h2 style={{ fontSize: 16, fontWeight: 600, color: theme.color.ink, margin: 0 }}>Buy ticket</h2>
+                    <h2 style={{ fontSize: 16, fontWeight: 600, color: theme.color.ink, margin: 0 }}>
+                      {market.stage === "RESOLVE" ? "Round finished" : "Buy ticket"}
+                    </h2>
                     <span style={{ fontSize: 11, color: theme.color.muted, fontFamily: theme.font.mono }}>
-                      {tradingOpen ? "max loss = stake" : `stage · ${market.stage}`}
+                      {tradingOpen
+                        ? "max loss = stake"
+                        : market.stage === "RESOLVE"
+                          ? "resolved"
+                          : `stage · ${market.stage}`}
                     </span>
                   </div>
                   {!tradingOpen ? (
@@ -417,28 +424,80 @@ export function MarketDetailView({
                         marginTop: 16,
                         padding: "18px 14px",
                         borderRadius: 12,
-                        background: theme.color.tint,
-                        border: `1px solid ${theme.color.border}`,
+                        background: market.stage === "RESOLVE" ? theme.color.blueSoft : theme.color.tint,
+                        border: `1px solid ${
+                          market.stage === "RESOLVE" ? theme.color.border : theme.color.border
+                        }`,
                         textAlign: "center"
                       }}
                     >
-                      <div style={{ fontSize: 14, fontWeight: 600, color: theme.color.ink }}>
-                        {market.stage === "LOCK"
-                          ? "Betting is locked"
-                          : market.stage === "OBSERVE"
-                            ? "Observation in progress"
-                            : "This market is not open for tickets"}
-                      </div>
-                      <p style={{ margin: "8px 0 0", fontSize: 12.5, color: theme.color.muted, lineHeight: 1.45 }}>
-                        {market.stage === "LOCK"
-                          ? "New tickets are closed. Wait for observation and resolve — open positions settle afterward."
-                          : market.stage === "OBSERVE"
-                            ? "The feed is tracking the observation window. You can’t place new bets until the next open market."
-                            : "Tickets can only be bought while the market is in Open."}
-                      </p>
-                      <div style={{ marginTop: 12, fontFamily: theme.font.mono, fontSize: 13, color: theme.color.ink }}>
-                        Next step in {fmtClock(market.secondsToNextStage)}
-                      </div>
+                      {market.stage === "RESOLVE" ? (
+                        <>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: theme.color.ink }}>
+                            Outcome &amp; claim are in Portfolio
+                          </div>
+                          <p
+                            style={{
+                              margin: "8px 0 0",
+                              fontSize: 12.5,
+                              color: theme.color.muted,
+                              lineHeight: 1.45
+                            }}
+                          >
+                            This market is done. Check your tickets for the result and claim any payout there.
+                          </p>
+                          <Link
+                            href="/portfolio"
+                            style={{
+                              display: "inline-block",
+                              marginTop: 14,
+                              background: theme.color.blue,
+                              color: "#fff",
+                              borderRadius: 9,
+                              padding: "10px 16px",
+                              fontSize: 13,
+                              fontWeight: 600,
+                              textDecoration: "none"
+                            }}
+                          >
+                            Open Portfolio →
+                          </Link>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: theme.color.ink }}>
+                            {market.stage === "LOCK"
+                              ? "Betting is locked"
+                              : market.stage === "OBSERVE"
+                                ? "Observation in progress"
+                                : "This market is not open for tickets"}
+                          </div>
+                          <p
+                            style={{
+                              margin: "8px 0 0",
+                              fontSize: 12.5,
+                              color: theme.color.muted,
+                              lineHeight: 1.45
+                            }}
+                          >
+                            {market.stage === "LOCK"
+                              ? "New tickets are closed. Wait for observation and resolve — open positions settle afterward."
+                              : market.stage === "OBSERVE"
+                                ? "The feed is tracking the observation window. You can’t place new bets until the next open market."
+                                : "Tickets can only be bought while the market is in Open."}
+                          </p>
+                          <div
+                            style={{
+                              marginTop: 12,
+                              fontFamily: theme.font.mono,
+                              fontSize: 13,
+                              color: theme.color.ink
+                            }}
+                          >
+                            Next step in {fmtClock(market.secondsToNextStage)}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : null}
                   <div
