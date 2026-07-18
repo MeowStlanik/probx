@@ -1,8 +1,9 @@
-import { type NextRequest, NextResponse } from "next/server";
+import { after, type NextRequest, NextResponse } from "next/server";
 import { dispatchApiRequest } from "../../../../../api/src/dispatch";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** Allow resolve/create txs to finish after the fast 200 to external pingers. */
 export const maxDuration = 60;
 
 /** Survives multi-instance Vercel: bind OTP challenge to the browser. */
@@ -27,10 +28,82 @@ function cookieOptions(request: NextRequest, maxAge: number) {
   };
 }
 
+function isCronPath(apiPath: string): boolean {
+  return apiPath === "/api/cron/auto-resolve" || apiPath === "/api/cron/market-cycle";
+}
+
+/**
+ * Cron endpoints often run 20–50s (Arc RPC + create/resolve).
+ * External pingers (cron-job.org free) time out ~30s → report Timeout even when
+ * work would succeed. Auth-check sync, then finish work in `after()` so the
+ * client gets 200 in <1s while Vercel keeps the isolate alive up to maxDuration.
+ */
+async function handleCron(request: NextRequest, apiPath: string) {
+  const headers = {
+    authorization: request.headers.get("authorization") ?? undefined,
+    "x-session-email": request.headers.get("x-session-email") ?? undefined,
+    "x-session-token": request.headers.get("x-session-token") ?? undefined
+  };
+
+  // Auth-only probe: wrong secret must still 401 before we ack.
+  const expected = (process.env.CRON_SECRET || process.env.VERCEL_CRON_SECRET || "").trim();
+  if (apiPath === "/api/cron/auto-resolve" && expected) {
+    const q = request.nextUrl.searchParams;
+    const fromQuery = q.get("secret") || q.get("cron_secret");
+    const auth = (headers.authorization ?? "").trim();
+    const ok = fromQuery === expected || auth === `Bearer ${expected}`;
+    if (!ok) {
+      return NextResponse.json(
+        {
+          error:
+            "Cron authorization required. Set CRON_SECRET on the server and pass ?secret=… or Authorization: Bearer …"
+        },
+        { status: 401, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+  }
+
+  const method = request.method;
+  const searchParams = request.nextUrl.searchParams;
+
+  after(async () => {
+    try {
+      const result = await dispatchApiRequest({
+        method,
+        path: apiPath,
+        searchParams,
+        body: {},
+        headers
+      });
+      if (result.status >= 400) {
+        console.error(`[cron] ${apiPath} finished with ${result.status}`, result.body);
+      } else {
+        console.log(`[cron] ${apiPath} ok`, result.body);
+      }
+    } catch (error) {
+      console.error(`[cron] ${apiPath} failed`, error);
+    }
+  });
+
+  return NextResponse.json(
+    {
+      ok: true,
+      accepted: true,
+      path: apiPath,
+      note: "Work continues in background (up to maxDuration). External pingers should treat 200 as success."
+    },
+    { status: 200, headers: { "Cache-Control": "no-store" } }
+  );
+}
+
 async function handle(request: NextRequest, context: RouteContext) {
   const { path: segments = [] } = await context.params;
   const joined = segments.length ? segments.join("/") : "";
   const apiPath = joined ? `/api/${joined}` : "/api";
+
+  if (isCronPath(apiPath) && (request.method === "GET" || request.method === "POST")) {
+    return handleCron(request, apiPath);
+  }
 
   let body: Record<string, unknown> = {};
   if (request.method !== "GET" && request.method !== "HEAD") {

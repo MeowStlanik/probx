@@ -73,6 +73,14 @@ https://probx-rosy.vercel.app/api/cron/market-cycle?secret=YOUR_CRON_SECRET
 
 ---
 
+## Timeouts (cron-job.org)
+
+Resolve + create markets can take **20–50s** on Arc. Free pingers often abort at **~30s** and email “Timeout” even when Vercel would finish.
+
+The production route **acks HTTP 200 in &lt;1s** and continues work in the background (`after()` + `maxDuration=60`). After deploy, cron-job.org should show **200 OK**, not Timeout.
+
+If your plan has a request timeout setting, set it to **60s** anyway.
+
 ## Quick smoke test
 
 ```bash
@@ -80,10 +88,13 @@ https://probx-rosy.vercel.app/api/cron/market-cycle?secret=YOUR_CRON_SECRET
 curl -sS -o /dev/null -w "%{http_code}\n" \
   https://probx-rosy.vercel.app/api/cron/auto-resolve
 
-# should be 200 with secret
-curl -sS -H "Authorization: Bearer $CRON_SECRET" \
-  https://probx-rosy.vercel.app/api/cron/auto-resolve | head -c 400
+# should be 200 with secret (fast ack; work continues on server)
+curl -sS -w "\nHTTP %{http_code} time %{time_total}s\n" \
+  -H "Authorization: Bearer $CRON_SECRET" \
+  "https://probx-rosy.vercel.app/api/cron/auto-resolve?secret=$CRON_SECRET"
 ```
+
+Expect JSON like `{ "ok": true, "accepted": true, ... }` in under ~2 seconds.
 
 ---
 
