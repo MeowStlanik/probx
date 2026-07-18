@@ -61,6 +61,8 @@ export interface LpLedgerRow {
 export interface Position {
   id: string;
   market: string;
+  /** Deep-link to /markets/[id] when known. */
+  marketId?: string;
   side: Side;
   stake: string;
   boost: string;

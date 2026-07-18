@@ -140,10 +140,10 @@ export function MarketsListView({ state, markets, resolvedBanner, onSelectMarket
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 520px))",
-              gap: 22,
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 380px))",
+              gap: 18,
               justifyContent: "center",
-              maxWidth: 1100,
+              maxWidth: 860,
               margin: "0 auto"
             }}
           >

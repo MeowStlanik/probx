@@ -118,7 +118,16 @@ export function Header(props: Props) {
           </Link>
         </nav>
         <div style={{ flex: 1 }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexShrink: 0,
+            flexWrap: "wrap",
+            justifyContent: "flex-end"
+          }}
+        >
           <a
             href="https://testnet.arcscan.app"
             target="_blank"

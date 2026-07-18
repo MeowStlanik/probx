@@ -136,13 +136,14 @@ export function HomeView({
             </div>
           </div>
 
-          {/* Hero market — wide enough for full Open/Lock/Pause/Observe/Resolve */}
-          <div style={{ flex: "1 1 520px", minWidth: 400, maxWidth: 600 }}>
+          {/* Hero market card */}
+          <div style={{ flex: "1 1 380px", minWidth: 280, maxWidth: 460 }}>
             <MarketCard market={heroMarket} variant="hero" onClick={() => onSelectMarket(heroMarket.id)} />
           </div>
         </div>
       </section>
 
+      {/* Stats strip */}
       <section
         style={{
           background: theme.color.tint,
@@ -157,7 +158,7 @@ export function HomeView({
             margin: "0 auto",
             padding: "0 24px",
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
+            gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))",
             gap: 24
           }}
         >
@@ -174,7 +175,7 @@ export function HomeView({
               <div
                 style={{
                   fontFamily: theme.font.mono,
-                  fontSize: 28,
+                  fontSize: 26,
                   fontWeight: 600,
                   color: theme.color.ink,
                   marginTop: 4
@@ -187,14 +188,8 @@ export function HomeView({
         </div>
       </section>
 
-      <section
-        style={{
-          background: theme.color.tint,
-          borderTop: `1px solid ${theme.color.border}`,
-          borderBottom: `1px solid ${theme.color.border}`,
-          padding: "56px 0"
-        }}
-      >
+      {/* Live markets on white — not a second tint block */}
+      <section style={{ background: "#fff", padding: "56px 0 72px" }}>
         <div style={{ maxWidth: theme.layout.maxWidth, margin: "0 auto", padding: "0 24px" }}>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 18 }}>
             <h2 style={{ fontSize: 20, fontWeight: 600, color: theme.color.ink, margin: 0 }}>Live markets</h2>
@@ -202,12 +197,11 @@ export function HomeView({
               View all markets →
             </Link>
           </div>
-          {/* BTC + weather only — max two cards, centered; wider for full stage names */}
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 420px), 520px))",
-              gap: 22,
+              gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 300px), 380px))",
+              gap: 18,
               justifyContent: "center"
             }}
           >

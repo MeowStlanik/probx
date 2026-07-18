@@ -1,17 +1,18 @@
 import { theme } from "../theme";
 import type { MarketSummary } from "../types";
 
-/** Design segment widths — labels MUST match these or the marker looks “under the wrong stage”. */
+/**
+ * Lifecycle segments (no Pause — Lock covers the whole post-open pre-observe window).
+ * OPEN 50% · LOCK 14% · OBSERVE 31% · RESOLVE 5%
+ */
 export const LIFECYCLE_SEGMENTS = [
   { key: "OPEN" as const, label: "Open", width: 50 },
-  { key: "LOCK" as const, label: "Lock", width: 6 },
-  { key: "PAUSE" as const, label: "Pause", width: 8 },
+  { key: "LOCK" as const, label: "Lock", width: 14 },
   { key: "OBSERVE" as const, label: "Observe", width: 31 },
   { key: "RESOLVE" as const, label: "Resolve", width: 5 }
 ];
 
-// Lifecycle bar: OPEN 50% · LOCK 6% · PAUSE 8% · OBSERVE 31% · RESOLVE 5% + marker.
-export function LifecycleBar({ nowPct, height = 6 }: { nowPct: number; height?: number }) {
+export function LifecycleBar({ nowPct, height = 5 }: { nowPct: number; height?: number }) {
   return (
     <div
       style={{
@@ -36,53 +37,50 @@ export function LifecycleBar({ nowPct, height = 6 }: { nowPct: number; height?: 
       <div
         style={{
           position: "absolute",
-          top: -4,
-          bottom: -4,
-          width: 3,
+          top: -3,
+          bottom: -3,
+          width: 2,
           background: theme.color.blue,
           borderRadius: 2,
           left: `${Math.min(100, Math.max(0, nowPct))}%`,
-          boxShadow: "0 0 0 3px rgba(39,117,202,.16)",
-          transform: "translateX(-1.5px)"
+          boxShadow: "0 0 0 3px rgba(39,117,202,.14)",
+          transform: "translateX(-1px)"
         }}
       />
     </div>
   );
 }
 
-/**
- * Full stage names under the bar — same flex % as LifecycleBar so the marker
- * sits over the correct word. Narrow bands (Lock/Pause/Resolve) use slightly
- * tighter type; card min-width keeps full words readable without stacking.
- */
 export function LifecycleLabels({ active }: { active?: MarketSummary["stage"] }) {
+  // Map legacy PAUSE → LOCK highlight
+  const activeKey = active === "PAUSE" ? "LOCK" : active;
   return (
     <div
       style={{
         display: "flex",
-        marginTop: 10,
+        marginTop: 8,
         width: "100%",
         userSelect: "none",
-        minHeight: 18
+        minHeight: 16
       }}
       role="list"
       aria-label="Market lifecycle stages"
     >
       {LIFECYCLE_SEGMENTS.map((seg) => {
-        const isActive = active === seg.key;
+        const isActive = activeKey === seg.key;
         const tight = seg.width <= 8;
         return (
           <span
             key={seg.key}
             role="listitem"
-            title={`${seg.label} · ${seg.width}% of cycle`}
+            title={seg.label}
             style={{
               flex: `0 0 ${seg.width}%`,
               maxWidth: `${seg.width}%`,
               minWidth: 0,
               boxSizing: "border-box",
               textAlign: "center",
-              fontSize: tight ? 9.5 : 11,
+              fontSize: tight ? 10 : 11,
               lineHeight: "16px",
               fontWeight: isActive ? 700 : 500,
               color: isActive ? theme.color.ink : theme.color.muted,
@@ -112,22 +110,22 @@ function fmtClock(sec: number) {
 }
 
 function phaseVerb(stage: MarketSummary["stage"]) {
-  return { OPEN: "locks in", LOCK: "pauses in", PAUSE: "observes in", OBSERVE: "resolves in", RESOLVE: "reopens in" }[
-    stage
+  const s = stage === "PAUSE" ? "LOCK" : stage;
+  return { OPEN: "locks in", LOCK: "observes in", OBSERVE: "resolves in", RESOLVE: "reopens in", PAUSE: "observes in" }[
+    s
   ];
 }
 
 const stagePillTone: Record<MarketSummary["stage"], { bg: string; fg: string }> = {
   OPEN: { bg: theme.color.yesSoft, fg: theme.color.yes },
   LOCK: { bg: theme.color.blueSoft, fg: theme.color.blue },
-  PAUSE: { bg: theme.color.tint, fg: theme.color.muted },
+  PAUSE: { bg: theme.color.blueSoft, fg: theme.color.blue },
   OBSERVE: { bg: theme.color.purpleSoft, fg: theme.color.purple },
   RESOLVE: { bg: theme.color.tint, fg: theme.color.muted }
 };
 
 /**
- * @param variant `hero` — home featured card (stage labels, no volume bar, larger type).
- *                `grid` — markets list / live grid (volume bar, compact).
+ * @param variant `hero` — home featured card · `grid` — markets list
  */
 export function MarketCard({
   market,
@@ -139,7 +137,8 @@ export function MarketCard({
   variant?: "hero" | "grid";
 }) {
   const isHero = variant === "hero";
-  const pill = stagePillTone[market.stage];
+  const stage = market.stage === "PAUSE" ? "LOCK" : market.stage;
+  const pill = stagePillTone[stage];
   const yesSelected = market.yesPct >= market.noPct;
 
   return (
@@ -151,7 +150,7 @@ export function MarketCard({
         border: `1px solid ${theme.color.border}`,
         borderRadius: theme.radius.xl,
         boxShadow: theme.shadow.card,
-        padding: isHero ? "24px 26px" : "22px 24px",
+        padding: isHero ? "20px 22px" : 20,
         display: "flex",
         flexDirection: "column",
         height: "100%",
@@ -189,7 +188,7 @@ export function MarketCard({
             padding: "3px 8px"
           }}
         >
-          {market.stage}
+          {stage}
         </span>
         <span style={{ fontSize: 12, color: theme.color.muted, marginLeft: "auto" }}>{market.category}</span>
       </div>
@@ -238,22 +237,21 @@ export function MarketCard({
         </div>
       </div>
 
-      {/* Lifecycle: time-true bar + full equal-width stage names */}
-      <div style={{ marginTop: isHero ? 22 : 20 }}>
-        <LifecycleBar nowPct={market.nowPct} height={isHero ? 8 : 7} />
-        <LifecycleLabels active={market.stage} />
+      <div style={{ marginTop: isHero ? 18 : 16 }}>
+        <LifecycleBar nowPct={market.nowPct} height={isHero ? 6 : 5} />
+        <LifecycleLabels active={stage} />
       </div>
 
       <div
         style={{
-          marginTop: isHero ? 16 : 14,
+          marginTop: isHero ? 14 : 10,
           fontSize: 12,
           color: theme.color.muted,
           fontFamily: theme.font.mono,
           flex: 1
         }}
       >
-        {market.stats} · {phaseVerb(market.stage)} {fmtClock(market.secondsToNextStage)}
+        {market.stats} · {phaseVerb(stage)} {fmtClock(market.secondsToNextStage)}
       </div>
     </div>
   );

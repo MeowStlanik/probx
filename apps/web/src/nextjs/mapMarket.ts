@@ -4,8 +4,9 @@ import type { MarketStage } from "./theme";
 import type { MarketDetail, MarketSummary, Position } from "./types";
 
 /**
- * Lifecycle from wall-clock timestamps (design bar: OPEN 50% · LOCK 6% · PAUSE 8% · OBSERVE 31% · RESOLVE 5%).
- * On-chain status alone lags a few seconds after lock — bar + pill must track time, not only RPC status.
+ * Lifecycle from wall-clock timestamps.
+ * Bar: OPEN 50% · LOCK 14% · OBSERVE 31% · RESOLVE 5% (no separate Pause).
+ * On-chain status alone lags after lock — bar + pill track wall clock.
  */
 export function deriveLifecycle(
   market: Market,
@@ -33,17 +34,10 @@ export function deriveLifecycle(
     return { stage: "OPEN", nowPct: t * 50, secondsToNextStage: sec(lock) };
   }
 
-  // LOCK + PAUSE share lock → observationStart (50–64%)
-  // LOCK 6% of full bar, PAUSE 8% → split window 6:8
+  // LOCK: lock → observationStart (50–64%) — includes former "pause" window
   if (now < obsStart) {
-    const span = Math.max(1, obsStart - lock);
-    const lockEnd = lock + (span * 6) / 14;
-    if (now < lockEnd) {
-      const t = clamp01((now - lock) / Math.max(1, lockEnd - lock));
-      return { stage: "LOCK", nowPct: 50 + t * 6, secondsToNextStage: sec(obsStart) };
-    }
-    const t = clamp01((now - lockEnd) / Math.max(1, obsStart - lockEnd));
-    return { stage: "PAUSE", nowPct: 56 + t * 8, secondsToNextStage: sec(obsStart) };
+    const t = clamp01((now - lock) / Math.max(1, obsStart - lock));
+    return { stage: "LOCK", nowPct: 50 + t * 14, secondsToNextStage: sec(obsStart) };
   }
 
   // OBSERVE: observationStart → observationEnd (64–95%)
@@ -152,23 +146,34 @@ export function ticketToPosition(ticket: Ticket): Position {
     status = "Won · unclaimed";
   } else if (ticket.result === "WIN" && !ticket.claimable && ticket.status === "SETTLED") {
     status = "Claimed";
+  } else if (ticket.result === "REFUND" && ticket.claimable) {
+    status = "Won · unclaimed";
   } else if (ticket.result === "REFUND") {
-    status = ticket.claimable ? "Won · unclaimed" : "Claimed";
+    status = "Claimed";
   } else if (ticket.status === "SETTLED") {
     status = "Claimed";
-  } else if (ticket.claimable) {
+  } else if (ticket.claimable && ticket.result === "WIN") {
     status = "Won · unclaimed";
   }
+
+  // Only wins/refunds with money to claim — never a green Claim on a loss.
+  const canClaim =
+    Boolean(ticket.claimable) && (ticket.result === "WIN" || ticket.result === "REFUND");
 
   return {
     id: ticket.id,
     market: ticket.marketQuestion,
+    marketId: ticket.marketId,
     side: ticket.outcome,
     stake: `${ticket.riskAmount.toFixed(2)} USDC`,
     boost: `${ticket.boost.toFixed(1)}×`,
-    payout: `${ticket.payout.toFixed(2)} USDC`,
+    // For losses show $0.00 claimable payout, not the theoretical max payout
+    payout:
+      ticket.result === "LOSS"
+        ? "0.00 USDC"
+        : `${(ticket.result === "REFUND" ? ticket.riskAmount : ticket.payout).toFixed(2)} USDC`,
     status,
-    canClaim: Boolean(ticket.claimable)
+    canClaim
   };
 }
 

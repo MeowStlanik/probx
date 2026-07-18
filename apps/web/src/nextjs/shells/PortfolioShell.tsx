@@ -11,12 +11,14 @@ import type { LoadState, Position } from "../types";
 import { PortfolioView } from "../views/PortfolioView";
 
 /**
- * Wires PortfolioView → fetchUserTickets + settleTicket (same as PortfolioClient).
+ * Wires PortfolioView → fetchUserTickets + settleTicket (wins/refunds only).
  */
 export function PortfolioShell() {
   const { address, ready, getWalletClient, publicClient, ensureArcChain } = useWallet();
   const [state, setState] = useState<LoadState>("loading");
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [claimingId, setClaimingId] = useState<string | null>(null);
+  const [claimMessage, setClaimMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!ready) return;
@@ -25,7 +27,7 @@ export function PortfolioShell() {
       setState("live");
       return;
     }
-    setState("loading");
+    setState((s) => (s === "live" ? s : "loading"));
     try {
       const next = await fetchUserTickets(address);
       setTickets(next);
@@ -44,45 +46,59 @@ export function PortfolioShell() {
 
   const positions: Position[] = useMemo(() => tickets.map(ticketToPosition), [tickets]);
 
-  const openCount = tickets.filter((t) => t.status === "OPEN").length;
+  const openCount = tickets.filter((t) => t.status === "OPEN" && !t.result).length;
   const totalStaked = tickets
-    .filter((t) => t.status === "OPEN")
+    .filter((t) => t.status === "OPEN" && !t.result)
     .reduce((s, t) => s + t.riskAmount, 0);
   const claimable = tickets
-    .filter((t) => t.claimable)
-    .reduce((s, t) => s + (t.claimAmount ?? (t.result === "WIN" ? t.payout : t.result === "REFUND" ? t.riskAmount : 0)), 0);
+    .filter((t) => t.claimable && (t.result === "WIN" || t.result === "REFUND"))
+    .reduce(
+      (s, t) => s + (t.claimAmount ?? (t.result === "WIN" ? t.payout : t.result === "REFUND" ? t.riskAmount : 0)),
+      0
+    );
   const realized = tickets
-    .filter((t) => t.status === "SETTLED")
+    .filter((t) => t.status === "SETTLED" || t.result === "LOSS" || t.result === "WIN" || t.result === "REFUND")
     .reduce((s, t) => {
-      if (t.result === "WIN") return s + (t.payout - t.riskAmount);
+      if (t.result === "WIN" && t.status === "SETTLED") return s + (t.payout - t.riskAmount);
       if (t.result === "LOSS") return s - t.riskAmount;
       return s;
     }, 0);
 
   const onClaim = useCallback(
     async (id: string) => {
+      setClaimMessage(null);
+      const ticket = tickets.find((t) => t.id === id);
+      if (ticket?.result === "LOSS") {
+        setClaimMessage("This ticket lost — nothing to claim.");
+        return;
+      }
+      if (!ticket?.claimable || (ticket.result !== "WIN" && ticket.result !== "REFUND")) {
+        setClaimMessage("Nothing to claim on this ticket.");
+        return;
+      }
       if (!address) {
-        window.alert("Connect wallet first.");
+        setClaimMessage("Connect wallet first.");
         return;
       }
       try {
         await ensureArcChain();
       } catch (error) {
-        window.alert(readableWalletError(error));
+        setClaimMessage(readableWalletError(error));
         return;
       }
       const walletClient = getWalletClient();
       if (!walletClient) {
-        window.alert("Wallet provider unavailable.");
+        setClaimMessage("Wallet provider unavailable.");
         return;
       }
       let ticketId: bigint;
       try {
         ticketId = BigInt(id.replace(/^PXLT-/, ""));
       } catch {
-        window.alert(`Cannot parse ticket id ${id}`);
+        setClaimMessage(`Cannot parse ticket id ${id}`);
         return;
       }
+      setClaimingId(id);
       try {
         const hash = await walletClient.writeContract({
           address: getAddress(arcDeployment.microBoostEngine),
@@ -91,12 +107,15 @@ export function PortfolioShell() {
           args: [ticketId]
         });
         await publicClient.waitForTransactionReceipt({ hash });
+        setClaimMessage(`Claimed — tx ${hash.slice(0, 10)}…`);
         await load();
       } catch (error) {
-        window.alert(readableWalletError(error));
+        setClaimMessage(readableWalletError(error));
+      } finally {
+        setClaimingId(null);
       }
     },
-    [address, ensureArcChain, getWalletClient, load, publicClient]
+    [address, ensureArcChain, getWalletClient, load, publicClient, tickets]
   );
 
   return (
@@ -108,6 +127,8 @@ export function PortfolioShell() {
       pnl={`${realized >= 0 ? "+" : "−"}${moneyUsdc(Math.abs(realized), 2)}`}
       pnlPositive={realized >= 0}
       positions={positions}
+      claimingId={claimingId}
+      claimMessage={claimMessage}
       onClaim={(id) => {
         void onClaim(id);
       }}

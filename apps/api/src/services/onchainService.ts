@@ -602,9 +602,13 @@ async function ticketFromChainId(ticketId: bigint, createdAt = new Date().toISOS
   const winningOutcome = marketSnapshot.winningOutcome;
   const ticketOutcome = position.outcome === 1 ? "YES" : "NO";
   const result = ticketResult(ticketStatusValue, marketSnapshot.status, ticketOutcome, winningOutcome);
-  const claimable = ticketStatusValue === "OPEN"
-    && (marketSnapshot.status === "RESOLVED" || marketSnapshot.status === "CANCELLED");
+  // Only claimable when there is money to claim (WIN payout or REFUND). Losses are not claimable.
   const claimAmount = claimableAmount(result, usdcNumber(position.payout), usdcNumber(position.riskAmount));
+  const claimable =
+    ticketStatusValue === "OPEN" &&
+    (marketSnapshot.status === "RESOLVED" || marketSnapshot.status === "CANCELLED") &&
+    (result === "WIN" || result === "REFUND") &&
+    (claimAmount ?? 0) > 0;
 
   const opening = await ensureTicketOpeningMeta({
     ticketId: ticketId.toString(),

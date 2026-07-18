@@ -187,71 +187,78 @@ export function WalletPopover({
     <div ref={wrapRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 8 }}>
       {wallet.connected ? (
         <>
-          {/* Always-visible copy — main screen, next to balance pill */}
-          <button
-            type="button"
-            onClick={() => void copyAddress()}
-            title={wallet.fullAddress || wallet.address || 'Copy address'}
+          {/* Compact pill: balance + copy address (one control cluster) */}
+          <div
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 6,
               border: `1px solid ${theme.color.border}`,
               borderRadius: 20,
-              padding: '6px 10px',
               background: '#fff',
-              cursor: 'pointer',
-              fontFamily: theme.font.mono,
-              fontSize: 12,
-              fontWeight: 500,
-              color: theme.color.ink
+              overflow: 'hidden'
             }}
           >
-            <span style={{ color: theme.color.muted, fontSize: 11, fontWeight: 600, fontFamily: theme.font.sans }}>
-              {copyLabel === 'Copied' ? 'Copied' : 'Addr'}
-            </span>
-            <span>{wallet.address}</span>
-            <span aria-hidden style={{ fontSize: 12, color: theme.color.blue }}>
-              ⎘
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={handleOpenToggle}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              border: `1px solid ${theme.color.border}`,
-              borderRadius: 20,
-              padding: '5px 12px 5px 8px',
-              background: '#fff',
-              cursor: 'pointer',
-              fontFamily: theme.font.sans
-            }}
-          >
-            <span
+            <button
+              type="button"
+              onClick={handleOpenToggle}
               style={{
-                width: 22,
-                height: 22,
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg,#2775CA,#7C5CFF)',
-                display: 'inline-block'
-              }}
-            />
-            <span
-              style={{
-                fontFamily: theme.font.mono,
-                fontSize: 12.5,
-                fontWeight: 500,
-                color: theme.color.ink,
-                fontVariantNumeric: 'tabular-nums'
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                border: 'none',
+                padding: '5px 10px 5px 8px',
+                background: 'transparent',
+                cursor: 'pointer',
+                fontFamily: theme.font.sans
               }}
             >
-              {wallet.balance ?? '0.00'}
-            </span>
-            <span style={{ fontSize: 11, color: theme.color.muted, fontWeight: 600 }}>USDC</span>
-          </button>
+              <span
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: '50%',
+                  background: 'linear-gradient(135deg,#2775CA,#7C5CFF)',
+                  display: 'inline-block'
+                }}
+              />
+              <span
+                style={{
+                  fontFamily: theme.font.mono,
+                  fontSize: 12.5,
+                  fontWeight: 500,
+                  color: theme.color.ink,
+                  fontVariantNumeric: 'tabular-nums'
+                }}
+              >
+                {wallet.balance ?? '0.00'}
+              </span>
+              <span style={{ fontSize: 11, color: theme.color.muted, fontWeight: 600 }}>USDC</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void copyAddress()}
+              title={wallet.fullAddress || wallet.address || 'Copy address'}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                border: 'none',
+                borderLeft: `1px solid ${theme.color.border}`,
+                padding: '6px 10px',
+                background: theme.color.tint,
+                cursor: 'pointer',
+                fontFamily: theme.font.mono,
+                fontSize: 11,
+                fontWeight: 500,
+                color: theme.color.ink
+              }}
+            >
+              <span style={{ color: theme.color.muted }}>{wallet.address}</span>
+              <span aria-hidden style={{ color: theme.color.blue, fontSize: 12 }}>
+                {copyLabel === 'Copied' ? '✓' : '⎘'}
+              </span>
+            </button>
+          </div>
         </>
       ) : (
         <button
