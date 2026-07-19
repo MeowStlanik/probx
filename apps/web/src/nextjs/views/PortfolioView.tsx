@@ -17,6 +17,8 @@ interface Props {
   onRetry: () => void;
   claimingId?: string | null;
   claimMessage?: string | null;
+  /** Soft warning while still showing positions (e.g. local cache after RPC flake). */
+  warning?: string | null;
 }
 
 // /portfolio — summary stats + ticket table (open / won-unclaimed / claimed / lost).
@@ -31,7 +33,8 @@ export function PortfolioView({
   onClaim,
   onRetry,
   claimingId,
-  claimMessage
+  claimMessage,
+  warning
 }: Props) {
   const stat = (label: string, value: string, color: string = theme.color.ink) => (
     <div
@@ -65,7 +68,7 @@ export function PortfolioView({
         <EmptyState
           tone="error"
           title="Couldn't load your positions"
-          description="Arc RPC call failed — your funds are safe, just retry the read."
+          description="Arc RPC / API read failed — your funds are safe on-chain. Check NEXT_PUBLIC_API_BASE_URL is empty on Vercel, then Retry."
           action={
             <button
               onClick={onRetry}
@@ -85,6 +88,44 @@ export function PortfolioView({
           }
         />
       )}
+
+      {state === "live" && warning ? (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: "12px 14px",
+            borderRadius: 10,
+            background: "#FFF8E8",
+            border: "1px solid #F0D78C",
+            color: "#7A5B00",
+            fontSize: 13,
+            lineHeight: 1.45,
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap"
+          }}
+        >
+          <span>{warning}</span>
+          <button
+            onClick={onRetry}
+            style={{
+              background: theme.color.ink,
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              padding: "7px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: "pointer",
+              flexShrink: 0
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      ) : null}
 
       {state === "loading" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

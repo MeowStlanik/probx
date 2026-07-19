@@ -572,7 +572,17 @@ export async function ticketsForUserOnchain(user: string): Promise<Ticket[]> {
   assertDeployment();
   const buyer = addr(user);
   const cacheKey = buyer.toLowerCase();
-  const latestBlock = await publicClient.getBlockNumber();
+  // getBlockNumber can flake on a single RPC; fall back to cache / empty rather than 500.
+  let latestBlock: bigint;
+  try {
+    latestBlock = await publicClient.getBlockNumber();
+  } catch (error) {
+    const cached = ticketCache.get(cacheKey);
+    if (cached?.tickets.size) {
+      return [...cached.tickets.values()].sort(compareTicketIdsDesc);
+    }
+    throw error;
+  }
   const existing = ticketCache.get(cacheKey);
   const fromBlock = existing ? existing.scannedToBlock + 1n : recentTicketScanFromBlock(latestBlock);
 
@@ -583,8 +593,12 @@ export async function ticketsForUserOnchain(user: string): Promise<Ticket[]> {
 
     const tickets = existing?.tickets ?? new Map<string, Ticket>();
     for (const log of logs) {
-      const ticket = await ticketFromBoughtLog(log.args.ticketId, tickets);
-      if (ticket) tickets.set(ticket.id, ticket);
+      try {
+        const ticket = await ticketFromBoughtLog(log.args.ticketId, tickets);
+        if (ticket) tickets.set(ticket.id, ticket);
+      } catch {
+        // Skip a bad log — one pruned/failed eth_call must not blank the portfolio.
+      }
     }
     if (tickets.size > 0) {
       await refreshCachedTicketPositions(tickets);
@@ -604,8 +618,12 @@ async function ticketFromBoughtLog(ticketId: bigint | undefined, tickets: Map<st
 async function refreshCachedTicketPositions(tickets: Map<string, Ticket>): Promise<void> {
   await Promise.all(
     [...tickets.keys()].map(async (id) => {
-      const ticket = await ticketFromChainId(ticketIdNumber(id), tickets.get(id)?.createdAt);
-      if (ticket) tickets.set(id, ticket);
+      try {
+        const ticket = await ticketFromChainId(ticketIdNumber(id), tickets.get(id)?.createdAt);
+        if (ticket) tickets.set(id, ticket);
+      } catch {
+        // Keep the last known ticket snapshot if a live refresh fails.
+      }
     })
   );
 }

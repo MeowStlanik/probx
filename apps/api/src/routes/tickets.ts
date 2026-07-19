@@ -6,7 +6,9 @@ export async function ticketsForUser(address: string): Promise<Ticket[]> {
   if (onchainEnabled()) {
     try {
       return await ticketsForUserOnchain(address);
-    } catch {
+    } catch (error) {
+      console.error("[tickets] onchain portfolio read failed", error);
+      // Prefer empty array over 500 — client shows empty / local cache, not a hard error page.
       return db.tickets.filter((ticket) => ticket.owner.toLowerCase() === address.toLowerCase());
     }
   }

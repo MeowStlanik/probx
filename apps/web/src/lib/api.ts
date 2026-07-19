@@ -124,16 +124,29 @@ export async function fetchTickets(): Promise<Ticket[]> {
 }
 
 export async function fetchUserTickets(address: string): Promise<Ticket[]> {
-  const response = await fetch(apiUrl(`/api/users/${encodeURIComponent(address)}/tickets`), {
-    cache: "no-store"
-  });
-  if (!response.ok) {
-    throw new Error(`Portfolio endpoint returned HTTP ${response.status}`);
+  const path = `/api/users/${encodeURIComponent(address)}/tickets`;
+  const candidates = Array.from(new Set([apiUrl(path), path].filter(Boolean)));
+  let lastStatus = 0;
+  let lastError: unknown;
+  for (const url of candidates) {
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      lastStatus = response.status;
+      if (!response.ok) continue;
+      const body = (await response.json()) as Ticket[];
+      if (!Array.isArray(body)) continue;
+      return body.map((ticket) => ({
+        ...ticket,
+        marketQuestion: ticket.marketQuestion ?? ticket.marketId
+      }));
+    } catch (e) {
+      lastError = e;
+    }
   }
-  return ((await response.json()) as Ticket[]).map((ticket) => ({
-    ...ticket,
-    marketQuestion: ticket.marketQuestion ?? ticket.marketId
-  }));
+  if (lastStatus) {
+    throw new Error(`Portfolio endpoint returned HTTP ${lastStatus}`);
+  }
+  throw lastError instanceof Error ? lastError : new Error("Portfolio endpoint unreachable");
 }
 
 export async function fetchLpStats(): Promise<LpStats> {

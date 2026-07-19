@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAddress } from "viem";
 import { fetchUserTickets } from "@/lib/api";
 import { arcDeployment, engineAbi } from "@/lib/onchain";
+import { loadPositions, type LocalPosition } from "@/lib/positions";
 import type { Ticket } from "@/lib/types";
 import { readableWalletError, useWallet } from "@/lib/wallet";
 import { moneyUsdc, ticketToPosition } from "../mapMarket";
@@ -12,11 +13,14 @@ import { PortfolioView } from "../views/PortfolioView";
 
 /**
  * Wires PortfolioView → fetchUserTickets + settleTicket (wins/refunds only).
+ * Falls back to localStorage positions when Arc RPC / API blips so the page
+ * never looks like a total loss of funds.
  */
 export function PortfolioShell() {
   const { address, ready, getWalletClient, publicClient, ensureArcChain, trackTx } = useWallet();
   const [state, setState] = useState<LoadState>("loading");
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [warning, setWarning] = useState<string | null>(null);
   const [claimingId, setClaimingId] = useState<string | null>(null);
   const [claimMessage, setClaimMessage] = useState<string | null>(null);
 
@@ -24,15 +28,30 @@ export function PortfolioShell() {
     if (!ready) return;
     if (!address) {
       setTickets([]);
+      setWarning(null);
       setState("live");
       return;
     }
     setState((s) => (s === "live" ? s : "loading"));
     try {
       const next = await fetchUserTickets(address);
-      setTickets(next);
+      // Merge browser-saved tickets that the log scan has not caught yet
+      // (e.g. just after buy, or when ARC_FROM_BLOCK skips the buy block).
+      const merged = mergeWithLocal(next, loadPositions());
+      setTickets(merged);
+      setWarning(null);
       setState("live");
-    } catch {
+    } catch (error) {
+      const local = localTicketsFromPositions(loadPositions());
+      if (local.length > 0) {
+        setTickets(local);
+        setWarning(
+          "Live Arc read failed — showing tickets saved in this browser. Funds are safe; Retry when RPC recovers."
+        );
+        setState("live");
+        return;
+      }
+      console.error("[portfolio] load failed", error);
       setState("error");
     }
   }, [address, ready]);
@@ -116,7 +135,7 @@ export function PortfolioShell() {
         setClaimingId(null);
       }
     },
-    [address, ensureArcChain, getWalletClient, load, publicClient, tickets]
+    [address, ensureArcChain, getWalletClient, load, publicClient, tickets, trackTx]
   );
 
   return (
@@ -130,10 +149,48 @@ export function PortfolioShell() {
       positions={positions}
       claimingId={claimingId}
       claimMessage={claimMessage}
+      warning={warning}
       onClaim={(id) => {
         void onClaim(id);
       }}
       onRetry={() => void load()}
     />
   );
+}
+
+function localTicketsFromPositions(local: LocalPosition[]): Ticket[] {
+  return local.map((p) => ({
+    id: p.ticketId.startsWith("PXLT-") ? p.ticketId : `PXLT-${p.ticketId}`,
+    marketId: p.marketAddress || p.marketId,
+    marketQuestion: p.marketQuestion ?? p.marketId,
+    marketStatus: "OPEN" as const,
+    outcome: p.outcome,
+    riskAmount: p.riskAmount,
+    boost: p.boost,
+    payout: p.payout,
+    requiredReserve: Math.max(0, p.payout - p.riskAmount),
+    status: "OPEN" as const,
+    claimable: false,
+    createdAt: p.createdAt,
+    openReferencePrice: p.referencePrice,
+    openReferenceFeed: p.referenceFeed,
+    openReferenceLabel: p.referenceLabel
+  }));
+}
+
+function mergeWithLocal(onchain: Ticket[], local: LocalPosition[]): Ticket[] {
+  const byId = new Map(onchain.map((t) => [t.id, t]));
+  for (const p of local) {
+    const id = p.ticketId.startsWith("PXLT-") ? p.ticketId : `PXLT-${p.ticketId}`;
+    if (byId.has(id)) continue;
+    // Only show local tickets that look like real engine ids.
+    if (!/^PXLT-\d+$/.test(id) && !/^\d+$/.test(p.ticketId)) continue;
+    const synthetic = localTicketsFromPositions([p])[0];
+    if (synthetic) byId.set(id, { ...synthetic, id });
+  }
+  return [...byId.values()].sort((a, b) => {
+    const na = Number(a.id.replace(/^PXLT-/, "")) || 0;
+    const nb = Number(b.id.replace(/^PXLT-/, "")) || 0;
+    return nb - na;
+  });
 }
