@@ -2,9 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { formatUnits, getAddress, parseEventLogs, parseUnits } from "viem";
+import { formatUnits, getAddress, isAddress, parseEventLogs, parseUnits } from "viem";
 import { loadActivity, type ActivityItem } from "@/lib/activity";
-import { fetchMarket } from "@/lib/api";
+import { fetchMarket, isOnchainMarketId } from "@/lib/api";
 import { MarketLiveChart } from "@/components/MarketLiveChart";
 import { arcDeployment, engineAbi, usdcAbi } from "@/lib/onchain";
 import { savePosition } from "@/lib/positions";
@@ -13,6 +13,17 @@ import { readableWalletError, shortHex, useWallet } from "@/lib/wallet";
 import { toMarketDetail } from "../mapMarket";
 import type { ActivityRow, LoadState, Side } from "../types";
 import { MarketDetailView } from "../views/MarketDetailView";
+
+function resolveMarketAddress(market: Market): `0x${string}` {
+  const raw = (market.contractAddress || market.id || "").trim();
+  if (!isOnchainMarketId(raw) || !isAddress(raw)) {
+    throw new Error(
+      "This market is an offline placeholder (API did not load live Arc markets). " +
+        "Refresh the home page and open a market whose id starts with 0x."
+    );
+  }
+  return getAddress(raw);
+}
 
 /**
  * Wires MarketDetailView → fetchMarket + MicroBoostEngine.buyTicket
@@ -29,8 +40,10 @@ export function MarketDetailShell({
 }) {
   const router = useRouter();
   const { address, getWalletClient, publicClient, ensureArcChain, trackTx } = useWallet();
-  const [state, setState] = useState<LoadState>(initial ? "live" : "loading");
-  const [market, setMarket] = useState<Market | null>(initial ?? null);
+  // Ignore SSR offline placeholders so we never hydrate a non-0x market as bettable.
+  const safeInitial = initial && isOnchainMarketId(initial.id) ? initial : null;
+  const [state, setState] = useState<LoadState>(safeInitial ? "live" : "loading");
+  const [market, setMarket] = useState<Market | null>(safeInitial);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
   // Hydration-stable clock: start from SSR snapshot, tick only after mount
   const [now, setNow] = useState(() => serverNow ?? 0);
@@ -104,7 +117,7 @@ export function MarketDetailShell({
     async (side: Side, stake: number, boost: number) => {
       if (!market) throw new Error("Market not loaded");
       if (!address) throw new Error("Connect wallet in the header first.");
-      const marketAddress = getAddress(market.contractAddress || market.id);
+      const marketAddress = resolveMarketAddress(market);
       const risk = parseUnits(String(stake || 0), 6);
       if (risk <= 0n) throw new Error("Stake must be > 0");
       const boostBps = BigInt(Math.round(boost * 10_000));

@@ -1,5 +1,5 @@
 import type { LpStats, Market, Ticket } from "./types";
-import { emptyLpStats, markets as fallbackMarkets } from "./sampleData";
+import { emptyLpStats } from "./sampleData";
 
 /**
  * Absolute origin for server-side fetch (SSR cannot use relative `/api/...`).
@@ -50,23 +50,37 @@ export function apiUrl(path: string): string {
   return base ? `${base}${p}` : p;
 }
 
+/** Real Arc markets use 0x addresses. Offline sample ids (mkt_*) must never reach buyTicket. */
+export function isOnchainMarketId(id: string | undefined | null): boolean {
+  return Boolean(id && /^0x[a-fA-F0-9]{40}$/.test(id.trim()));
+}
+
 export async function fetchMarkets(): Promise<Market[]> {
   try {
     const response = await fetch(apiUrl("/api/markets"), { cache: "no-store" });
-    if (!response.ok) return fallbackMarkets;
-    return ((await response.json()) as Market[]).map(normalizeMarket);
+    if (!response.ok) return [];
+    const markets = ((await response.json()) as Market[]).map(normalizeMarket);
+    // Prefer live chain markets only — never substitute offline placeholders that look bettable.
+    const onchain = markets.filter((m) => isOnchainMarketId(m.id) || isOnchainMarketId(m.contractAddress));
+    return onchain;
   } catch {
-    return fallbackMarkets;
+    return [];
   }
 }
 
 export async function fetchMarket(id: string): Promise<Market | undefined> {
+  // Offline sample ids are not contracts — refuse so MetaMask never sees mkt_btc_offline.
+  if (!isOnchainMarketId(id)) {
+    return undefined;
+  }
   try {
     const response = await fetch(apiUrl(`/api/markets/${encodeURIComponent(id)}`), { cache: "no-store" });
-    if (!response.ok) return fallbackMarkets.find((market) => market.id === id);
-    return normalizeMarket((await response.json()) as Market);
+    if (!response.ok) return undefined;
+    const market = normalizeMarket((await response.json()) as Market);
+    if (!isOnchainMarketId(market.id) && !isOnchainMarketId(market.contractAddress)) return undefined;
+    return market;
   } catch {
-    return fallbackMarkets.find((market) => market.id === id);
+    return undefined;
   }
 }
 

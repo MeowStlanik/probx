@@ -8,7 +8,8 @@
  * 4) Offline fallbacks
  */
 import type { LpStats, Market, Ticket } from "./types";
-import { emptyLpStats, markets as fallbackMarkets } from "./sampleData";
+import { emptyLpStats } from "./sampleData";
+import { isOnchainMarketId } from "./api";
 import { readOnchainLpStats } from "./readOnchainLpStats";
 
 function serverOrigin(): string {
@@ -38,14 +39,17 @@ async function httpGetJson(
   return { ok: response.ok, status: response.status, body };
 }
 
+function onlyOnchain(markets: Market[]): Market[] {
+  return markets.filter((m) => isOnchainMarketId(m.id) || isOnchainMarketId(m.contractAddress));
+}
+
 export async function fetchMarkets(): Promise<Market[]> {
   // Prefer HTTP — same code path as the working Vercel /api/markets route
   try {
     const result = await httpGetJson("/api/markets");
     if (result.ok && Array.isArray(result.body) && result.body.length > 0) {
-      const markets = (result.body as Market[]).map(normalizeMarket);
-      // Prefer real Arc addresses over offline placeholders
-      if (markets.some((m) => m.id.startsWith("0x"))) return markets;
+      const markets = onlyOnchain((result.body as Market[]).map(normalizeMarket));
+      if (markets.length > 0) return markets;
     }
   } catch {
     // continue
@@ -55,16 +59,19 @@ export async function fetchMarkets(): Promise<Market[]> {
     const { dispatchApiRequest } = await import("../../../api/src/dispatch");
     const result = await dispatchApiRequest({ method: "GET", path: "/api/markets" });
     if (result.status >= 200 && result.status < 300 && Array.isArray(result.body)) {
-      return (result.body as Market[]).map(normalizeMarket);
+      return onlyOnchain((result.body as Market[]).map(normalizeMarket));
     }
   } catch {
     // continue
   }
 
-  return fallbackMarkets;
+  // Never return mkt_* offline placeholders — they look open/bettable and break MetaMask.
+  return [];
 }
 
 export async function fetchMarket(id: string): Promise<Market | undefined> {
+  if (!isOnchainMarketId(id)) return undefined;
+
   // In-process first — avoids SSR → HTTP → same Next process deadlocks / multi-second waits
   // when the server is busy compiling or handling other requests.
   try {
@@ -79,7 +86,8 @@ export async function fetchMarket(id: string): Promise<Market | undefined> {
       )
     ]);
     if (result.status >= 200 && result.status < 300 && result.body) {
-      return normalizeMarket(result.body as Market);
+      const market = normalizeMarket(result.body as Market);
+      if (isOnchainMarketId(market.id) || isOnchainMarketId(market.contractAddress)) return market;
     }
   } catch {
     // continue
@@ -88,13 +96,14 @@ export async function fetchMarket(id: string): Promise<Market | undefined> {
   try {
     const result = await httpGetJson(`/api/markets/${encodeURIComponent(id)}`, 5_000);
     if (result.ok && result.body && typeof result.body === "object") {
-      return normalizeMarket(result.body as Market);
+      const market = normalizeMarket(result.body as Market);
+      if (isOnchainMarketId(market.id) || isOnchainMarketId(market.contractAddress)) return market;
     }
   } catch {
     // continue
   }
 
-  return fallbackMarkets.find((market) => market.id === id);
+  return undefined;
 }
 
 export async function fetchLpStats(): Promise<LpStats> {
