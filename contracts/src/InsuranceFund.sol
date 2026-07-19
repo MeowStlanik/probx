@@ -15,6 +15,7 @@ contract InsuranceFund {
     event EngineSet(address indexed engine);
     event FeesReceived(address indexed sender, uint256 amount);
     event ShortfallCovered(address indexed to, uint256 amount);
+    event Withdrawn(address indexed to, uint256 amount);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "ONLY_OWNER");
@@ -49,5 +50,14 @@ contract InsuranceFund {
     function coverShortfall(address to, uint256 amount) external onlyEngine {
         require(usdc.transfer(to, amount), "TRANSFER");
         emit ShortfallCovered(to, amount);
+    }
+
+    /// @notice Owner can recover accrued insurance funds. Without this, fees routed
+    ///         here (20% of every ticket fee) are locked forever, since coverShortfall
+    ///         is onlyEngine and the engine never calls it.
+    function withdraw(address to, uint256 amount) external onlyOwner {
+        require(to != address(0), "ZERO_TO");
+        require(usdc.transfer(to, amount), "TRANSFER");
+        emit Withdrawn(to, amount);
     }
 }

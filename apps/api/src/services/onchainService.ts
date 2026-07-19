@@ -958,7 +958,11 @@ export async function createMarketOnchain(body: {
     yesPricePercent = await estimateFairYesPercent(role);
   }
   // Constructor treats this as fair mid; contract applies overround margin on-chain.
-  const yesPrice = BigInt(Math.round(clampNumber(yesPricePercent, 5, 95, 50) * 10_000));
+  // Clamp to 13..87%, not 5..95%: above ~88% the quoted side (mid × 1.08) hits the
+  // on-chain 0.95 price cap, which (a) collapses the recovered mid back to ~0.8796 on
+  // the first trade ("ratchet") and (b) thins the overround that funds Micro Boost.
+  // 13..87 keeps YES+NO == 1.080000 exactly and avoids the ratchet entirely.
+  const yesPrice = BigInt(Math.round(clampNumber(yesPricePercent, 13, 87, 50) * 10_000));
   // Start open at "now" — do not backdate (that ate OPEN time before the market was listed).
   const openTime = BigInt(now);
   // Extra slack so lock is still ~55–65s after create+open confirmations.

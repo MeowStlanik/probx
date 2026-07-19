@@ -54,6 +54,30 @@ function enforceOtpRequestRateLimit(email: string): void {
   otpRequestLog.global.push(now);
 }
 
+/**
+ * Best-effort in-memory limit on VERIFY attempts per email. The stateless
+ * otpToken path (primary on Vercel) has no server-side record, so without this
+ * an attacker holding the token could brute-force the 6-digit code with
+ * unlimited tries inside the 10-minute TTL. MAX_ATTEMPTS previously only
+ * protected the local file-store fallback. In-memory is per-instance
+ * (best-effort on serverless) but raises the cost enormously vs. unlimited.
+ */
+const otpVerifyLog: Map<string, number[]> = new Map();
+
+function enforceOtpVerifyAttemptLimit(email: string): void {
+  const now = Date.now();
+  const attempts = pruneOld(otpVerifyLog.get(email) ?? [], now);
+  if (attempts.length >= MAX_ATTEMPTS) {
+    throw new Error("Too many incorrect codes. Request a new code and try again.");
+  }
+  attempts.push(now);
+  otpVerifyLog.set(email, attempts);
+}
+
+function clearOtpVerifyAttempts(email: string): void {
+  otpVerifyLog.delete(email);
+}
+
 function loadStore(): OtpStore {
   try {
     if (!existsSync(otpPath)) return { version: 1, byEmail: {} };
@@ -419,7 +443,11 @@ export function consumeEmailOtp(emailInput: string, codeInput: string, otpToken?
       throw new Error("Email does not match the code request. Use the same email you requested the code for.");
     }
     if (Date.now() > parsed.expiresAt) throw new Error("Code expired. Request a new one.");
+    // Count the attempt BEFORE comparing so wrong guesses burn tries (stateless
+    // token path had no attempt cap at all — see enforceOtpVerifyAttemptLimit).
+    enforceOtpVerifyAttemptLimit(email);
     if (parsed.codeHash !== hashCode(email, code)) throw new Error("Invalid code. Try again.");
+    clearOtpVerifyAttempts(email);
     // Clear optional local store entry
     try {
       const store = loadStore();

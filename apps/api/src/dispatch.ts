@@ -1,6 +1,7 @@
 import { loadRootEnv } from "./services/loadEnv.js";
 loadRootEnv();
 
+import { timingSafeEqual } from "node:crypto";
 import { isAdminAuthorized } from "./services/adminAuth.js";
 import { cronThrottled } from "./services/cronThrottle.js";
 import { contractAddresses } from "./services/contractService.js";
@@ -295,9 +296,17 @@ function cronSecretMatches(
   headers: Record<string, string | undefined>
 ): boolean {
   const fromQuery = searchParams.get("secret") || searchParams.get("cron_secret");
-  if (fromQuery === expected) return true;
+  if (fromQuery && constantTimeEqual(fromQuery, expected)) return true;
   const auth = (headers.authorization ?? "").trim();
-  return auth === `Bearer ${expected}`;
+  return constantTimeEqual(auth, `Bearer ${expected}`);
+}
+
+/** Constant-time string compare (mirrors adminAuth) so cron secret checks do not leak
+ *  length/prefix information via response timing, matching the admin gate's hardening. */
+function constantTimeEqual(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /** @deprecated use authorizeCron — kept for any external imports */

@@ -115,7 +115,14 @@ contract MicroBoostEngine {
         uint256 payout = QuoteMath.payout(riskAmount, price, boostBps);
         uint256 requiredReserve = payout - riskAmount;
         uint256 fee = calculateFee(riskAmount, boostBps);
+        // Clamp to protocol bounds so the quote never advertises a boost that buyTicket
+        // would reject with BOOST_CAP. Mirrors the standalone maxAvailableBoost() getter.
         uint256 maxBoost = QuoteMath.maxBoostBps(riskAmount, price, liquidityPool.availableAssets());
+        if (maxBoost > RiskLimits.MAX_BOOST_BPS) {
+            maxBoost = RiskLimits.MAX_BOOST_BPS;
+        } else if (maxBoost < BPS) {
+            maxBoost = BPS;
+        }
 
         quote = Quote({
             price: price,
