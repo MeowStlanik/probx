@@ -40,21 +40,25 @@ export function MarketsShell({
     if (!opts?.silent) setState((s) => (s === "live" || s === "empty" ? s : "loading"));
     try {
       const all = (await fetchMarkets()).filter(isBtcOrWeather);
-      const open = all.filter(isOpenish);
-      setRaw(all);
-      setState(open.length ? "live" : "empty");
+      // Never wipe a good SSR/previous list with a transient empty poll
+      // (home already kept seed markets; /markets used to flash empty).
+      setRaw((prev) => {
+        const next = all.length > 0 ? all : prev;
+        const open = next.filter(isOpenish);
+        setState(open.length ? "live" : next.length ? "live" : "empty");
+        return next;
+      });
     } catch {
-      setState((s) => (raw.length ? s : "error"));
+      setState((s) => (s === "live" || s === "empty" ? s : "error"));
     }
-  }, [raw.length]);
+  }, []);
 
   useEffect(() => {
     void load({ silent: Boolean(initial?.length) });
     // 5s poll — markets used to appear mid-OPEN after slow refresh.
     const id = window.setInterval(() => void load({ silent: true }), 5_000);
     return () => window.clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount + interval only
-  }, []);
+  }, [initial?.length, load]);
 
   const markets = useMemo(() => {
     const t = now || serverNow || Date.now();
@@ -62,7 +66,10 @@ export function MarketsShell({
     const open = raw.filter(isOpenish);
     const btc = open.filter(isBtcMarket);
     const weather = open.filter(isWeatherMarket);
-    return [...btc, ...weather].map((m) => toMarketSummary(m, t));
+    // Fallback: if role filters miss (missing demoRole), still show open cards.
+    const ordered = [...btc, ...weather];
+    if (ordered.length) return ordered.map((m) => toMarketSummary(m, t));
+    return open.map((m) => toMarketSummary(m, t));
   }, [raw, now, serverNow]);
 
   const resolvedBanner = useMemo(() => {

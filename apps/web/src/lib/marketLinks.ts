@@ -6,7 +6,9 @@ export function isBtcMarket(market: Market): boolean {
     market.demoRole === "btc_price" ||
     market.category === "crypto-candle" ||
     q.includes("btc/usd") ||
-    q.includes("bitcoin")
+    q.includes("bitcoin") ||
+    // "Will BTC finish observation…" (no slash form)
+    /\bbtc\b/.test(q)
   );
 }
 
@@ -16,7 +18,9 @@ export function isWeatherMarket(market: Market): boolean {
     market.demoRole === "london_weather" ||
     market.category === "weather" ||
     q.includes("london temperature") ||
-    q.includes("weather")
+    q.includes("london temp") ||
+    q.includes("weather") ||
+    q.includes("open-meteo")
   );
 }
 

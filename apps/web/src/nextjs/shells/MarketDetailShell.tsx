@@ -215,6 +215,13 @@ export function MarketDetailShell({
       if (market.status !== "OPEN" && market.status !== "CREATED") {
         throw new Error("Betting is closed for this market — wait for the next open round.");
       }
+      // Wall-clock guard: last-second clicks often mine after lock and still burn gas.
+      const lockMs = Date.parse(market.lockTime || "");
+      if (Number.isFinite(lockMs) && Date.now() >= lockMs - 2_000) {
+        throw new Error(
+          "Too close to lock — this market is about to close. Wait for the next open round."
+        );
+      }
       await ensureArcChain();
       const walletClient = getWalletClient();
       if (!walletClient) throw new Error("Wallet provider unavailable.");
@@ -224,8 +231,26 @@ export function MarketDetailShell({
         stake,
         boost
       );
+      if (!quote.accepted) {
+        throw new Error(quote.reason || "Quote rejected — market locked or LP reserve insufficient.");
+      }
       if (allowance < quote.totalDebit) {
         throw new Error("Approve USDC first.");
+      }
+
+      // Fresh balance: boost fee + stake can exceed what the UI stake field suggests.
+      const balance = await publicClient.readContract({
+        address: getAddress(arcDeployment.usdc),
+        abi: usdcAbi,
+        functionName: "balanceOf",
+        args: [address]
+      });
+      if (balance < quote.totalDebit) {
+        const need = formatUnits(quote.totalDebit, 6);
+        const have = formatUnits(balance, 6);
+        throw new Error(
+          `Not enough USDC: need ${need} (stake + fee), wallet has ${have}. Fund wallet or lower stake/boost.`
+        );
       }
 
       const hash = await walletClient.writeContract({
@@ -236,6 +261,13 @@ export function MarketDetailShell({
       });
       trackTx({ hash, kind: "buy", label: `Buy ${side} · ${market.question}` });
       const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+      // Critical: broadcast hash ≠ success. Reverted buys used to show "Ticket confirmed".
+      if (receipt.status !== "success") {
+        throw new Error(
+          `Transaction reverted on-chain (${hash.slice(0, 10)}…). ` +
+            `Common causes: insufficient USDC, market already locked, or allowance too low. No ticket was minted.`
+        );
+      }
       let ticketId: string | undefined;
       try {
         const logs = parseEventLogs({ abi: engineAbi, logs: receipt.logs, eventName: "TicketBought" });
@@ -243,32 +275,35 @@ export function MarketDetailShell({
       } catch {
         /* ignore */
       }
-      if (ticketId) {
-        savePosition({
-          ticketId,
-          marketId: market.id,
-          marketAddress,
-          marketQuestion: market.question,
-          outcome: side,
-          riskAmount: stake,
-          boost,
-          fillPrice: Number(quote.price) / 1_000_000,
-          payout: Number(formatUnits(quote.payout, 6)),
-          fee: Number(formatUnits(quote.fee, 6)),
-          lockTime: market.lockTime,
-          observationEnd: market.observationEnd,
-          createdAt: new Date().toISOString(),
-          txHash: hash
-        });
-        window.dispatchEvent(new Event("probx-position-saved"));
+      if (!ticketId) {
+        throw new Error(
+          `Tx mined but no TicketBought event (${hash.slice(0, 10)}…). Treat as failed — check explorer.`
+        );
       }
+      savePosition({
+        ticketId,
+        marketId: market.id,
+        marketAddress,
+        marketQuestion: market.question,
+        outcome: side,
+        riskAmount: stake,
+        boost,
+        fillPrice: Number(quote.price) / 1_000_000,
+        payout: Number(formatUnits(quote.payout, 6)),
+        fee: Number(formatUnits(quote.fee, 6)),
+        lockTime: market.lockTime,
+        observationEnd: market.observationEnd,
+        createdAt: new Date().toISOString(),
+        txHash: hash
+      });
+      window.dispatchEvent(new Event("probx-position-saved"));
 
       void load({ silent: true });
 
       const gas = receipt.gasUsed ? `${formatUnits(receipt.gasUsed, 0)} units` : "—";
       return { txHash: hash, gas };
     },
-    [address, ensureArcChain, getWalletClient, load, market, publicClient, quoteBuy]
+    [address, ensureArcChain, getWalletClient, load, market, publicClient, quoteBuy, trackTx]
   );
 
   const chart =

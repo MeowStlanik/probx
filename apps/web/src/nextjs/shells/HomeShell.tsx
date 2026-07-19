@@ -38,6 +38,7 @@ export function HomeShell({
   const refresh = useCallback(async () => {
     try {
       const next = await fetchMarkets();
+      // Keep SSR seed on empty/transient API blips (same rule as MarketsShell).
       if (next.length) setRaw(next.filter(isBtcOrWeather));
     } catch {
       /* keep SSR seed */
