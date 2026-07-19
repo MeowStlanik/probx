@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { apiUrl } from "@/lib/api";
+import { fetchDemoReferenceData } from "@/lib/api";
 import type { Market } from "@/lib/types";
 
 type Point = { t: number; v: number };
@@ -47,9 +47,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
 
   const pull = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl("/api/demo-data"), { cache: "no-store" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as {
+      const data = (await fetchDemoReferenceData()) as {
         btcUsd?: { price: number; updatedAt: string; history?: Array<{ value: number; at: number }> };
         londonWeather?: {
           temperatureC: number;
@@ -85,7 +83,8 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
       const end = Date.parse(market.observationEnd || "") || 0;
       const tNow = Date.now();
 
-      // Nothing to plot until the observation window opens.
+      // Nothing to plot until the observation window opens (by design).
+      // Still keep the live price above so the header is not "—".
       if (!start || tNow < start) {
         histRef.current = [];
         startRef.current = null;
@@ -350,8 +349,24 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           </svg>
         ) : (
           <WaitingPanel
-            title={error ? `Feed: ${error}` : "Waiting for first observation print…"}
-            body="Samples are recorded only after observation starts."
+            title={
+              error
+                ? `Feed: ${error}`
+                : phase === "live"
+                  ? "Waiting for first observation print…"
+                  : phase === "after"
+                    ? "No samples recorded in this window"
+                    : "Chart starts at observation"
+            }
+            body={
+              error
+                ? "Live feed could not load. Leave NEXT_PUBLIC_API_BASE_URL empty on Vercel, redeploy, and hard-refresh."
+                : phase === "live"
+                  ? "Recording BTC / temp samples during the observation window only."
+                  : phase === "after"
+                    ? "This round closed before any feed tick landed in the window."
+                    : "Path is drawn only during observation — not while betting is still open."
+            }
           />
         )}
 

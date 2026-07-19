@@ -21,20 +21,32 @@ function serverOrigin(): string {
  * - Empty string is VALID — never treat it as "backend unavailable"
  * - Prefer apiUrl("/api/...") instead of checking if (!base)
  * - Server (SSR): always absolute origin so fetch does not throw / return empty stats
- * - Local: defaults to :3001 for separate API process
- * - Override with NEXT_PUBLIC_API_BASE_URL
+ * - Override with NEXT_PUBLIC_API_BASE_URL (leave empty on Vercel)
+ *
+ * Common misconfigs that used to 404 the chart (`/api/api/demo-data`):
+ * - base ending in `/api`
+ * - base = `same` / `/` / empty-ish
+ * - localhost base baked into a Production browser build
  */
-export function apiBaseUrl(): string {
-  const raw = (process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || "").trim();
-  if (raw === "same" || raw === "/") {
-    return typeof window === "undefined" ? serverOrigin() : "";
+function normalizeApiBase(raw: string): string {
+  let b = raw.trim().replace(/\/$/, "");
+  if (!b || b === "same" || b === "/" || b === "undefined" || b === "null") return "";
+  // Production browser must not call a local API process.
+  if (typeof window !== "undefined" && /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?/i.test(b)) {
+    return "";
   }
-  // Explicit base always wins (split API on :3001, remote, etc.)
-  if (raw) return raw.replace(/\/$/, "");
+  // If someone set base to `…/api`, strip it so `/api/demo-data` does not become `/api/api/…`.
+  if (b === "/api" || b === "api") return "";
+  if (b.endsWith("/api")) b = b.slice(0, -4).replace(/\/$/, "");
+  return b;
+}
+
+export function apiBaseUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || "";
+  const normalized = normalizeApiBase(raw);
+  if (normalized) return normalized;
 
   // Browser: always same-origin. Next hosts `/api/*` via app/api/[[...path]].
-  // Do NOT rewrite Codespace `*-3000.app.github.dev` → `*-3001` — that port is
-  // not forwarded and causes "Failed to fetch" on Admin / markets.
   if (typeof window !== "undefined") {
     return "";
   }
@@ -46,8 +58,31 @@ export function apiBaseUrl(): string {
 /** Join API base + path; works with empty base (same-origin). */
 export function apiUrl(path: string): string {
   const base = apiBaseUrl();
-  const p = path.startsWith("/") ? path : `/${path}`;
+  let p = path.startsWith("/") ? path : `/${path}`;
+  // Guard against accidental double /api when base already ends with it.
+  if (base.endsWith("/api") && p.startsWith("/api/")) {
+    p = p.slice(4);
+  }
   return base ? `${base}${p}` : p;
+}
+
+/** Fetch /api/demo-data with same-origin fallback (chart + reference panel). */
+export async function fetchDemoReferenceData(): Promise<unknown> {
+  const candidates = Array.from(new Set([apiUrl("/api/demo-data"), "/api/demo-data"].filter(Boolean)));
+  let lastStatus = 0;
+  let lastError: unknown;
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      lastStatus = res.status;
+      if (!res.ok) continue;
+      return await res.json();
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  if (lastStatus) throw new Error(`HTTP ${lastStatus}`);
+  throw lastError instanceof Error ? lastError : new Error("Feed unreachable");
 }
 
 /** Real Arc markets use 0x addresses. Offline sample ids (mkt_*) must never reach buyTicket. */

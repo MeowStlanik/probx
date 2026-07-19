@@ -3,7 +3,7 @@
 import { Bitcoin, CloudSun, Minus, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { apiUrl } from "@/lib/api";
+import { fetchDemoReferenceData } from "@/lib/api";
 
 type Direction = "up" | "down" | "flat";
 
@@ -111,10 +111,7 @@ export function LiveReferencePanel({
   const refresh = useCallback(async (manual = false) => {
     if (manual) setManualRefreshing(true);
     try {
-      // Empty api base = same-origin /api on Vercel — do not treat as "unavailable"
-      const response = await fetch(apiUrl("/api/demo-data"), { cache: "no-store" });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const next = (await response.json()) as DemoReferenceData;
+      const next = (await fetchDemoReferenceData()) as DemoReferenceData;
 
       if (showBtc && next.btcUsd && Number.isFinite(next.btcUsd.price)) {
         applyHistory("btc", next.btcUsd.history, {
