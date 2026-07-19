@@ -48,7 +48,13 @@ export async function listMarkets(): Promise<Market[]> {
 
   try {
     return await marketsInflight;
-  } catch {
+  } catch (error) {
+    // Surface the real cause in server logs instead of silently serving demo
+    // data — a stuck "demo candle" card means this path is firing.
+    console.error(
+      "[markets] onchain list failed, serving fallback:",
+      error instanceof Error ? error.message : error
+    );
     if (marketsCache && now - marketsCache.at < MARKETS_CACHE_STALE_MS) {
       return marketsCache.data;
     }

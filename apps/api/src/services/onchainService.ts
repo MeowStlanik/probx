@@ -1257,12 +1257,19 @@ function isStableArcRpcUrl(url: string): boolean {
 
 function buildRpcTransport(urls: string[]) {
   // Batch concurrent eth_calls into one JSON-RPC request (a market read is 10
-  // calls; a list is 10×N). Standard nodes support batch arrays; RPC_BATCH=0
-  // opts out if a provider misbehaves. fallback() still rotates on errors.
-  const batch =
-    process.env.RPC_BATCH === "0" ? undefined : { batchSize: 25, wait: 16 };
-  const transports = urls.map((url) => http(url, { batch }));
-  return transports.length === 1 ? transports[0] : fallback(transports, { rank: false });
+  // calls; a list is 10×N). Not every gateway accepts batch arrays, so each URL
+  // gets a [batched, plain] pair inside fallback() — if the batched transport
+  // errors, viem automatically degrades to plain per-call requests instead of
+  // taking the whole read path down. RPC_BATCH=0 disables batching entirely.
+  if (process.env.RPC_BATCH === "0") {
+    const plain = urls.map((url) => http(url));
+    return plain.length === 1 ? plain[0] : fallback(plain, { rank: false });
+  }
+  const transports = urls.flatMap((url) => [
+    http(url, { batch: { batchSize: 25, wait: 16 } }),
+    http(url)
+  ]);
+  return fallback(transports, { rank: false });
 }
 
 function loadDeployment(): Deployment {

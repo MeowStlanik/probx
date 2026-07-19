@@ -88,8 +88,11 @@ That cuts the free lunch for anyone who would otherwise only buy mispriced 50/50
 - **LP vault** — deposit / withdraw underwriting liquidity  
 - **Live feeds** — BTC (Coinbase) & London temp (Open-Meteo), auto-resolve  
 - **Circle Wallets** — email → Developer-Controlled EOA on Arc (fallback: local session EOA if Circle not configured)  
+- **Durable wallet mapping** — email → walletId persisted in Redis KV (Upstash / Vercel KV); recovery via Circle `listWallets(refId)` — no duplicate wallets after logout  
 - **Email OTP** — app-issued 6-digit code via Gmail SMTP (or dev-echo in local)  
 - **CCTP** — bridge USDC from Base Sepolia / Eth Sepolia → Arc  
+- **Send USDC** — transfer to any Arc address from the wallet popover (Circle or MetaMask path)  
+- **Tx status tracking** — buy / claim / deposit / send tracked `pending → confirmed / failed`, reconciled server-side  
 - **Dual path** — email session or MetaMask for trade & claim  
 
 ---
@@ -216,14 +219,15 @@ EMAIL_OTP_REQUIRED=1
 
 ```text
 Connect (email or MetaMask)
-    → Fund USDC (direct Arc or CCTP)
+    → Fund USDC (direct Arc, CCTP, or receive a Send from another wallet)
     → Optional: LP deposit
-    → Buy YES/NO (+ boost if vault allows)
-    → Wait lock + observation
+    → Buy YES/NO (+ boost if vault allows)   [tx: pending → confirmed]
+    → Wait lock + observation (live chart vs start line)
     → Auto/manual resolve → settle / claim
+    → Send USDC out to any Arc address anytime
 ```
 
-**Admin:** `/admin` — create test markets (BTC / London weather). Protect with `ADMIN_SECRET`. Resolver tools under *Advanced*.
+**Admin:** `/admin` — create test markets (BTC / London weather). No UI entry point (header/footer links removed) — open the URL directly. Protect with `ADMIN_SECRET`. Resolver tools under *Advanced*.
 
 ---
 
@@ -275,7 +279,23 @@ EMAIL_OTP_REQUIRED=1
 OTP_HMAC_SECRET=
 SESSION_WALLET_SECRET=
 MARKET_CYCLE_ENABLED=1
+MARKET_CYCLE_ON_TRAFFIC=1      # background cycle on site traffic (0 = off)
+RPC_BATCH=1                    # JSON-RPC batching (0 = plain per-call requests)
+UPSTASH_REDIS_REST_URL=        # durable wallet map + tx statuses (free tier ok)
+UPSTASH_REDIS_REST_TOKEN=      # KV_REST_API_URL / KV_REST_API_TOKEN also accepted
 ```
+
+> **Without the KV vars** the email → wallet mapping and tx statuses fall back
+> to per-instance `/tmp` files — fine locally, ephemeral on Vercel. Set Upstash
+> (free) for production reliability.
+
+### Markets 24/7
+
+The BTC / weather cycle (create → observe → resolve) needs a trigger about
+**once per minute**. Vercel Hobby cron fires ~once a day, so:
+
+1. **External pinger (recommended):** hit `GET /api/cron/market-cycle?secret=CRON_SECRET` every minute — free on cron-job.org. Full guide: [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md).
+2. **On-traffic fallback (built-in):** while anyone has the site open, the cycle self-runs in the background (throttled 50s across instances via KV). Zero traffic → falls back to the daily cron only.
 
 ---
 
@@ -283,6 +303,7 @@ MARKET_CYCLE_ENABLED=1
 
 - Deployment addresses: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json)
 - Env template: [`.env.example`](.env.example)
+- External cron pinger (markets 24/7): [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md)
 
 ---
 

@@ -193,9 +193,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     () =>
       createPublicClient({
         chain: arcChain,
-        // Batch concurrent eth_calls (ticket/portfolio reads) into one HTTP request.
+        // Prefer batched RPC; fall back to plain per-call if the gateway rejects batches.
         transport: fallback(
-          arcRpcUrls.map((url) => http(url, { batch: { batchSize: 25, wait: 16 } })),
+          arcRpcUrls.flatMap((url) => [
+            http(url, { batch: { batchSize: 25, wait: 16 } }),
+            http(url)
+          ]),
           { rank: false }
         )
       }),
