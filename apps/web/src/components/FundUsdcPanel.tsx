@@ -27,7 +27,7 @@ import {
 import { arcDeployment } from "@/lib/onchain";
 import { readableWalletError, shortHex, useWallet } from "@/lib/wallet";
 
-type FundTab = "direct" | "bridge";
+type FundTab = "direct" | "bridge" | "send";
 
 type Props = {
   open: boolean;
@@ -52,7 +52,10 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     refreshBalance,
     mode: sessionMode,
     email: sessionEmail,
-    hasProvider
+    hasProvider,
+    usdcBalance,
+    sendUsdc,
+    pollTxStatus
   } = useWallet();
   const [tab, setTab] = useState<FundTab>(initialTab);
   const [config, setConfig] = useState<CctpConfig | null>(null);
@@ -68,6 +71,14 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [mounted, setMounted] = useState(false);
+
+  // Send-USDC tab state
+  const [sendTo, setSendTo] = useState("");
+  const [sendAmount, setSendAmount] = useState("");
+  const [sendBusy, setSendBusy] = useState(false);
+  const [sendStatus, setSendStatus] = useState<"idle" | "pending" | "confirmed" | "failed">("idle");
+  const [sendTx, setSendTx] = useState<string | null>(null);
+  const [sendError, setSendError] = useState("");
 
   useEffect(() => {
     setMounted(true);
@@ -373,6 +384,49 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     sourceCfg
   ]);
 
+  const handleSend = useCallback(async () => {
+    setSendError("");
+    setSendTx(null);
+    if (!mintTo) {
+      setSendError("Connect a wallet first.");
+      return;
+    }
+    setSendBusy(true);
+    setSendStatus("pending");
+    try {
+      const hash = await sendUsdc(sendTo, sendAmount);
+      setSendTx(hash);
+      // Poll durable status until confirmed / failed.
+      let attempts = 0;
+      const poll = async (): Promise<void> => {
+        attempts += 1;
+        const record = await pollTxStatus(hash);
+        if (record?.status === "confirmed") {
+          setSendStatus("confirmed");
+          void refreshBalance();
+          return;
+        }
+        if (record?.status === "failed") {
+          setSendStatus("failed");
+          setSendError(record.error || "Transaction failed on chain.");
+          return;
+        }
+        if (attempts < 40) {
+          window.setTimeout(() => void poll(), 3_000);
+        }
+      };
+      void poll();
+    } catch (error) {
+      setSendStatus("failed");
+      setSendError(readableWalletError(error));
+    } finally {
+      setSendBusy(false);
+    }
+  }, [mintTo, pollTxStatus, refreshBalance, sendAmount, sendTo, sendUsdc]);
+
+  const sendBalanceLabel =
+    usdcBalance === null ? "—" : `${formatUnits(usdcBalance, 6)} USDC`;
+
   if (!open || !mounted) return null;
 
   const modal = (
@@ -399,12 +453,14 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
           <X size={16} />
         </button>
 
-        <span className="eyebrow">Fund wallet</span>
-        <h3 className="fundModalTitle">Get USDC on Arc</h3>
+        <span className="eyebrow">{tab === "send" ? "Transfer" : "Fund wallet"}</span>
+        <h3 className="fundModalTitle">{tab === "send" ? "Send USDC on Arc" : "Get USDC on Arc"}</h3>
         <p className="fundModalSub">
           {tab === "bridge"
             ? "Bridge via CCTP from Base / Eth Sepolia."
-            : "Deposit Arc testnet USDC to your session."}
+            : tab === "send"
+              ? "Send Arc USDC to another wallet address."
+              : "Deposit Arc testnet USDC to your session."}
         </p>
 
         <div className="fundTabs" role="tablist" aria-label="Fund method">
@@ -433,6 +489,20 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
             }}
           >
             ⇄ Bridge (CCTP)
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "send"}
+            className={`fundTab ${tab === "send" ? "isActive" : ""}`}
+            onClick={() => {
+              setTab("send");
+              setMessage("");
+              setStep("idle");
+              setSendError("");
+            }}
+          >
+            ↗ Send
           </button>
         </div>
 
@@ -490,6 +560,111 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
               <p className="fundHint fundHintTight">
                 After a transfer lands, hit refresh on your balance in the header.
               </p>
+            </div>
+          ) : tab === "send" ? (
+            <div className="fundPanelCard">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+                <span style={{ fontSize: 11, color: "#5B6A7D" }}>Available</span>
+                <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600, color: "#0B1622" }}>
+                  {sendBalanceLabel}
+                </span>
+              </div>
+              <label className="fundField">
+                <span>Recipient Arc address</span>
+                <input
+                  placeholder="0x…"
+                  value={sendTo}
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={sendBusy}
+                  onChange={(e) => {
+                    setSendTo(e.target.value.trim());
+                    setSendError("");
+                    setSendStatus("idle");
+                  }}
+                />
+              </label>
+              <label className="fundField">
+                <span>Amount (USDC)</span>
+                <input
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={sendAmount}
+                  disabled={sendBusy}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/[^\d.]/g, "");
+                    setSendAmount(v);
+                    setSendError("");
+                    setSendStatus("idle");
+                  }}
+                />
+              </label>
+
+              {sendError ? (
+                <p className="fundHint" style={{ color: "#D6544A" }}>{sendError}</p>
+              ) : (
+                <p className="fundHint">
+                  Sends <strong>native Arc USDC</strong> on the same chain as ProbX markets. Gas is paid in Arc USDC.
+                </p>
+              )}
+
+              {sendStatus !== "idle" && sendTx ? (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    background:
+                      sendStatus === "confirmed"
+                        ? "#E7F5EF"
+                        : sendStatus === "failed"
+                          ? "#FBEAE8"
+                          : "#EAF2FB",
+                    color:
+                      sendStatus === "confirmed"
+                        ? "#1F9D6B"
+                        : sendStatus === "failed"
+                          ? "#D6544A"
+                          : "#2775CA"
+                  }}
+                >
+                  {sendStatus === "pending" ? <Loader2 size={14} className="spinIcon" /> : null}
+                  {sendStatus === "pending"
+                    ? "Pending confirmation…"
+                    : sendStatus === "confirmed"
+                      ? "Confirmed"
+                      : "Failed"}
+                  <a
+                    href={`${arcDeployment.explorerUrl || "https://testnet.arcscan.app"}/tx/${sendTx}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ marginLeft: "auto", fontSize: 11.5, color: "inherit", textDecoration: "underline" }}
+                  >
+                    {shortHex(sendTx)}
+                  </a>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                className="fundFooterBtn primary"
+                disabled={sendBusy || !mintTo || !sendTo || !sendAmount}
+                onClick={() => void handleSend()}
+                style={{ marginTop: 14 }}
+              >
+                {sendBusy ? (
+                  <>
+                    <Loader2 size={15} className="spinIcon" /> Sending…
+                  </>
+                ) : (
+                  "Send USDC"
+                )}
+              </button>
             </div>
           ) : (
             <div className="fundPanelCard">

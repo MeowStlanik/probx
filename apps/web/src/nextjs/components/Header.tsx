@@ -26,6 +26,7 @@ interface Props {
   onFixNetwork: () => void;
   onDeposit: (amount: number) => void;
   onBridge: () => void;
+  onSend: () => void;
   onStartBridge: () => void;
   fundModalOpen: boolean;
   onCloseFundModal: () => void;
@@ -157,25 +158,6 @@ export function Header(props: Props) {
             />
             Arc Testnet
           </a>
-          <Link
-            href="/admin"
-            title="Admin"
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: 10,
-              border: `1px solid ${theme.color.border}`,
-              background: "#fff",
-              color: theme.color.muted,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0,
-              textDecoration: "none"
-            }}
-          >
-            ⚙
-          </Link>
           <WalletPopover
             wallet={props.wallet}
             busy={props.walletBusy}
@@ -188,6 +170,7 @@ export function Header(props: Props) {
             onFixNetwork={props.onFixNetwork}
             onDeposit={() => props.onDeposit(0)}
             onBridge={props.onBridge}
+            onSend={props.onSend}
           />
         </div>
       </div>

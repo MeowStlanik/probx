@@ -22,13 +22,17 @@ function serverOrigin(): string {
   return `http://127.0.0.1:${port}`;
 }
 
-async function httpGetJson(path: string): Promise<{ ok: boolean; status: number; body: unknown }> {
+async function httpGetJson(
+  path: string,
+  timeoutMs = 6_000
+): Promise<{ ok: boolean; status: number; body: unknown }> {
   const origin = serverOrigin();
   const url = `${origin}${path.startsWith("/") ? path : `/${path}`}`;
   const response = await fetch(url, {
     cache: "no-store",
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(20_000)
+    // Keep SSR snappy — long timeouts made market pages feel "stuck".
+    signal: AbortSignal.timeout(timeoutMs)
   });
   const body = await response.json().catch(() => null);
   return { ok: response.ok, status: response.status, body };
@@ -61,9 +65,20 @@ export async function fetchMarkets(): Promise<Market[]> {
 }
 
 export async function fetchMarket(id: string): Promise<Market | undefined> {
+  // In-process first — avoids SSR → HTTP → same Next process deadlocks / multi-second waits
+  // when the server is busy compiling or handling other requests.
   try {
-    const result = await httpGetJson(`/api/markets/${encodeURIComponent(id)}`);
-    if (result.ok && result.body && typeof result.body === "object") {
+    const { dispatchApiRequest } = await import("../../../api/src/dispatch");
+    const result = await Promise.race([
+      dispatchApiRequest({
+        method: "GET",
+        path: `/api/markets/${encodeURIComponent(id)}`
+      }),
+      new Promise<{ status: number; body: null }>((resolve) =>
+        setTimeout(() => resolve({ status: 504, body: null }), 8_000)
+      )
+    ]);
+    if (result.status >= 200 && result.status < 300 && result.body) {
       return normalizeMarket(result.body as Market);
     }
   } catch {
@@ -71,12 +86,8 @@ export async function fetchMarket(id: string): Promise<Market | undefined> {
   }
 
   try {
-    const { dispatchApiRequest } = await import("../../../api/src/dispatch");
-    const result = await dispatchApiRequest({
-      method: "GET",
-      path: `/api/markets/${encodeURIComponent(id)}`
-    });
-    if (result.status >= 200 && result.status < 300 && result.body) {
+    const result = await httpGetJson(`/api/markets/${encodeURIComponent(id)}`, 5_000);
+    if (result.ok && result.body && typeof result.body === "object") {
       return normalizeMarket(result.body as Market);
     }
   } catch {

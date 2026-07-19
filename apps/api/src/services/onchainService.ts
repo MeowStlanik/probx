@@ -365,7 +365,13 @@ async function readOnchainMarket(item: DemoMarketDeployment): Promise<Market | u
     publicClient.readContract({ address: market, abi: marketAbi, functionName: "winningOutcome" })
   ]);
   // TicketBought volume for desk stats; live odds come from on-chain yesPrice/noPrice.
-  const tradeStats = await marketTradeStats(market).catch(() => emptyMarketTradeStats());
+  // Cap log scan so a single market detail never stalls navigation on a slow RPC.
+  const tradeStats = await Promise.race([
+    marketTradeStats(market).catch(() => emptyMarketTradeStats()),
+    new Promise<ReturnType<typeof emptyMarketTradeStats>>((resolve) =>
+      setTimeout(() => resolve(emptyMarketTradeStats()), 1_500)
+    )
+  ]);
   const role = classifyDemoMarket(item, question);
   const liveYes = Number(yesPrice) / 1_000_000;
   const liveNo = Number(noPrice) / 1_000_000;

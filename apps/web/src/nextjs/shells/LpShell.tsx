@@ -22,7 +22,7 @@ export function LpShell({
   initialAvailable?: number;
   initialApy?: number;
 }) {
-  const { address, getWalletClient, publicClient, ensureArcChain } = useWallet();
+  const { address, getWalletClient, publicClient, ensureArcChain, trackTx } = useWallet();
   const [tvl, setTvl] = useState(initialTvl ?? 0);
   const [reserved, setReserved] = useState(initialReserved ?? 0);
   const [available, setAvailable] = useState(initialAvailable ?? 0);
@@ -133,6 +133,7 @@ export function LpShell({
             functionName: "approve",
             args: [getAddress(arcDeployment.liquidityPool), assets]
           });
+          trackTx({ hash, kind: "approve", label: `Approve ${amount} USDC for LP` });
           await publicClient.waitForTransactionReceipt({ hash });
           await refresh();
           return `Approved ${amount} USDC — now press Deposit USDC.`;
@@ -147,6 +148,7 @@ export function LpShell({
             functionName: "deposit",
             args: [assets]
           });
+          trackTx({ hash, kind: "deposit", label: `Deposit ${amount} USDC to LP`, amountUsdc: String(amount) });
           await publicClient.waitForTransactionReceipt({ hash });
           recordLocalLpAction({ kind: "Deposit", amountUsdc: amount, tx: hash });
           await refresh();
@@ -167,6 +169,7 @@ export function LpShell({
           functionName: "withdraw",
           args: [sharesNeeded]
         });
+        trackTx({ hash, kind: "deposit", label: `Withdraw ${amount} USDC from LP`, amountUsdc: String(amount) });
         await publicClient.waitForTransactionReceipt({ hash });
         recordLocalLpAction({ kind: "Withdraw", amountUsdc: amount, tx: hash });
         await refresh();

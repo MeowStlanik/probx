@@ -21,6 +21,7 @@ import { cancelMarket, resolveMarket, resolveReferenceMarket, simulateEvent } fr
 import { settleMarketTickets, ticketsForUser } from "./routes/tickets.js";
 import { recordTicketOpening } from "./services/onchainService.js";
 import { handleWalletGet, handleWalletPost } from "./routes/wallet.js";
+import { reconcilePending } from "./services/txTrackerService.js";
 import { runAutoResolveOnce } from "./services/autoResolveWorker.js";
 import { getMarketCycleStatus, runMarketCycleOnce } from "./services/marketCycleWorker.js";
 
@@ -117,7 +118,9 @@ export async function dispatchApiRequest(input: {
         return { status: 200, body: { ok: true, skipped: "throttled", cycleStatus: getMarketCycleStatus() } };
       }
       const cycle = await runMarketCycleOnce();
-      return { status: 200, body: { ...cycle, cycleStatus: getMarketCycleStatus() } };
+      // Opportunistically settle any pending user tx (buy/claim/deposit/transfer).
+      const txReconcile = await reconcilePending().catch(() => ({ checked: 0, settled: 0 }));
+      return { status: 200, body: { ...cycle, txReconcile, cycleStatus: getMarketCycleStatus() } };
     }
 
     if (method === "GET" && path === "/api/cron/market-cycle/status") {
@@ -125,9 +128,8 @@ export async function dispatchApiRequest(input: {
     }
 
     if (method === "GET") {
-      const walletGet = handleWalletGet(path, searchParams, headers);
-      if (walletGet) {
-        const resolved = await Promise.resolve(walletGet);
+      const resolved = await handleWalletGet(path, searchParams, headers);
+      if (resolved) {
         return { status: resolved.status, body: resolved.body };
       }
     }

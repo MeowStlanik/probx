@@ -17,6 +17,7 @@ import {
   formatUnits,
   getAddress,
   http,
+  parseUnits,
   type PublicClient
 } from "viem";
 import { apiUrl } from "@/lib/api";
@@ -28,6 +29,17 @@ export type AppWalletClient = {
 };
 
 export type WalletMode = "injected" | "embedded";
+
+export type TxStatusRecord = {
+  hash: `0x${string}`;
+  kind: "buy" | "claim" | "deposit" | "transfer" | "approve" | "other";
+  status: "pending" | "confirmed" | "failed";
+  label?: string;
+  amountUsdc?: string;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+};
 
 const STORAGE_KEY = "probx.wallet.connected";
 const EMBEDDED_STORAGE_KEY = "probx.wallet.embedded";
@@ -147,6 +159,18 @@ type WalletContextValue = {
   disconnect: () => void;
   ensureArcChain: () => Promise<void>;
   refreshBalance: () => Promise<void>;
+  /** Send USDC to another Arc address. Returns the tx hash. */
+  sendUsdc: (to: string, amount: string) => Promise<`0x${string}`>;
+  /** Poll a tx hash for durable status (pending → confirmed / failed). */
+  pollTxStatus: (hash: `0x${string}`) => Promise<TxStatusRecord | null>;
+  /** Register a tx hash so the tracker reports its status (buy/claim/deposit). */
+  trackTx: (input: {
+    hash: `0x${string}`;
+    kind: TxStatusRecord["kind"];
+    label?: string;
+    to?: `0x${string}`;
+    amountUsdc?: string;
+  }) => void;
   getWalletClient: () => AppWalletClient | null;
   publicClient: PublicClient;
 };
@@ -677,6 +701,108 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       ? false
       : chainId !== null && chainId !== arcDeployment.chainId;
 
+  const pollTxStatus = useCallback(async (hash: `0x${string}`): Promise<TxStatusRecord | null> => {
+    try {
+      const res = await fetch(apiUrl(`/api/wallet/tx?hash=${hash}`), { cache: "no-store" });
+      if (!res.ok) return null;
+      return (await res.json()) as TxStatusRecord;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const sendUsdc = useCallback(
+    async (to: string, amount: string): Promise<`0x${string}`> => {
+      if (!address) throw new Error("Connect a wallet first.");
+      let destination: `0x${string}`;
+      try {
+        destination = getAddress(to);
+      } catch {
+        throw new Error("Enter a valid destination address (0x…).");
+      }
+      if (getAddress(address) === destination) {
+        throw new Error("Destination is your own wallet.");
+      }
+      if (!/^\d+(\.\d+)?$/.test(amount.trim()) || Number(amount) <= 0) {
+        throw new Error("Enter a valid amount greater than 0.");
+      }
+
+      // Embedded (Circle / local dev EOA): server signs + tracks status.
+      if (mode === "embedded" && embedded) {
+        const res = await fetch(apiUrl("/api/wallet/transfer"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email: embedded.email,
+            sessionToken: embedded.sessionToken,
+            to: destination,
+            amount: amount.trim()
+          })
+        });
+        const payload = (await res.json().catch(() => ({}))) as { hash?: string; error?: string };
+        if (!res.ok || !payload.hash) {
+          throw new Error(payload.error || `Transfer failed (HTTP ${res.status})`);
+        }
+        void refreshBalance(address);
+        return payload.hash as `0x${string}`;
+      }
+
+      // Injected (MetaMask): transfer USDC directly, then record for tracking.
+      const client = getWalletClient();
+      if (!client) throw new Error("Wallet client unavailable.");
+      const hash = await client.writeContract({
+        address: arcDeployment.usdc as `0x${string}`,
+        abi: usdcAbi,
+        functionName: "transfer",
+        args: [destination, parseUnits(amount.trim(), 6)]
+      });
+      // Best-effort: register the hash so the poller can report status.
+      void fetch(apiUrl("/api/wallet/tx/record"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          hash,
+          kind: "transfer",
+          owner: address,
+          from: address,
+          to: destination,
+          amountUsdc: amount.trim(),
+          label: `Send ${amount.trim()} USDC`
+        })
+      }).catch(() => undefined);
+      void refreshBalance(address);
+      return hash as `0x${string}`;
+    },
+    [address, embedded, getWalletClient, mode, refreshBalance]
+  );
+
+  const trackTx = useCallback(
+    (input: {
+      hash: `0x${string}`;
+      kind: TxStatusRecord["kind"];
+      label?: string;
+      to?: `0x${string}`;
+      amountUsdc?: string;
+    }) => {
+      if (!address) return;
+      // Fire-and-forget: server records + reconciles pending → confirmed / failed.
+      void fetch(apiUrl("/api/wallet/tx/record"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          hash: input.hash,
+          kind: input.kind,
+          owner: email ?? address,
+          from: address,
+          to: input.to,
+          label: input.label,
+          amountUsdc: input.amountUsdc
+        })
+      }).catch(() => undefined);
+    },
+    [address, email]
+  );
+
   const value = useMemo<WalletContextValue>(() => ({
     address,
     chainId: mode === "embedded" ? arcDeployment.chainId : chainId,
@@ -697,6 +823,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     disconnect,
     ensureArcChain,
     refreshBalance: () => refreshBalance(address),
+    sendUsdc,
+    pollTxStatus,
+    trackTx,
     getWalletClient,
     publicClient
   }), [
@@ -718,6 +847,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     disconnect,
     ensureArcChain,
     refreshBalance,
+    sendUsdc,
+    pollTxStatus,
+    trackTx,
     getWalletClient,
     publicClient
   ]);

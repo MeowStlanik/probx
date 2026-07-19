@@ -17,8 +17,10 @@ import {
   isCircleConfigured,
   listCircleSessions,
   writeContractViaCircle,
+  transferUsdcViaCircle,
   circleStatus
 } from "./circleWalletService.js";
+import { parseUnits } from "viem";
 import { getMonorepoRoot, runtimeFile } from "../runtimePaths.js";
 import { issueSignedSession, isLegacyOpaqueToken, verifySignedSession } from "./signedSession.js";
 
@@ -293,10 +295,10 @@ function requireSession(emailInput: string, sessionToken: string): SessionRecord
   throw new Error("Invalid or expired session token. Sign in with email again.");
 }
 
-export function getSessionPublic(emailInput: string, sessionToken: string) {
+export async function getSessionPublic(emailInput: string, sessionToken: string) {
   if (isCircleConfigured()) {
     try {
-      return getCircleSessionPublic(emailInput, sessionToken);
+      return await getCircleSessionPublic(emailInput, sessionToken);
     } catch {
       // fall through to local only if not a Circle session
     }
@@ -384,13 +386,90 @@ export async function writeContractForSession(body: WriteContractBody): Promise<
   return { hash, from: account.address };
 }
 
-export function listSessionCount(): number {
+/** USDC has 6 decimals on Arc (the ERC-20 token; native gas is 18). */
+const USDC_DECIMALS = 6;
+const arcUsdcAddress = (process.env.NEXT_PUBLIC_USDC_ADDRESS ||
+  "0x3600000000000000000000000000000000000000") as `0x${string}`;
+
+const erc20TransferAbi = [
+  {
+    type: "function",
+    name: "transfer",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: [{ name: "", type: "bool" }]
+  }
+] as const;
+
+/**
+ * Send USDC from the session wallet to another Arc address.
+ * `amount` is a decimal USDC string (e.g. "2.5").
+ */
+export async function transferUsdcForSession(body: {
+  email: string;
+  sessionToken: string;
+  to: string;
+  amount: string;
+}): Promise<{ hash: `0x${string}`; from: `0x${string}`; circleTxId?: string }> {
+  let destination: `0x${string}`;
+  try {
+    destination = getAddress(body.to);
+  } catch {
+    throw new Error("Enter a valid destination address (0x…).");
+  }
+  const amount = (body.amount || "").trim();
+  if (!/^\d+(\.\d+)?$/.test(amount) || Number(amount) <= 0) {
+    throw new Error("Enter a valid amount greater than 0.");
+  }
+
+  if (isCircleConfigured()) {
+    try {
+      return await transferUsdcViaCircle({
+        email: body.email,
+        sessionToken: body.sessionToken,
+        destinationAddress: destination,
+        amount
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!message.includes("Circle session not found")) throw error;
+    }
+  }
+
+  const record = requireSession(body.email, body.sessionToken);
+  const account = privateKeyToAccount(record.privateKey);
+  if (getAddress(account.address) === destination) {
+    throw new Error("Destination is your own wallet.");
+  }
+
+  const walletClient = createWalletClient({ account, chain: arcChain, transport: http(arcRpcUrl) });
+  const publicClient = createPublicClient({ chain: arcChain, transport: http(arcRpcUrl) });
+
+  const data = encodeFunctionData({
+    abi: erc20TransferAbi,
+    functionName: "transfer",
+    args: [destination, parseUnits(amount, USDC_DECIMALS)]
+  });
+
+  const hash = await walletClient.sendTransaction({ to: arcUsdcAddress, data, value: 0n });
+  try {
+    await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  } catch {
+    // tracker polls status separately
+  }
+  return { hash, from: account.address };
+}
+
+export async function listSessionCount(): Promise<number> {
   const local = Object.keys(loadStore().sessions).length;
-  const circle = isCircleConfigured() ? listCircleSessions() : 0;
+  const circle = isCircleConfigured() ? await listCircleSessions() : 0;
   return local + circle;
 }
 
-export function walletModeInfo() {
+export async function walletModeInfo() {
   const circle = circleStatus();
   return {
     embeddedEnabled: true,
@@ -404,6 +483,6 @@ export function walletModeInfo() {
     },
     paymaster: false,
     gas: "User pays Arc USDC gas (native). No paymaster.",
-    sessions: listSessionCount()
+    sessions: await listSessionCount()
   };
 }

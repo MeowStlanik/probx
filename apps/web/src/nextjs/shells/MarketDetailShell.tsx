@@ -28,7 +28,7 @@ export function MarketDetailShell({
   serverNow?: number;
 }) {
   const router = useRouter();
-  const { address, getWalletClient, publicClient, ensureArcChain } = useWallet();
+  const { address, getWalletClient, publicClient, ensureArcChain, trackTx } = useWallet();
   const [state, setState] = useState<LoadState>(initial ? "live" : "loading");
   const [market, setMarket] = useState<Market | null>(initial ?? null);
   const [activity, setActivity] = useState<ActivityRow[]>([]);
@@ -93,9 +93,10 @@ export function MarketDetailShell({
   );
 
   useEffect(() => {
+    // If SSR already filled the card, refresh quietly; otherwise show loading shell.
     void load({ silent: Boolean(initial) });
     // Poll less aggressively — reduces tab-switch jank
-    const id = window.setInterval(() => void load({ silent: true }), 15_000);
+    const id = window.setInterval(() => void load({ silent: true }), 20_000);
     return () => window.clearInterval(id);
   }, [load, initial]);
 
@@ -179,6 +180,7 @@ export function MarketDetailShell({
         functionName: "approve",
         args: [getAddress(arcDeployment.microBoostEngine), quote.totalDebit]
       });
+      trackTx({ hash: approveHash, kind: "approve", label: "Approve USDC" });
       await publicClient.waitForTransactionReceipt({ hash: approveHash, timeout: 120_000 });
       const allw = await publicClient.readContract({
         address: getAddress(arcDeployment.usdc),
@@ -219,6 +221,7 @@ export function MarketDetailShell({
         functionName: "buyTicket",
         args: [marketAddress, outcomeId, risk, boostBps]
       });
+      trackTx({ hash, kind: "buy", label: `Buy ${side} · ${market.question}` });
       const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
       let ticketId: string | undefined;
       try {

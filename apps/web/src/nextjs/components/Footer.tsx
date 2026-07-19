@@ -7,8 +7,7 @@ const productLinks = [
   { href: "/markets", label: "Markets" },
   { href: "/markets", label: "Quick trade" },
   { href: "/lp", label: "LP vault" },
-  { href: "/portfolio", label: "Portfolio" },
-  { href: "/admin", label: "Admin" }
+  { href: "/portfolio", label: "Portfolio" }
 ];
 
 function short(a: string) {

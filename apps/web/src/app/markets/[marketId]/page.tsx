@@ -11,9 +11,14 @@ export default async function MarketDetailPage({
 }) {
   const { marketId } = await params;
   const serverNow = Date.now();
+  // Cap SSR wait so navigation never feels frozen; client shell will finish loading.
   let initial = null;
   try {
-    initial = (await fetchMarket(marketId)) ?? null;
+    initial =
+      (await Promise.race([
+        fetchMarket(marketId),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 4_000))
+      ])) ?? null;
   } catch {
     initial = null;
   }

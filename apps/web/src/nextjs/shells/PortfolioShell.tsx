@@ -14,7 +14,7 @@ import { PortfolioView } from "../views/PortfolioView";
  * Wires PortfolioView → fetchUserTickets + settleTicket (wins/refunds only).
  */
 export function PortfolioShell() {
-  const { address, ready, getWalletClient, publicClient, ensureArcChain } = useWallet();
+  const { address, ready, getWalletClient, publicClient, ensureArcChain, trackTx } = useWallet();
   const [state, setState] = useState<LoadState>("loading");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [claimingId, setClaimingId] = useState<string | null>(null);
@@ -106,6 +106,7 @@ export function PortfolioShell() {
           functionName: "settleTicket",
           args: [ticketId]
         });
+        trackTx({ hash, kind: "claim", label: `Claim ticket ${id}` });
         await publicClient.waitForTransactionReceipt({ hash });
         setClaimMessage(`Claimed — tx ${hash.slice(0, 10)}…`);
         await load();

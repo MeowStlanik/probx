@@ -39,7 +39,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
   } = useWallet();
 
   const [fundOpen, setFundOpen] = useState(false);
-  const [fundTab, setFundTab] = useState<"direct" | "bridge">("direct");
+  const [fundTab, setFundTab] = useState<"direct" | "bridge" | "send">("direct");
   const [otpToken, setOtpToken] = useState<string | null>(null);
   const [pendingEmail, setPendingEmail] = useState("");
   const [quickTradeHref, setQuickTradeHref] = useState("/markets");
@@ -149,6 +149,10 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
         }}
         onBridge={() => {
           setFundTab("bridge");
+          setFundOpen(true);
+        }}
+        onSend={() => {
+          setFundTab("send");
           setFundOpen(true);
         }}
         onStartBridge={() => {

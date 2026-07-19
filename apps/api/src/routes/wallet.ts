@@ -3,8 +3,19 @@ import {
   getSessionPublic,
   walletModeInfo,
   writeContractForSession,
+  transferUsdcForSession,
   type WriteContractBody
 } from "../services/sessionWalletService.js";
+import { getTx, listTxForOwner, recordTx, type TxKind } from "../services/txTrackerService.js";
+import { getAddress } from "viem";
+
+function getAddressSafe(value: string): `0x${string}` | undefined {
+  try {
+    return getAddress(value);
+  } catch {
+    return undefined;
+  }
+}
 import {
   cctpPublicConfig,
   fetchIrisMessage,
@@ -15,7 +26,7 @@ import {
 import { cctpSourceAddress, cctpSourceConfigured, demoFundViaCctp } from "../services/cctpDemoFundService.js";
 import { requestEmailOtp, consumeEmailOtp, otpDevEchoEnabled } from "../services/emailOtpService.js";
 
-export function handleWalletGet(
+export async function handleWalletGet(
   path: string,
   searchParams: URLSearchParams,
   headers: Record<string, string | undefined> = {}
@@ -24,13 +35,28 @@ export function handleWalletGet(
     return {
       status: 200,
       body: {
-        ...walletModeInfo(),
+        ...(await walletModeInfo()),
         cctpDemoFund: {
           enabled: cctpSourceConfigured(),
           sourceAddress: cctpSourceAddress()
         }
       }
     };
+  }
+
+  if (path === "/api/wallet/tx") {
+    const hash = (searchParams.get("hash") ?? "").trim();
+    if (hash.startsWith("0x")) {
+      const record = await getTx(hash as `0x${string}`);
+      if (!record) return { status: 404, body: { error: "tx not found" } };
+      return { status: 200, body: record };
+    }
+    const owner =
+      (headers["x-session-email"] ?? "").trim() ||
+      (searchParams.get("owner") ?? "").trim();
+    if (!owner) return { status: 400, body: { error: "hash or owner required" } };
+    const records = await listTxForOwner(owner);
+    return { status: 200, body: { records } };
   }
 
   if (path === "/api/cctp/config") {
@@ -83,7 +109,7 @@ export function handleWalletGet(
       return { status: 400, body: { error: "email and sessionToken required" } };
     }
     try {
-      return { status: 200, body: getSessionPublic(email, sessionToken) };
+      return { status: 200, body: await getSessionPublic(email, sessionToken) };
     } catch (error) {
       return { status: 401, body: { error: error instanceof Error ? error.message : "unauthorized" } };
     }
@@ -143,11 +169,69 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
   if (path === "/api/wallet/write-contract") {
     try {
       const result = await writeContractForSession(body as unknown as WriteContractBody);
+      // Persist a tracked record so the UI can poll pending -> confirmed / failed.
+      const owner = String(body.email ?? "") || result.from;
+      const kind = (String(body.txKind ?? "") || "other") as TxKind;
+      await recordTx({
+        hash: result.hash,
+        kind,
+        owner,
+        from: result.from,
+        to: (body.address as `0x${string}`) ?? undefined,
+        label: body.txLabel ? String(body.txLabel) : undefined,
+        circleTxId: result.circleTxId
+      }).catch(() => undefined);
       return { status: 200, body: result };
     } catch (error) {
       return {
         status: 400,
         body: { error: error instanceof Error ? error.message : "write failed" }
+      };
+    }
+  }
+
+  if (path === "/api/wallet/tx/record") {
+    try {
+      const hash = String(body.hash ?? "");
+      if (!hash.startsWith("0x")) return { status: 400, body: { error: "hash required" } };
+      const record = await recordTx({
+        hash: hash as `0x${string}`,
+        kind: (String(body.kind ?? "other") || "other") as TxKind,
+        owner: String(body.owner ?? ""),
+        from: getAddressSafe(String(body.from ?? "")),
+        to: getAddressSafe(String(body.to ?? "")),
+        label: body.label ? String(body.label) : undefined,
+        amountUsdc: body.amountUsdc ? String(body.amountUsdc) : undefined
+      });
+      return { status: 200, body: record };
+    } catch (error) {
+      return { status: 400, body: { error: error instanceof Error ? error.message : "record failed" } };
+    }
+  }
+
+  if (path === "/api/wallet/transfer") {
+    try {
+      const result = await transferUsdcForSession({
+        email: String(body.email ?? ""),
+        sessionToken: String(body.sessionToken ?? ""),
+        to: String(body.to ?? body.destinationAddress ?? ""),
+        amount: String(body.amount ?? "")
+      });
+      await recordTx({
+        hash: result.hash,
+        kind: "transfer",
+        owner: String(body.email ?? "") || result.from,
+        from: result.from,
+        to: getAddressSafe(String(body.to ?? body.destinationAddress ?? "")),
+        label: `Send ${String(body.amount ?? "")} USDC`,
+        amountUsdc: String(body.amount ?? ""),
+        circleTxId: result.circleTxId
+      }).catch(() => undefined);
+      return { status: 200, body: result };
+    } catch (error) {
+      return {
+        status: 400,
+        body: { error: error instanceof Error ? error.message : "transfer failed" }
       };
     }
   }

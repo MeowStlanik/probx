@@ -20,6 +20,7 @@ interface Props {
   onFixNetwork: () => void;
   onDeposit: () => void;
   onBridge: () => void;
+  onSend: () => void;
   /** Clear any server/client OTP challenge for an email (or last). */
   onClearOtp?: (email?: string) => void;
 }
@@ -36,6 +37,7 @@ export function WalletPopover({
   onFixNetwork,
   onDeposit,
   onBridge,
+  onSend,
   onClearOtp
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -381,6 +383,14 @@ export function WalletPopover({
                   Bridge (CCTP)
                 </Button>
               </div>
+              <Button
+                variant="secondary"
+                fullWidth
+                onClick={onSend}
+                style={{ marginTop: 8, fontSize: 12.5 }}
+              >
+                Send USDC
+              </Button>
               <button
                 type="button"
                 onClick={handleDisconnect}

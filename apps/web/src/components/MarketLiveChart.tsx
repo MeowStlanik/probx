@@ -13,23 +13,30 @@ type MarketLiveChartProps = {
 
 const POLL_MS = { btc: 1_200, weather: 3_000 } as const;
 
+const UP = "#1F9D6B";
+const DOWN = "#D6544A";
+const FLAT = "#5B6A7D";
+const START = "#7C5CFF";
+
 /**
- * Observation-window chart only.
- * Price path that decides YES/NO starts at observationStart — not during Open/Lock.
- * Before observe: waiting state. During: live path vs threshold.
+ * Observation-window chart.
+ *
+ * The price path that decides YES/NO runs during the observation window only.
+ * At observation open we lock a horizontal "start" reference line. The live path
+ * is drawn above or below that line, and once the window closes we show the
+ * verdict: closed above = YES, closed below = NO.
  */
 export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
   const [price, setPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const histRef = useRef<Point[]>([]);
+  const startRef = useRef<number | null>(null);
   const [points, setPoints] = useState<Point[]>([]);
+  const [startValue, setStartValue] = useState<number | null>(null);
 
   const obsStart = Date.parse(market.observationStart || "") || 0;
   const obsEnd = Date.parse(market.observationEnd || "") || 0;
-  // "Open" of observation = first sample in the window (not create-time spot in title).
-  const obsOpen = points.length ? points[0]!.v : null;
-  const threshold = obsOpen;
 
   const phase = useMemo(() => {
     if (!obsStart || !obsEnd) return "unknown" as const;
@@ -78,16 +85,19 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
       const end = Date.parse(market.observationEnd || "") || 0;
       const tNow = Date.now();
 
-      // Only collect / show samples inside the observation window.
+      // Nothing to plot until the observation window opens.
       if (!start || tNow < start) {
         histRef.current = [];
+        startRef.current = null;
         setPoints([]);
+        setStartValue(null);
         return;
       }
 
       const windowEnd = end && tNow > end ? end : tNow;
       const tick: Point = { t: Math.min(at, windowEnd), v: value };
 
+      // Prefer server history inside the window; fall back to locally collected ticks.
       let merged: Point[];
       if (serverHist.length) {
         merged = serverHist.filter((p) => p.t >= start && p.t <= windowEnd);
@@ -95,20 +105,27 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
         merged = histRef.current.filter((p) => p.t >= start && p.t <= windowEnd);
       }
 
-      if (tick.t >= start) {
+      if (tick.t >= start && tick.t <= windowEnd) {
         merged = append(merged, tick, feed === "weather" ? 2_000 : 800);
       }
 
-      // Anchor first point at observation open so the path "starts" there.
+      // Anchor the first plotted point exactly at observation open so the path
+      // visibly "starts" on the start line.
       if (merged.length === 1) {
-        merged = [{ t: start, v: merged[0].v }, merged[0]];
+        merged = [{ t: start, v: merged[0]!.v }, merged[0]!];
       } else if (merged.length === 0) {
         merged = [
           { t: start, v: value },
           { t: Math.max(start + 1, tick.t), v: value }
         ];
-      } else if (merged[0].t > start + 2_000) {
-        merged = [{ t: start, v: merged[0].v }, ...merged];
+      } else if (merged[0]!.t > start + 2_000) {
+        merged = [{ t: start, v: merged[0]!.v }, ...merged];
+      }
+
+      // Lock the start reference once, at the value of the first sample in the window.
+      if (startRef.current == null) {
+        startRef.current = merged[0]!.v;
+        setStartValue(startRef.current);
       }
 
       histRef.current = merged;
@@ -128,75 +145,85 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
     };
   }, [feed, pull]);
 
-  // Reset series when market / observation window changes
+  // Reset the series when the market or observation window changes.
   useEffect(() => {
     histRef.current = [];
+    startRef.current = null;
     setPoints([]);
+    setStartValue(null);
   }, [market.id, market.observationStart]);
 
   const isBtc = feed === "btc";
   const fmt = isBtc ? fmtUsd : fmtTemp;
+
   const chart = useMemo(
-    () => buildChart(points, threshold ?? undefined, obsStart, obsEnd || now),
-    [points, threshold, obsStart, obsEnd, now]
+    () => buildChart(points, startValue ?? undefined, obsStart, obsEnd || now),
+    [points, startValue, obsStart, obsEnd, now]
   );
 
-  const vsThreshold =
-    price != null && threshold != null
-      ? price > threshold
-        ? "above"
-        : price < threshold
-          ? "below"
-          : "flat"
-      : null;
+  const lastValue = points.length ? points[points.length - 1]!.v : price;
+  const delta = startValue != null && lastValue != null ? lastValue - startValue : null;
+  const dir: "above" | "below" | "flat" | null =
+    delta == null ? null : delta > 0 ? "above" : delta < 0 ? "below" : "flat";
 
   const secToObs = Math.max(0, Math.ceil((obsStart - now) / 1000));
   const secLeft = Math.max(0, Math.ceil((obsEnd - now) / 1000));
+
+  const verdict =
+    phase === "after" && dir
+      ? dir === "above"
+        ? "YES"
+        : dir === "below"
+          ? "NO"
+          : "TIE"
+      : null;
 
   return (
     <div style={{ width: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <div style={{ fontSize: 12, color: "#5B6A7D", fontWeight: 600, letterSpacing: "0.02em", textTransform: "uppercase" }}>
-            {isBtc ? "BTC/USD · Coinbase" : "London temp · Open-Meteo"} · observation only
+          <div style={{ fontSize: 12, color: FLAT, fontWeight: 600, letterSpacing: "0.02em", textTransform: "uppercase" }}>
+            {isBtc ? "BTC/USD · Coinbase" : "London temp · Open-Meteo"} · observation window
           </div>
-          <div
-            style={{
-              fontFamily: "'IBM Plex Mono', monospace",
-              fontSize: 28,
-              fontWeight: 600,
-              color: "#0B1622",
-              marginTop: 4
-            }}
-          >
-            {price != null ? fmt(price) : "—"}
-          </div>
-          <div style={{ marginTop: 6, fontSize: 12.5, color: "#5B6A7D", lineHeight: 1.4 }}>
-            {isBtc
-              ? "YES if BTC ends higher than at observation start"
-              : "YES if London temp ends higher than at observation start"}
-            {threshold != null ? (
-              <>
-                {" "}
-                <strong style={{ color: "#7C5CFF" }}>(start {fmt(threshold)})</strong>
-              </>
-            ) : phase === "before" ? (
-              <span> · start set when Observe begins</span>
-            ) : null}
-            {vsThreshold && vsThreshold !== "flat" ? (
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 4 }}>
+            <span
+              style={{
+                fontFamily: "'IBM Plex Mono', monospace",
+                fontSize: 28,
+                fontWeight: 600,
+                color: "#0B1622"
+              }}
+            >
+              {lastValue != null ? fmt(lastValue) : "—"}
+            </span>
+            {delta != null && dir && dir !== "flat" ? (
               <span
                 style={{
-                  marginLeft: 8,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontSize: 14,
                   fontWeight: 600,
-                  color: vsThreshold === "above" ? "#1F9D6B" : "#D6544A"
+                  color: dir === "above" ? UP : DOWN
                 }}
               >
-                · now {vsThreshold} start
+                {delta > 0 ? "▲" : "▼"} {fmtDelta(delta, isBtc)}
               </span>
             ) : null}
           </div>
+          <div style={{ marginTop: 6, fontSize: 12.5, color: FLAT, lineHeight: 1.4 }}>
+            {isBtc
+              ? "YES if BTC closes higher than the start line"
+              : "YES if London temp closes higher than the start line"}
+            {startValue != null ? (
+              <>
+                {" "}
+                <strong style={{ color: START }}>· start {fmt(startValue)}</strong>
+              </>
+            ) : phase === "before" ? (
+              <span> · start locks when observation begins</span>
+            ) : null}
+          </div>
         </div>
-        <PhaseBadge phase={phase} secToObs={secToObs} secLeft={secLeft} />
+        <PhaseBadge phase={phase} secToObs={secToObs} secLeft={secLeft} verdict={verdict} />
       </div>
 
       <div
@@ -216,10 +243,9 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             title="Chart starts at observation"
             body={
               isBtc
-                ? `Compares BTC at observation end vs start — chart runs in ${fmtClock(secToObs)}. Tickets only while Open.`
-                : `Compares London temp at observation end vs start — chart runs in ${fmtClock(secToObs)}. Tickets only while Open.`
+                ? `Locks a start line and tracks BTC above or below it — begins in ${fmtClock(secToObs)}.`
+                : `Locks a start line and tracks London temp above or below it — begins in ${fmtClock(secToObs)}.`
             }
-            threshold={null}
           />
         ) : chart ? (
           <svg
@@ -232,11 +258,26 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             style={{ display: "block" }}
           >
             <defs>
-              <linearGradient id="obsFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={chart.lineColor} stopOpacity="0.2" />
-                <stop offset="100%" stopColor={chart.lineColor} stopOpacity="0.02" />
+              <linearGradient id={`fillAbove-${feed}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={UP} stopOpacity="0.22" />
+                <stop offset="100%" stopColor={UP} stopOpacity="0.02" />
               </linearGradient>
+              <linearGradient id={`fillBelow-${feed}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={DOWN} stopOpacity="0.02" />
+                <stop offset="100%" stopColor={DOWN} stopOpacity="0.22" />
+              </linearGradient>
+              {chart.startY != null ? (
+                <>
+                  <clipPath id={`clipAbove-${feed}`}>
+                    <rect x="0" y="0" width={chart.W} height={chart.startY} />
+                  </clipPath>
+                  <clipPath id={`clipBelow-${feed}`}>
+                    <rect x="0" y={chart.startY} width={chart.W} height={chart.H - chart.startY} />
+                  </clipPath>
+                </>
+              ) : null}
             </defs>
+
             {[0.25, 0.5, 0.75].map((p) => (
               <line
                 key={p}
@@ -248,20 +289,31 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
                 strokeWidth={1}
               />
             ))}
-            {chart.thresholdY != null ? (
-              <g>
-                <line
-                  x1={chart.padL}
-                  x2={chart.W - chart.padR}
-                  y1={chart.thresholdY}
-                  y2={chart.thresholdY}
-                  stroke="#7C5CFF"
-                  strokeWidth={2}
-                  strokeDasharray="6 4"
-                />
-              </g>
+
+            {/* Area, split at the start line so the fill shows which side the path is on. */}
+            {chart.startY != null ? (
+              <>
+                <path d={chart.area} fill={`url(#fillAbove-${feed})`} clipPath={`url(#clipAbove-${feed})`} />
+                <path d={chart.area} fill={`url(#fillBelow-${feed})`} clipPath={`url(#clipBelow-${feed})`} />
+              </>
+            ) : (
+              <path d={chart.area} fill={`url(#fillAbove-${feed})`} />
+            )}
+
+            {/* Start reference line — locked at observation open. */}
+            {chart.startY != null ? (
+              <line
+                x1={chart.padL}
+                x2={chart.W - chart.padR}
+                y1={chart.startY}
+                y2={chart.startY}
+                stroke={START}
+                strokeWidth={2}
+                strokeDasharray="6 4"
+              />
             ) : null}
-            <path d={chart.area} fill="url(#obsFill)" />
+
+            {/* Live path, colored by whether it is currently above or below start. */}
             <path
               d={chart.line}
               fill="none"
@@ -271,6 +323,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
               strokeLinecap="round"
               vectorEffect="non-scaling-stroke"
             />
+
             {chart.last ? (
               <circle
                 cx={chart.last.x}
@@ -286,7 +339,6 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           <WaitingPanel
             title={error ? `Feed: ${error}` : "Waiting for first observation print…"}
             body="Samples are recorded only after observation starts."
-            threshold={threshold != null ? fmt(threshold) : null}
           />
         )}
 
@@ -294,15 +346,15 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           <>
             <span style={yLabelStyle(8)}>{fmt(chart.max)}</span>
             <span style={yLabelStyle(undefined, 8)}>{fmt(chart.min)}</span>
-            {threshold != null ? (
+            {startValue != null && chart.startY != null ? (
               <span
                 style={{
                   position: "absolute",
                   right: 10,
-                  top: chart.thresholdY != null ? Math.max(8, Math.min(190, chart.thresholdY - 8)) : 8,
+                  top: Math.max(8, Math.min(190, chart.startY - 8)),
                   fontSize: 10.5,
                   fontWeight: 600,
-                  color: "#7C5CFF",
+                  color: START,
                   background: "rgba(255,255,255,.92)",
                   border: "1px solid #E0D8FF",
                   borderRadius: 6,
@@ -310,8 +362,32 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
                   fontFamily: "'IBM Plex Mono', monospace"
                 }}
               >
-                start {fmt(threshold)}
+                start {fmt(startValue)}
               </span>
+            ) : null}
+
+            {verdict ? (
+              <div
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: 12,
+                  transform: "translateX(-50%)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 12px",
+                  borderRadius: 999,
+                  fontSize: 12.5,
+                  fontWeight: 700,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  color: "#fff",
+                  background: verdict === "YES" ? UP : verdict === "NO" ? DOWN : FLAT,
+                  boxShadow: "0 4px 12px rgba(11,22,34,.14)"
+                }}
+              >
+                {verdict === "TIE" ? "CLOSED FLAT" : `CLOSED ${dir?.toUpperCase()} → ${verdict}`}
+              </div>
             ) : null}
           </>
         ) : null}
@@ -324,7 +400,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           gap: 8,
           marginTop: 10,
           fontSize: 12,
-          color: "#5B6A7D",
+          color: FLAT,
           flexWrap: "wrap"
         }}
       >
@@ -332,7 +408,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           {phase === "before"
             ? "No observation samples yet"
             : phase === "live"
-              ? `${points.length} prints this window`
+              ? `${points.length} prints · live`
               : `${points.length} prints · window closed`}
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
@@ -352,41 +428,29 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
 function PhaseBadge({
   phase,
   secToObs,
-  secLeft
+  secLeft,
+  verdict
 }: {
   phase: "before" | "live" | "after" | "unknown";
   secToObs: number;
   secLeft: number;
+  verdict: string | null;
 }) {
   if (phase === "before") {
-    return (
-      <span style={badgeStyle("#EAF2FB", "#2775CA")}>
-        Observation in {fmtClock(secToObs)}
-      </span>
-    );
+    return <span style={badgeStyle("#EAF2FB", "#2775CA")}>Observation in {fmtClock(secToObs)}</span>;
   }
   if (phase === "live") {
-    return (
-      <span style={badgeStyle("#E7F5EF", "#1F9D6B")}>
-        Observing · {fmtClock(secLeft)} left
-      </span>
-    );
+    return <span style={badgeStyle("#E7F5EF", UP)}>Observing · {fmtClock(secLeft)} left</span>;
   }
   if (phase === "after") {
-    return <span style={badgeStyle("#F6F8FA", "#5B6A7D")}>Observation ended</span>;
+    if (verdict === "YES") return <span style={badgeStyle("#E7F5EF", UP)}>Closed above · YES</span>;
+    if (verdict === "NO") return <span style={badgeStyle("#FBEAE8", DOWN)}>Closed below · NO</span>;
+    return <span style={badgeStyle("#F6F8FA", FLAT)}>Observation ended</span>;
   }
   return null;
 }
 
-function WaitingPanel({
-  title,
-  body,
-  threshold
-}: {
-  title: string;
-  body: string;
-  threshold: string | null;
-}) {
+function WaitingPanel({ title, body }: { title: string; body: string }) {
   return (
     <div
       style={{
@@ -401,20 +465,7 @@ function WaitingPanel({
       }}
     >
       <div style={{ fontSize: 14, fontWeight: 600, color: "#0B1622" }}>{title}</div>
-      <div style={{ fontSize: 13, color: "#5B6A7D", maxWidth: 360, lineHeight: 1.45 }}>{body}</div>
-      {threshold ? (
-        <div
-          style={{
-            marginTop: 6,
-            fontSize: 12,
-            fontFamily: "'IBM Plex Mono', monospace",
-            color: "#7C5CFF",
-            fontWeight: 600
-          }}
-        >
-          Threshold {threshold}
-        </div>
-      ) : null}
+      <div style={{ fontSize: 13, color: FLAT, maxWidth: 360, lineHeight: 1.45 }}>{body}</div>
     </div>
   );
 }
@@ -440,11 +491,11 @@ function yLabelStyle(top?: number, bottom?: number): CSSProperties {
     bottom,
     fontFamily: "'IBM Plex Mono', monospace",
     fontSize: 10,
-    color: "#5B6A7D"
+    color: FLAT
   };
 }
 
-function buildChart(points: Point[], threshold: number | undefined, t0: number, t1: number) {
+function buildChart(points: Point[], startValue: number | undefined, t0: number, t1: number) {
   if (points.length < 2 || !t0) return null;
   const W = 640;
   const H = 220;
@@ -456,7 +507,7 @@ function buildChart(points: Point[], threshold: number | undefined, t0: number, 
   const innerH = H - padT - padB;
 
   const vals = points.map((p) => p.v);
-  if (threshold != null && Number.isFinite(threshold)) vals.push(threshold);
+  if (startValue != null && Number.isFinite(startValue)) vals.push(startValue);
   let min = Math.min(...vals);
   let max = Math.max(...vals);
   const span = max - min;
@@ -471,21 +522,21 @@ function buildChart(points: Point[], threshold: number | undefined, t0: number, 
     y: padT + (1 - (p.v - min) / range) * innerH
   }));
 
-  const lastPt = points[points.length - 1];
-  const firstPt = points[0];
-  const up = lastPt.v >= firstPt.v;
-  const lineColor = up ? "#1F9D6B" : "#D6544A";
+  const lastPt = points[points.length - 1]!;
+  const base = startValue ?? points[0]!.v;
+  const up = lastPt.v >= base;
+  const lineColor = up ? UP : DOWN;
 
   const line = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(" ");
-  const last = coords[coords.length - 1];
-  const area = `${line} L${last.x.toFixed(1)} ${(H - padB).toFixed(1)} L${coords[0].x.toFixed(1)} ${(H - padB).toFixed(1)} Z`;
+  const last = coords[coords.length - 1]!;
+  const area = `${line} L${last.x.toFixed(1)} ${(H - padB).toFixed(1)} L${coords[0]!.x.toFixed(1)} ${(H - padB).toFixed(1)} Z`;
 
-  let thresholdY: number | null = null;
-  if (threshold != null && Number.isFinite(threshold)) {
-    thresholdY = padT + (1 - (threshold - min) / range) * innerH;
+  let startY: number | null = null;
+  if (startValue != null && Number.isFinite(startValue)) {
+    startY = padT + (1 - (startValue - min) / range) * innerH;
   }
 
-  return { W, H, padL, padR, padT, padB, innerW, innerH, line, area, last, min, max, thresholdY, lineColor };
+  return { W, H, padL, padR, padT, padB, innerW, innerH, line, area, last, min, max, startY, lineColor };
 }
 
 function normalize(raw?: Array<{ value: number; at: number }>): Point[] {
@@ -498,7 +549,7 @@ function normalize(raw?: Array<{ value: number; at: number }>): Point[] {
 
 function append(hist: Point[], tick: Point, minGap: number): Point[] {
   if (!hist.length) return [tick];
-  const last = hist[hist.length - 1];
+  const last = hist[hist.length - 1]!;
   if (tick.t < last.t - 2_000) return hist;
   if (tick.t - last.t < minGap) {
     return [...hist.slice(0, -1), { t: Math.max(last.t, tick.t), v: tick.v }];
@@ -517,6 +568,14 @@ function fmtUsd(v: number) {
 
 function fmtTemp(v: number) {
   return `${v.toFixed(2)}°C`;
+}
+
+function fmtDelta(delta: number, isBtc: boolean) {
+  const sign = delta > 0 ? "+" : "−";
+  const abs = Math.abs(delta);
+  return isBtc
+    ? `${sign}${new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(abs)}`
+    : `${sign}${abs.toFixed(2)}°C`;
 }
 
 function fmtClock(sec: number) {
