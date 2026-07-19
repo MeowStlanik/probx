@@ -11,7 +11,7 @@ type MarketLiveChartProps = {
   feed: "btc" | "weather";
 };
 
-const POLL_MS = { btc: 1_200, weather: 3_000 } as const;
+const POLL_MS = { btc: 1_000, weather: 2_500 } as const;
 
 const UP = "#1F9D6B";
 const DOWN = "#D6544A";
@@ -95,19 +95,23 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
       }
 
       const windowEnd = end && tNow > end ? end : tNow;
-      const tick: Point = { t: Math.min(at, windowEnd), v: value };
 
-      // Prefer server history inside the window; fall back to locally collected ticks.
-      let merged: Point[];
-      if (serverHist.length) {
-        merged = serverHist.filter((p) => p.t >= start && p.t <= windowEnd);
-      } else {
-        merged = histRef.current.filter((p) => p.t >= start && p.t <= windowEnd);
-      }
+      // Union-merge: locally accumulated ticks are the source of truth; server
+      // samples only backfill moments we don't have. (Rebuilding from server
+      // history every poll used to discard local ticks — the "2 prints" bug.)
+      const inWindow = (p: Point) => p.t >= start && p.t <= windowEnd;
+      let merged = mergeSeries(
+        histRef.current.filter(inWindow),
+        serverHist.filter(inWindow)
+      );
 
-      if (tick.t >= start && tick.t <= windowEnd) {
-        merged = append(merged, tick, feed === "weather" ? 2_000 : 800);
+      // Append a live tick every poll using client time (clamped to window).
+      // The feed's updatedAt can be cached/stale, which froze the path before.
+      const tick: Point = { t: Math.min(tNow, windowEnd), v: value };
+      if (tick.t >= start) {
+        merged = append(merged, tick, feed === "weather" ? 1_500 : 700);
       }
+      void at;
 
       // Anchor the first plotted point exactly at observation open so the path
       // visibly "starts" on the start line.
@@ -156,10 +160,19 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
   const isBtc = feed === "btc";
   const fmt = isBtc ? fmtUsd : fmtTemp;
 
-  const chart = useMemo(
-    () => buildChart(points, startValue ?? undefined, obsStart, obsEnd || now),
-    [points, startValue, obsStart, obsEnd, now]
-  );
+  const chart = useMemo(() => {
+    // Extend the path horizontally to "now" so it visibly crawls right every
+    // second, even between feed ticks.
+    let render = points;
+    if (points.length) {
+      const last = points[points.length - 1]!;
+      const drawUntil = Math.min(now, obsEnd || now);
+      if (drawUntil - last.t > 700) {
+        render = [...points, { t: drawUntil, v: last.v }];
+      }
+    }
+    return buildChart(render, startValue ?? undefined, obsStart, obsEnd || now);
+  }, [points, startValue, obsStart, obsEnd, now]);
 
   const lastValue = points.length ? points[points.length - 1]!.v : price;
   const delta = startValue != null && lastValue != null ? lastValue - startValue : null;
@@ -545,6 +558,15 @@ function normalize(raw?: Array<{ value: number; at: number }>): Point[] {
     .filter((p) => Number.isFinite(p?.value) && Number.isFinite(p?.at))
     .map((p) => ({ t: p.at, v: p.value }))
     .sort((a, b) => a.t - b.t);
+}
+
+/** Union two series; primary (local) wins on near-duplicate timestamps. */
+function mergeSeries(primary: Point[], backfill: Point[]): Point[] {
+  const out = new Map<number, Point>();
+  const bucket = (t: number) => Math.round(t / 500);
+  for (const p of backfill) out.set(bucket(p.t), p);
+  for (const p of primary) out.set(bucket(p.t), p);
+  return [...out.values()].sort((a, b) => a.t - b.t);
 }
 
 function append(hist: Point[], tick: Point, minGap: number): Point[] {
