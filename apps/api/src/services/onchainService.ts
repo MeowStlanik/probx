@@ -1397,7 +1397,9 @@ const WEATHER_OBS_QUESTION = "Will London temp finish observation higher than it
 
 async function demoMarketTemplates() {
   // Hackathon demo set: only the two auto-resolving reference markets.
-  const lockSeconds = clampInteger(process.env.DEMO_MARKET_LOCK_SECONDS, 45, 86_400, 3_600);
+  // Default matches marketCycleWorker LOCK_SECONDS (75), not 1h — 3600 was a leftover
+  // that made admin/demo creates look like hour-long markets when the env was unset.
+  const lockSeconds = clampInteger(process.env.DEMO_MARKET_LOCK_SECONDS, 45, 86_400, 75);
   const btcFair = await estimateFairYesPercent("btc_price");
   const weatherFair = await estimateFairYesPercent("london_weather");
   return [

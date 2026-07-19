@@ -10,19 +10,23 @@ function iso(offsetMs: number): string {
   return new Date(now + offsetMs).toISOString();
 }
 
+// Mirror market-cycle timings (~75s open + 60s obs) so a failed API never looks like "1h markets".
+const OPEN_MS = 75_000;
+const OBS_MS = 60_000;
+
 export const markets: Market[] = [
   {
     id: "mkt_btc_offline",
-    question: "Will BTC/USD be above the live Coinbase threshold during the observation window?",
+    question: "Will BTC finish observation higher than it started?",
     rules: "Offline fallback market. Connect the API to load live Arc markets.",
     category: "crypto-candle",
     status: "OPEN",
     yesPrice: 0.5,
     noPrice: 0.5,
     openTime: iso(-5_000),
-    lockTime: iso(3_600_000),
-    observationStart: iso(3_600_000),
-    observationEnd: iso(3_660_000),
+    lockTime: iso(OPEN_MS),
+    observationStart: iso(OPEN_MS),
+    observationEnd: iso(OPEN_MS + OBS_MS),
     resolutionSource: "Coinbase BTC/USD (offline fallback)",
     volume: 0,
     ticketCount: 0,
@@ -31,16 +35,16 @@ export const markets: Market[] = [
   },
   {
     id: "mkt_weather_offline",
-    question: "Will London temperature stay at or above the live Open-Meteo reading?",
+    question: "Will London temp finish observation higher than it started?",
     rules: "Offline fallback market. Connect the API to load live Arc markets.",
     category: "weather",
     status: "OPEN",
     yesPrice: 0.5,
     noPrice: 0.5,
     openTime: iso(-5_000),
-    lockTime: iso(3_600_000),
-    observationStart: iso(3_600_000),
-    observationEnd: iso(3_660_000),
+    lockTime: iso(OPEN_MS),
+    observationStart: iso(OPEN_MS),
+    observationEnd: iso(OPEN_MS + OBS_MS),
     resolutionSource: "Open-Meteo London (offline fallback)",
     volume: 0,
     ticketCount: 0,
