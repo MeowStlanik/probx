@@ -156,15 +156,16 @@ pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 | USDC | `0x3600000000000000000000000000000000000000` |
 | Deployer | `0x4604a582B66431481D5320fed67C785bdb4D7Fe0` |
 
-### Core contracts (redeployed 2026-07-18)
+### Core contracts (redeployed 2026-07-19 — audit fixes)
 
 | Contract | Address |
 |----------|---------|
-| MicroBoostEngine | [`0x0FFF38afe02B2476c5066bFe787510856f1ec5eE`](https://testnet.arcscan.app/address/0x0FFF38afe02B2476c5066bFe787510856f1ec5eE) |
-| LiquidityPool | [`0xa84b574075f411a066e150fB8dac9b7564DDc4Ad`](https://testnet.arcscan.app/address/0xa84b574075f411a066e150fB8dac9b7564DDc4Ad) |
-| MarketFactory | [`0x2a3CCe3173f55A29A9787b40160fb3553C1c36aA`](https://testnet.arcscan.app/address/0x2a3CCe3173f55A29A9787b40160fb3553C1c36aA) |
-| PositionTicket | [`0x270e85b98d1299704fcbe459a3b1fd5ecA662e92`](https://testnet.arcscan.app/address/0x270e85b98d1299704fcbe459a3b1fd5ecA662e92) |
-| OracleAdapter | [`0x0667401772AE42Aa09216dCe7a239DbB51D86c4b`](https://testnet.arcscan.app/address/0x0667401772AE42Aa09216dCe7a239DbB51D86c4b) |
+| MicroBoostEngine | [`0x9458631dc97C8320db6b2224BD8E22bC627E2211`](https://testnet.arcscan.app/address/0x9458631dc97C8320db6b2224BD8E22bC627E2211) |
+| LiquidityPool | [`0xedc959c24c8EbC26b7E5cC994b37a47727E50a2E`](https://testnet.arcscan.app/address/0xedc959c24c8EbC26b7E5cC994b37a47727E50a2E) |
+| MarketFactory | [`0xf0ac9759DCFf5565C4adD7Ae5B15DdBeF8f6B1Cc`](https://testnet.arcscan.app/address/0xf0ac9759DCFf5565C4adD7Ae5B15DdBeF8f6B1Cc) |
+| PositionTicket | [`0x2a8C4a06945071383E00F6187f4B4E925408837D`](https://testnet.arcscan.app/address/0x2a8C4a06945071383E00F6187f4B4E925408837D) |
+| OracleAdapter | [`0x53e06a44DE09f238fb682348D0F9cF733bD1B99A`](https://testnet.arcscan.app/address/0x53e06a44DE09f238fb682348D0F9cF733bD1B99A) |
+| InsuranceFund | [`0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C`](https://testnet.arcscan.app/address/0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C) |
 
 LP seed on deploy: **15 USDC**. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) (mirrors `apps/web/src/lib/deployment.json`).
 
@@ -251,9 +252,9 @@ NEXT_PUBLIC_API_BASE_URL=
 NEXT_PUBLIC_CHAIN_ID=5042002
 NEXT_PUBLIC_ARC_RPC_URL=https://rpc.testnet.arc.network
 NEXT_PUBLIC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
-NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS=0x0FFF38afe02B2476c5066bFe787510856f1ec5eE
-NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS=0xa84b574075f411a066e150fB8dac9b7564DDc4Ad
-NEXT_PUBLIC_MARKET_FACTORY_ADDRESS=0x2a3CCe3173f55A29A9787b40160fb3553C1c36aA
+NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS=0x9458631dc97C8320db6b2224BD8E22bC627E2211
+NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS=0xedc959c24c8EbC26b7E5cC994b37a47727E50a2E
+NEXT_PUBLIC_MARKET_FACTORY_ADDRESS=0xf0ac9759DCFf5565C4adD7Ae5B15DdBeF8f6B1Cc
 ```
 
 **Server-only** (Sensitive; no `NEXT_PUBLIC_` prefix)
