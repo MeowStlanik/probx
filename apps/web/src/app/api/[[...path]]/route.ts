@@ -137,6 +137,22 @@ async function handle(request: NextRequest, context: RouteContext) {
     }
   });
 
+  // Keep the BTC/weather round alive whenever the site has traffic
+  // (chart polls demo-data every second). Throttled inside; runs after the
+  // response so the request itself stays fast. External pinger still covers
+  // zero-traffic periods.
+  if (
+    request.method === "GET" &&
+    (apiPath === "/api/demo-data" || apiPath === "/api/markets")
+  ) {
+    after(async () => {
+      const { maybeRunMarketCycleInBackground } = await import(
+        "../../../../../api/src/services/marketCycleWorker"
+      );
+      await maybeRunMarketCycleInBackground();
+    });
+  }
+
   const response = NextResponse.json(result.body, {
     status: result.status,
     headers: {

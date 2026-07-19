@@ -1256,7 +1256,12 @@ function isStableArcRpcUrl(url: string): boolean {
 }
 
 function buildRpcTransport(urls: string[]) {
-  const transports = urls.map((url) => http(url));
+  // Batch concurrent eth_calls into one JSON-RPC request (a market read is 10
+  // calls; a list is 10×N). Standard nodes support batch arrays; RPC_BATCH=0
+  // opts out if a provider misbehaves. fallback() still rotates on errors.
+  const batch =
+    process.env.RPC_BATCH === "0" ? undefined : { batchSize: 25, wait: 16 };
+  const transports = urls.map((url) => http(url, { batch }));
   return transports.length === 1 ? transports[0] : fallback(transports, { rank: false });
 }
 

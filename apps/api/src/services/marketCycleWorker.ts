@@ -214,6 +214,49 @@ function hasResolverKey(): boolean {
   );
 }
 
+/**
+ * Opportunistic 24/7 driver for serverless deploys.
+ *
+ * Vercel Hobby cron is ~daily, so the cycle is otherwise driven by an external
+ * pinger. This hook also runs the cycle in the background on site traffic
+ * (chart polls /api/demo-data every second), throttled across instances via
+ * durable KV so concurrent requests do not stampede. Zero-traffic periods still
+ * need the external pinger — serverless cannot wake itself.
+ */
+const KICK_MIN_INTERVAL_MS = 50_000;
+let localLastKickAt = 0;
+
+export async function maybeRunMarketCycleInBackground(): Promise<void> {
+  if (!onchainEnabled() || !hasResolverKey()) return;
+  if (process.env.MARKET_CYCLE_ON_TRAFFIC === "0") return;
+
+  const now = Date.now();
+  // Cheap per-instance gate first (no KV round-trip on every 1s poll).
+  if (now - localLastKickAt < KICK_MIN_INTERVAL_MS) return;
+  localLastKickAt = now;
+
+  try {
+    const { NamespaceStore } = await import("./persistentStore.js");
+    const store = new NamespaceStore<{ at: number }>("market-cycle-kick");
+    const last = await store.get("lastKickAt");
+    if (last && now - last.at < KICK_MIN_INTERVAL_MS) return;
+    await store.set("lastKickAt", { at: now });
+  } catch {
+    // KV unavailable — fall through with the per-instance gate only.
+  }
+
+  try {
+    const result = await runMarketCycleOnce();
+    if (result.created.length || result.resolved.length) {
+      console.log(
+        `[market-cycle:on-traffic] created=${result.created.length} resolved=${result.resolved.length}`
+      );
+    }
+  } catch (error) {
+    console.error("[market-cycle:on-traffic]", error);
+  }
+}
+
 function isReferenceRole(role?: string, category?: string, question?: string): boolean {
   return isReferenceBtc(role, category, question) || isReferenceWeather(role, category, question);
 }

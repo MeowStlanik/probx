@@ -15,15 +15,45 @@ import {
 import { quoteTicket } from "../services/quoteEngine.js";
 import { applyExposureChecks } from "../services/riskEngine.js";
 
+/**
+ * Micro-cache for the public markets list.
+ * A full onchain list is ~10 RPC calls per market; the UI polls every 5s and
+ * every tab open re-fetches. 2.5s freshness is invisible next to 60s rounds,
+ * collapses concurrent loads into one chain read, and serves last-good data
+ * for up to 60s if the RPC hiccups. The cycle worker bypasses this (forCycle).
+ */
+const MARKETS_CACHE_FRESH_MS = 2_500;
+const MARKETS_CACHE_STALE_MS = 60_000;
+let marketsCache: { at: number; data: Market[] } | null = null;
+let marketsInflight: Promise<Market[]> | null = null;
+
 export async function listMarkets(): Promise<Market[]> {
-  if (onchainEnabled()) {
-    try {
-      return await listOnchainMarkets();
-    } catch {
-      return db.markets.map(refreshMarket);
-    }
+  if (!onchainEnabled()) return db.markets.map(refreshMarket);
+
+  const now = Date.now();
+  if (marketsCache && now - marketsCache.at < MARKETS_CACHE_FRESH_MS) {
+    return marketsCache.data;
   }
-  return db.markets.map(refreshMarket);
+
+  if (!marketsInflight) {
+    marketsInflight = listOnchainMarkets()
+      .then((data) => {
+        marketsCache = { at: Date.now(), data };
+        return data;
+      })
+      .finally(() => {
+        marketsInflight = null;
+      });
+  }
+
+  try {
+    return await marketsInflight;
+  } catch {
+    if (marketsCache && now - marketsCache.at < MARKETS_CACHE_STALE_MS) {
+      return marketsCache.data;
+    }
+    return db.markets.map(refreshMarket);
+  }
 }
 
 export async function getMarket(id: string): Promise<Market | undefined> {

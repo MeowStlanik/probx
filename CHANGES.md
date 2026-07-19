@@ -169,3 +169,16 @@ fallback на файловое хранилище (удобно локально
 - `apps/web/src/nextjs/shells/MarketDetailShell.tsx`
 - `apps/web/src/nextjs/shells/PortfolioShell.tsx`
 - `apps/web/src/nextjs/shells/LpShell.tsx`
+
+---
+
+## 5. On-traffic market cycle (24/7 while site is open)
+
+- `maybeRunMarketCycleInBackground()` in `marketCycleWorker.ts` — 50s throttle, KV-coordinated across instances.
+- Wired from `apps/web/src/app/api/[[...path]]/route.ts` via Next `after()` on `GET /api/demo-data` and `GET /api/markets`.
+- Disable: `MARKET_CYCLE_ON_TRAFFIC=0`. Still recommend external pinger (`/api/cron/market-cycle?secret=…`) every minute for true idle 24/7.
+
+## 6. Faster markets RPC
+
+- Server + web viem: JSON-RPC `batch: { batchSize: 25, wait: 16 }` (`RPC_BATCH=0` to opt out).
+- `listMarkets()` micro-cache 2.5s fresh / 60s stale-on-error; cycle worker uses `forCycle` and bypasses UI cache.
