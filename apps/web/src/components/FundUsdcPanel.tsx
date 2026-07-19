@@ -764,9 +764,10 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         </div>
 
         <footer className="fundModalFooter">
-          <button type="button" className="fundFooterBtn secondary" disabled={busy} onClick={onClose}>
+          <button type="button" className="fundFooterBtn secondary" disabled={busy || sendBusy} onClick={onClose}>
             Close
           </button>
+          {/* Primary footer action is tab-specific. Send keeps its button in the form body. */}
           {tab === "direct" ? (
             <button
               type="button"
@@ -776,7 +777,7 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
             >
               {copied ? "Address copied" : "Copy Arc address"}
             </button>
-          ) : (
+          ) : tab === "bridge" ? (
             <button
               type="button"
               className="fundFooterBtn primary"
@@ -786,7 +787,7 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
               {busy ? <Loader2 size={16} className="spinIcon" /> : <ArrowRightLeft size={16} />}
               {busy ? "Working…" : "Bridge CCTP"}
             </button>
-          )}
+          ) : null}
         </footer>
       </div>
     </div>
