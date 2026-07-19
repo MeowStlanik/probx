@@ -179,7 +179,7 @@ LP seed on deploy: **15 USDC**. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](
 | Fallback | Local encrypted session EOA if `CIRCLE_*` incomplete |
 | OTP | App-issued 6-digit code (Gmail SMTP in prod; `EMAIL_OTP_DEV_ECHO=1` shows code in UI locally) |
 | Bridge | CCTP v2 **Forwarding** Base/Eth Sepolia → Arc |
-| Gas | User pays **USDC** on Arc (no Paymaster / Gas Station) |
+| Gas | User pays **USDC** on Arc |
 
 MetaMask can burn on the source chain while **mint lands on the email session** — separate CCTP connect, no session hijack.
 
