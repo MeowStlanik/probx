@@ -57,7 +57,11 @@ export async function dispatchApiRequest(input: {
     if (method === "GET" && path === "/api/demo-data") {
       return { status: 200, body: await demoReferenceData() };
     }
-    if (method === "GET" && path === "/api/lp/stats") {
+    if (
+      method === "GET" &&
+      (path === "/api/lp/stats" || path === "/api/stats/lp")
+    ) {
+      // /api/stats/lp is an alias (people often reverse the segments).
       return { status: 200, body: await lpStats() };
     }
     if (method === "GET" && path === "/api/activity") {

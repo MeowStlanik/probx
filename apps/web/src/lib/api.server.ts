@@ -107,19 +107,13 @@ export async function fetchMarket(id: string): Promise<Market | undefined> {
 }
 
 export async function fetchLpStats(): Promise<LpStats> {
-  // 1) Direct chain read from web package (most reliable on Vercel RSC)
-  try {
-    const onchain = await readOnchainLpStats();
-    if (onchain.tvl > 0 || onchain.availableLiquidity > 0 || onchain.feesEarned > 0) {
-      return onchain;
-    }
-  } catch {
-    // continue
-  }
+  // Prefer /api/lp/stats — includes aggregate totalVolume / totalTickets / totalResolved.
+  // Direct on-chain pool read only has TVL/reserves and used to short-circuit the home
+  // page with zeros for volume/tickets/resolved forever.
 
-  // 2) HTTP to unified Next API route
+  // 1) HTTP to unified Next API route
   try {
-    const result = await httpGetJson("/api/lp/stats");
+    const result = await httpGetJson("/api/lp/stats", 25_000);
     if (result.ok && result.body && typeof result.body === "object") {
       return normalizeLpStats(result.body as LpStats);
     }
@@ -127,12 +121,22 @@ export async function fetchLpStats(): Promise<LpStats> {
     // continue
   }
 
-  // 3) In-process dispatch (local monorepo)
+  // 2) In-process dispatch (local monorepo / same isolate)
   try {
     const { dispatchApiRequest } = await import("../../../api/src/dispatch");
     const result = await dispatchApiRequest({ method: "GET", path: "/api/lp/stats" });
     if (result.status >= 200 && result.status < 300 && result.body) {
       return normalizeLpStats(result.body as LpStats);
+    }
+  } catch {
+    // continue
+  }
+
+  // 3) Direct chain read — TVL only, no aggregates
+  try {
+    const onchain = await readOnchainLpStats();
+    if (onchain.tvl > 0 || onchain.availableLiquidity > 0 || onchain.feesEarned > 0) {
+      return onchain;
     }
   } catch {
     // continue
