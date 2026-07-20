@@ -381,7 +381,11 @@ export async function listOnchainMarkets(options: {
 } = {}): Promise<Market[]> {
   assertDeployment();
   const known = await listKnownMarkets({ includeHidden: Boolean(options.forCycle) });
-  const markets = await Promise.all(known.map((item) => readOnchainMarket(item)));
+  // Cycle / aggregate stats need real volume — allow longer log scans than the public desk.
+  const tradeStatsTimeoutMs = options.forCycle ? 8_000 : 1_500;
+  const markets = await Promise.all(
+    known.map((item) => readOnchainMarket(item, { tradeStatsTimeoutMs }))
+  );
   const all = markets.filter((market): market is Market => Boolean(market)).sort(compareDemoMarkets);
   if (options.forCycle) return all;
 
@@ -447,8 +451,12 @@ export async function getOnchainMarket(id: string): Promise<Market | undefined> 
   return readOnchainMarket(item);
 }
 
-async function readOnchainMarket(item: DemoMarketDeployment): Promise<Market | undefined> {
+async function readOnchainMarket(
+  item: DemoMarketDeployment,
+  options: { tradeStatsTimeoutMs?: number } = {}
+): Promise<Market | undefined> {
   const market = addr(item.market);
+  const tradeStatsTimeoutMs = options.tradeStatsTimeoutMs ?? 1_500;
   const [
     question,
     rulesHash,
@@ -477,7 +485,7 @@ async function readOnchainMarket(item: DemoMarketDeployment): Promise<Market | u
   const tradeStats = await Promise.race([
     marketTradeStats(market).catch(() => emptyMarketTradeStats()),
     new Promise<ReturnType<typeof emptyMarketTradeStats>>((resolve) =>
-      setTimeout(() => resolve(emptyMarketTradeStats()), 1_500)
+      setTimeout(() => resolve(emptyMarketTradeStats()), tradeStatsTimeoutMs)
     )
   ]);
   const role = classifyDemoMarket(item, question);

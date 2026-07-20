@@ -61,6 +61,27 @@ function estimatePayoutUsdc(stake: number, boost: number, price: number): number
   return (stake * boost) / p;
 }
 
+function humanQuoteReason(reason: string | undefined, stake: number, maxStake: number): string {
+  const r = (reason || "").toUpperCase();
+  if (r.includes("RISK_CAP") || stake > maxStake) {
+    return `Max stake is ${maxStake} USDC per ticket. Lower stake to continue.`;
+  }
+  if (r.includes("PAYOUT_CAP")) {
+    return "Est. payout exceeds protocol max ($2,500). Lower stake or boost.";
+  }
+  if (r.includes("INSUFFICIENT_RESERVE")) {
+    return "Not enough LP reserve for this boost. Lower boost or stake.";
+  }
+  if (r.includes("BOOST_CAP")) {
+    return "Boost above protocol max (5×).";
+  }
+  if (r.includes("EXPOSURE_CAP")) {
+    return "Exposure cap hit for this market/user. Try a smaller ticket.";
+  }
+  if (reason) return `Quote rejected: ${reason}`;
+  return "Quote rejected by the engine.";
+}
+
 // Simple sparkline from priceHistory (0–1 samples)
 function OddsSparkline({ samples }: { samples: number[] }) {
   if (!samples.length) return null;
@@ -112,16 +133,36 @@ export function MarketDetailView({
   const tradingOpen = market?.stage === "OPEN";
 
   const stakeN = Number(stake) || 0;
-  const price = side === "YES" ? (market?.quotedYes ?? 0.5) : 1 - (market?.quotedYes ?? 0.5);
-  // Prefer engine quote when it matches current stake (within 0.5¢) — source of truth for wallet debit.
-  const quoteMatches =
-    liveQuote != null && Math.abs(liveQuote.stake - stakeN) < 0.005 && stakeN > 0;
-  const feeUsdc = quoteMatches ? liveQuote!.fee : estimateFeeUsdc(stakeN, boost);
-  const totalDebitUsdc = quoteMatches ? liveQuote!.totalDebit : stakeN + feeUsdc;
-  const payoutUsdc = quoteMatches
-    ? liveQuote!.payout
-    : estimatePayoutUsdc(stakeN, boost, price);
+  const price = Math.max(
+    0.05,
+    Math.min(0.95, side === "YES" ? (market?.quotedYes ?? 0.5) : 1 - (market?.quotedYes ?? 0.5))
+  );
+  // On-chain max stake is 100 USDC (RiskLimits.MAX_USER_RISK_PER_TICKET).
+  const MAX_STAKE_USDC = 100;
+  // Prefer engine quote only when accepted with real debit — rejected quotes return zeros
+  // (RISK_CAP / BOOST_CAP) and must not wipe the local fee/payout estimate.
+  const quoteUsable =
+    liveQuote != null &&
+    liveQuote.accepted &&
+    liveQuote.totalDebit > 0 &&
+    Math.abs(liveQuote.stake - stakeN) < 0.02 &&
+    stakeN > 0;
+  const localFee = estimateFeeUsdc(stakeN, boost);
+  const localPayout = estimatePayoutUsdc(stakeN, boost, price);
+  const feeUsdc = quoteUsable ? liveQuote!.fee : localFee;
+  const totalDebitUsdc = quoteUsable ? liveQuote!.totalDebit : stakeN + localFee;
+  const payoutUsdc = quoteUsable ? liveQuote!.payout : localPayout;
   const feePct = stakeN > 0 ? (feeUsdc / stakeN) * 100 : 0;
+  const quoteRejected =
+    liveQuote != null &&
+    !liveQuote.accepted &&
+    Math.abs(liveQuote.stake - stakeN) < 0.02 &&
+    stakeN > 0;
+  const rejectHint = quoteRejected
+    ? humanQuoteReason(liveQuote!.reason, stakeN, MAX_STAKE_USDC)
+    : stakeN > MAX_STAKE_USDC
+      ? `Max stake is ${MAX_STAKE_USDC} USDC per ticket (protocol RISK_CAP).`
+      : null;
 
   useEffect(() => {
     // Keep boost within market max when market loads / changes
@@ -604,9 +645,14 @@ export function MarketDetailView({
                           fontWeight: 500
                         }}
                       >
-                        Stake (USDC)
+                        Stake (USDC) · max {MAX_STAKE_USDC}
                       </label>
                       <AmountInput value={stake} onChange={setStake} />
+                      {stakeN > MAX_STAKE_USDC ? (
+                        <p style={{ margin: "6px 0 0", fontSize: 12, color: theme.color.no, lineHeight: 1.4 }}>
+                          Protocol cap is {MAX_STAKE_USDC} USDC per ticket — engine rejects larger stakes (RISK_CAP).
+                        </p>
+                      ) : null}
                       <div style={{ marginTop: 18 }}>
                         <div
                           style={{
@@ -707,16 +753,30 @@ export function MarketDetailView({
                         <p style={{ margin: "6px 0 0", fontSize: 11, color: theme.color.muted, lineHeight: 1.4 }}>
                           Wallet will request <strong>{money(totalDebitUsdc)}</strong> USDC (stake + fee). Max loss =
                           stake only; fee is paid up front.
+                          {quoteUsable ? " · Live engine quote" : " · Estimate (engine quote pending or rejected)"}
                         </p>
+                        {rejectHint ? (
+                          <p
+                            style={{
+                              margin: "8px 0 0",
+                              fontSize: 12,
+                              color: theme.color.no,
+                              lineHeight: 1.4,
+                              fontWeight: 500
+                            }}
+                          >
+                            {rejectHint}
+                          </p>
+                        ) : null}
                       </div>
-                      {needsApproval ? (
+                      {needsApproval && !rejectHint ? (
                         <p style={{ margin: "12px 0 0", fontSize: 12, color: theme.color.muted, lineHeight: 1.4 }}>
                           First <strong>Approve USDC</strong> for the engine ({money(totalDebitUsdc)}), then Confirm.
                         </p>
                       ) : null}
                       <Button
                         fullWidth
-                        disabled={busy || stakeN <= 0}
+                        disabled={busy || stakeN <= 0 || Boolean(rejectHint) || stakeN > MAX_STAKE_USDC}
                         style={{ marginTop: 14 }}
                         onClick={async () => {
                           setBusy(true);
@@ -737,9 +797,11 @@ export function MarketDetailView({
                           ? needsApproval
                             ? "Approving…"
                             : "Confirming…"
-                          : needsApproval
-                            ? `Approve ${money(totalDebitUsdc)} USDC`
-                            : `Confirm · pay ${money(totalDebitUsdc)} → ${money(payoutUsdc)} if ${side}`}
+                          : rejectHint
+                            ? "Fix stake / boost to continue"
+                            : needsApproval
+                              ? `Approve ${money(totalDebitUsdc)} USDC`
+                              : `Confirm · pay ${money(totalDebitUsdc)} → ${money(payoutUsdc)} if ${side}`}
                       </Button>
                       <p style={{ textAlign: "center", fontSize: 11, color: theme.color.muted, margin: "10px 0 0" }}>
                         Gas paid in USDC · you can only lose your stake (not the fee).

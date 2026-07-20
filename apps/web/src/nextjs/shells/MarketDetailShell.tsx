@@ -152,6 +152,7 @@ export function MarketDetailShell({
       const feeN = Number(formatUnits(quote.fee, 6));
       const debitN = Number(formatUnits(quote.totalDebit, 6));
       const payoutN = Number(formatUnits(quote.payout, 6));
+      // Always surface engine response (incl. rejected). UI ignores zero debit when !accepted.
       setLiveQuote({
         stake: stakeN,
         fee: feeN,
@@ -160,10 +161,21 @@ export function MarketDetailShell({
         accepted: Boolean(quote.accepted),
         reason: quote.reason
       });
-      setQuotedDebit(quote.totalDebit);
+      setQuotedDebit(quote.accepted && debitN > 0 ? quote.totalDebit : 0n);
 
       if (!quote.accepted) {
-        throw new Error(quote.reason || "Quote rejected — market locked or LP reserve insufficient.");
+        // Do not throw on preview — only block buy/approve. Throwing cleared usable estimates.
+        if (opts?.requireWallet) {
+          throw new Error(quote.reason || "Quote rejected — market locked or LP reserve insufficient.");
+        }
+        return {
+          quote,
+          marketAddress,
+          risk,
+          boostBps,
+          outcomeId,
+          allowance: 0n
+        };
       }
 
       let allowance = 0n;
