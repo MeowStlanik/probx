@@ -282,54 +282,75 @@ export type AggregateMarketStats = {
 let aggregateStatsCache: AggregateMarketStats | null = null;
 const AGGREGATE_STATS_FRESH_MS = 30_000;
 let aggregateStatsCacheAt = 0;
+/** Coalesce concurrent refresh calls into one so a burst of home page loads doesn't stampede RPC. */
+let refreshInflight: Promise<AggregateMarketStats> | null = null;
 
 export function getCachedAggregateStats(): AggregateMarketStats | null {
   return aggregateStatsCache;
 }
 
-/** Called by market cycle worker after processing all markets. */
-export async function refreshAggregateStats(): Promise<AggregateMarketStats> {
-  try {
-    const known = await listKnownMarkets({ includeHidden: true });
-    const markets = await Promise.all(known.map((item) => readOnchainMarket(item)));
-    const all = markets.filter((m): m is Market => Boolean(m));
+/**
+ * Compute + save aggregate stats from an already-fetched market list.
+ * Preferred when the caller already read all markets (e.g. cycle worker) — no extra RPC.
+ */
+export async function saveAggregateStatsFromMarkets(markets: Market[]): Promise<AggregateMarketStats> {
+  let totalVolume = 0;
+  let totalTickets = 0;
+  let totalResolved = 0;
 
-    let totalVolume = 0;
-    let totalTickets = 0;
-    let totalResolved = 0;
-
-    for (const m of all) {
-      totalVolume += m.volume || 0;
-      totalTickets += m.ticketCount || 0;
-      if (m.status === "RESOLVED") totalResolved++;
-    }
-
-    const stats: AggregateMarketStats = {
-      totalVolume,
-      totalTickets,
-      totalResolved,
-      updatedAt: new Date().toISOString()
-    };
-    aggregateStatsCache = stats;
-    aggregateStatsCacheAt = Date.now();
-
-    // Persist to KV so other instances see fresh stats immediately.
-    try {
-      const { NamespaceStore } = await import("./persistentStore.js");
-      const store = new NamespaceStore<AggregateMarketStats>("aggregate-stats");
-      await store.set("latest", stats);
-    } catch {
-      /* non-fatal */
-    }
-
-    return stats;
-  } catch (error) {
-    console.error("[aggregate-stats] refresh failed:", error instanceof Error ? error.message : error);
-    return aggregateStatsCache ?? { totalVolume: 0, totalTickets: 0, totalResolved: 0, updatedAt: "" };
+  for (const m of markets) {
+    totalVolume += m.volume || 0;
+    totalTickets += m.ticketCount || 0;
+    if (m.status === "RESOLVED") totalResolved++;
   }
+
+  const stats: AggregateMarketStats = {
+    totalVolume,
+    totalTickets,
+    totalResolved,
+    updatedAt: new Date().toISOString()
+  };
+  aggregateStatsCache = stats;
+  aggregateStatsCacheAt = Date.now();
+
+  try {
+    const { NamespaceStore } = await import("./persistentStore.js");
+    const store = new NamespaceStore<AggregateMarketStats>("aggregate-stats");
+    await store.set("latest", stats);
+  } catch (error) {
+    console.error("[aggregate-stats] KV save failed:", error instanceof Error ? error.message : error);
+  }
+
+  return stats;
 }
 
-/** Load aggregate stats: in-memory cache → KV fallback → null. */
+/** Fetch all markets from chain, then save aggregate stats. Coalesces concurrent calls. */
+export async function refreshAggregateStats(): Promise<AggregateMarketStats> {
+  if (refreshInflight) return refreshInflight;
+
+  refreshInflight = (async () => {
+    try {
+      const markets = await listOnchainMarkets({ forCycle: true });
+      return await saveAggregateStatsFromMarkets(markets);
+    } catch (error) {
+      console.error("[aggregate-stats] refresh failed:", error instanceof Error ? error.message : error);
+      return (
+        aggregateStatsCache ?? { totalVolume: 0, totalTickets: 0, totalResolved: 0, updatedAt: "" }
+      );
+    } finally {
+      refreshInflight = null;
+    }
+  })();
+
+  return refreshInflight;
+}
+
+/**
+ * Load aggregate stats:
+ * 1. In-memory cache (fresh under 30s) → return immediately
+ * 2. KV lookup → hydrate cache, return
+ * 3. Nothing anywhere → compute from chain inline (blocks 2–3s on cold start only)
+ */
 export async function getAggregateStats(): Promise<AggregateMarketStats | null> {
   if (aggregateStatsCache && Date.now() - aggregateStatsCacheAt < AGGREGATE_STATS_FRESH_MS) {
     return aggregateStatsCache;
@@ -346,7 +367,12 @@ export async function getAggregateStats(): Promise<AggregateMarketStats | null> 
   } catch {
     /* non-fatal */
   }
-  return aggregateStatsCache;
+  // Nothing cached — compute inline so home stats work without waiting for cron.
+  try {
+    return await refreshAggregateStats();
+  } catch {
+    return aggregateStatsCache;
+  }
 }
 
 export async function listOnchainMarkets(options: {

@@ -13,8 +13,8 @@ import {
   hideMarketOnchain,
   listOnchainMarkets,
   onchainEnabled,
-  refreshAggregateStats,
   resolveReferenceMarketOnchain,
+  saveAggregateStatsFromMarkets,
   settleMarketTicketsOnchain
 } from "./onchainService.js";
 
@@ -189,11 +189,15 @@ export async function runMarketCycleOnce(): Promise<{
       lastErrors: errors.slice(0, 12)
     });
 
-    // Update aggregate stats (total volume, tickets, resolved) across all markets
-    // so the home page stats strip reflects real cumulative numbers.
-    void refreshAggregateStats().catch((e) =>
-      console.error("[market-cycle] aggregate stats refresh:", e)
-    );
+    // Update aggregate stats from markets we already fetched (no duplicate RPC).
+    // AWAITED so Vercel does not tear down the isolate before KV write finishes.
+    try {
+      await saveAggregateStatsFromMarkets(refreshed);
+    } catch (error) {
+      errors.push(
+        `aggregate stats: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
 
     return { ok: errors.length === 0, resolved, settled, hidden, created, errors };
   } finally {

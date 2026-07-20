@@ -38,6 +38,28 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
   const obsStart = Date.parse(market.observationStart || "") || 0;
   const obsEnd = Date.parse(market.observationEnd || "") || 0;
 
+  // sessionStorage key: bind chart state to this specific observation window.
+  // Same market with a different observation window = different key = clean state.
+  const cacheKey = useMemo(
+    () => `probx:chart:${market.id}:${market.observationStart || "none"}`,
+    [market.id, market.observationStart]
+  );
+
+  const saveCache = useCallback(
+    (hist: Point[], start: number | null) => {
+      if (typeof window === "undefined") return;
+      try {
+        sessionStorage.setItem(
+          cacheKey,
+          JSON.stringify({ hist: hist.slice(-200), start, savedAt: Date.now() })
+        );
+      } catch {
+        /* quota exceeded — non-fatal */
+      }
+    },
+    [cacheKey]
+  );
+
   const phase = useMemo(() => {
     if (!obsStart || !obsEnd) return "unknown" as const;
     if (now < obsStart) return "before" as const;
@@ -133,10 +155,12 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
 
       histRef.current = merged;
       setPoints(merged);
+      // Persist state so navigating away and back preserves the chart.
+      saveCache(merged, startRef.current);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Feed error");
     }
-  }, [feed, market.observationStart, market.observationEnd]);
+  }, [feed, market.observationStart, market.observationEnd, saveCache]);
 
   useEffect(() => {
     void pull();
@@ -149,12 +173,39 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
   }, [feed, pull]);
 
   // Reset the series when the market or observation window changes.
+  // Restore from sessionStorage first so re-entering the same market during the
+  // same observation window preserves history + start line.
   useEffect(() => {
-    histRef.current = [];
-    startRef.current = null;
-    setPoints([]);
-    setStartValue(null);
-  }, [market.id, market.observationStart]);
+    let restored = false;
+    if (typeof window !== "undefined") {
+      try {
+        const raw = sessionStorage.getItem(cacheKey);
+        if (raw) {
+          const cached = JSON.parse(raw) as { hist?: Point[]; start?: number | null };
+          const hist = Array.isArray(cached.hist)
+            ? cached.hist.filter((p) => Number.isFinite(p?.t) && Number.isFinite(p?.v))
+            : [];
+          const start =
+            typeof cached.start === "number" && Number.isFinite(cached.start) ? cached.start : null;
+          if (hist.length > 0 || start != null) {
+            histRef.current = hist;
+            startRef.current = start;
+            setPoints(hist);
+            setStartValue(start);
+            restored = true;
+          }
+        }
+      } catch {
+        /* ignore cache read errors */
+      }
+    }
+    if (!restored) {
+      histRef.current = [];
+      startRef.current = null;
+      setPoints([]);
+      setStartValue(null);
+    }
+  }, [cacheKey]);
 
   const isBtc = feed === "btc";
   const fmt = isBtc ? fmtUsd : fmtTemp;
