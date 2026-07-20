@@ -177,6 +177,9 @@ function normalizeLpStats(stats: LpStats): LpStats {
     feesEarned: Number(stats.feesEarned) || 0,
     dailyVolume: Number(stats.dailyVolume) || 0,
     simulatedApy: Number(stats.simulatedApy) || 0,
-    simulated: Boolean(stats.simulated)
+    simulated: Boolean(stats.simulated),
+    totalVolume: Number.isFinite(Number(stats.totalVolume)) ? Number(stats.totalVolume) : undefined,
+    totalTickets: Number.isFinite(Number(stats.totalTickets)) ? Number(stats.totalTickets) : undefined,
+    totalResolved: Number.isFinite(Number(stats.totalResolved)) ? Number(stats.totalResolved) : undefined
   };
 }

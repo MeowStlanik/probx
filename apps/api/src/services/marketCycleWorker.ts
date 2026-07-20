@@ -13,6 +13,7 @@ import {
   hideMarketOnchain,
   listOnchainMarkets,
   onchainEnabled,
+  refreshAggregateStats,
   resolveReferenceMarketOnchain,
   settleMarketTicketsOnchain
 } from "./onchainService.js";
@@ -187,6 +188,12 @@ export async function runMarketCycleOnce(): Promise<{
       lastCreated: created,
       lastErrors: errors.slice(0, 12)
     });
+
+    // Update aggregate stats (total volume, tickets, resolved) across all markets
+    // so the home page stats strip reflects real cumulative numbers.
+    void refreshAggregateStats().catch((e) =>
+      console.error("[market-cycle] aggregate stats refresh:", e)
+    );
 
     return { ok: errors.length === 0, resolved, settled, hidden, created, errors };
   } finally {

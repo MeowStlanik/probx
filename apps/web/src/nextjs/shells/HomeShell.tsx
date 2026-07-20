@@ -88,9 +88,11 @@ export function HomeShell({
     nowPct: 0
   };
 
-  const volume = raw.reduce((s, m) => s + (m.volume || 0), 0);
-  const tickets = raw.reduce((s, m) => s + (m.ticketCount || 0), 0);
-  const resolved = raw.filter((m) => m.status === "RESOLVED").length;
+  // Prefer aggregate stats from LP endpoint (all markets incl. resolved/hidden).
+  // Fallback: sum from the visible desk list if aggregates are not yet populated.
+  const volume = stats.totalVolume ?? raw.reduce((s, m) => s + (m.volume || 0), 0);
+  const tickets = stats.totalTickets ?? raw.reduce((s, m) => s + (m.ticketCount || 0), 0);
+  const resolved = stats.totalResolved ?? raw.filter((m) => m.status === "RESOLVED").length;
 
   return (
     <HomeView

@@ -267,6 +267,88 @@ export async function getOnchainLpStats(): Promise<LpSnapshot> {
   };
 }
 
+/**
+ * Aggregate stats across ALL markets (including resolved/hidden).
+ * Cached in memory + KV so the home page stats strip always shows real totals
+ * instead of only counting the two currently-visible OPEN markets.
+ */
+export type AggregateMarketStats = {
+  totalVolume: number;
+  totalTickets: number;
+  totalResolved: number;
+  updatedAt: string;
+};
+
+let aggregateStatsCache: AggregateMarketStats | null = null;
+const AGGREGATE_STATS_FRESH_MS = 30_000;
+let aggregateStatsCacheAt = 0;
+
+export function getCachedAggregateStats(): AggregateMarketStats | null {
+  return aggregateStatsCache;
+}
+
+/** Called by market cycle worker after processing all markets. */
+export async function refreshAggregateStats(): Promise<AggregateMarketStats> {
+  try {
+    const known = await listKnownMarkets({ includeHidden: true });
+    const markets = await Promise.all(known.map((item) => readOnchainMarket(item)));
+    const all = markets.filter((m): m is Market => Boolean(m));
+
+    let totalVolume = 0;
+    let totalTickets = 0;
+    let totalResolved = 0;
+
+    for (const m of all) {
+      totalVolume += m.volume || 0;
+      totalTickets += m.ticketCount || 0;
+      if (m.status === "RESOLVED") totalResolved++;
+    }
+
+    const stats: AggregateMarketStats = {
+      totalVolume,
+      totalTickets,
+      totalResolved,
+      updatedAt: new Date().toISOString()
+    };
+    aggregateStatsCache = stats;
+    aggregateStatsCacheAt = Date.now();
+
+    // Persist to KV so other instances see fresh stats immediately.
+    try {
+      const { NamespaceStore } = await import("./persistentStore.js");
+      const store = new NamespaceStore<AggregateMarketStats>("aggregate-stats");
+      await store.set("latest", stats);
+    } catch {
+      /* non-fatal */
+    }
+
+    return stats;
+  } catch (error) {
+    console.error("[aggregate-stats] refresh failed:", error instanceof Error ? error.message : error);
+    return aggregateStatsCache ?? { totalVolume: 0, totalTickets: 0, totalResolved: 0, updatedAt: "" };
+  }
+}
+
+/** Load aggregate stats: in-memory cache → KV fallback → null. */
+export async function getAggregateStats(): Promise<AggregateMarketStats | null> {
+  if (aggregateStatsCache && Date.now() - aggregateStatsCacheAt < AGGREGATE_STATS_FRESH_MS) {
+    return aggregateStatsCache;
+  }
+  try {
+    const { NamespaceStore } = await import("./persistentStore.js");
+    const store = new NamespaceStore<AggregateMarketStats>("aggregate-stats");
+    const stored = await store.get("latest");
+    if (stored && stored.updatedAt) {
+      aggregateStatsCache = stored;
+      aggregateStatsCacheAt = Date.now();
+      return stored;
+    }
+  } catch {
+    /* non-fatal */
+  }
+  return aggregateStatsCache;
+}
+
 export async function listOnchainMarkets(options: {
   /** Include finished markets for resolve/hide (cron). UI list hides RESOLVED without tickets. */
   forCycle?: boolean;
@@ -1094,7 +1176,69 @@ let weatherHistoryCache: { expiresAt: number; points: HistoryPoint[] } | undefin
 const btcTickHistory: HistoryPoint[] = [];
 const weatherTickHistory: HistoryPoint[] = [];
 
+/**
+ * KV-backed tick history persistence.
+ * On Vercel serverless, in-memory arrays are lost on cold starts / new instances,
+ * so observation charts looked empty. Load last ~10 min from KV once per isolate;
+ * write back every 45s (throttled) so free-tier Upstash stays comfortable.
+ */
+let kvTicksLoaded = false;
+let lastKvTickSaveAt = 0;
+const KV_TICK_SAVE_INTERVAL_MS = 45_000;
+const KV_TICK_MAX_POINTS = 120;
+
+async function ensureTickHistoryFromKv(): Promise<void> {
+  if (kvTicksLoaded) return;
+  kvTicksLoaded = true;
+  try {
+    const { NamespaceStore } = await import("./persistentStore.js");
+    const store = new NamespaceStore<HistoryPoint[]>("tick-history");
+    const [btcTicks, weatherTicks] = await Promise.all([
+      store.get("btc").catch(() => null),
+      store.get("weather").catch(() => null)
+    ]);
+    const cutoff = Date.now() - 10 * 60_000;
+    if (btcTicks && Array.isArray(btcTicks) && btcTickHistory.length === 0) {
+      const valid = btcTicks.filter(
+        (p) => Number.isFinite(p?.value) && Number.isFinite(p?.at) && p.at > cutoff
+      );
+      btcTickHistory.push(...valid);
+    }
+    if (weatherTicks && Array.isArray(weatherTicks) && weatherTickHistory.length === 0) {
+      const valid = weatherTicks.filter(
+        (p) => Number.isFinite(p?.value) && Number.isFinite(p?.at) && p.at > cutoff
+      );
+      weatherTickHistory.push(...valid);
+    }
+  } catch {
+    // KV unavailable — proceed with in-memory only.
+  }
+}
+
+async function maybeSaveTickHistoryToKv(): Promise<void> {
+  const now = Date.now();
+  if (now - lastKvTickSaveAt < KV_TICK_SAVE_INTERVAL_MS) return;
+  lastKvTickSaveAt = now;
+  try {
+    const { NamespaceStore } = await import("./persistentStore.js");
+    const store = new NamespaceStore<HistoryPoint[]>("tick-history");
+    await Promise.all([
+      btcTickHistory.length > 0
+        ? store.set("btc", btcTickHistory.slice(-KV_TICK_MAX_POINTS))
+        : Promise.resolve(),
+      weatherTickHistory.length > 0
+        ? store.set("weather", weatherTickHistory.slice(-KV_TICK_MAX_POINTS))
+        : Promise.resolve()
+    ]);
+  } catch {
+    // non-fatal
+  }
+}
+
 export async function getDemoReferenceData() {
+  // Hydrate tick history from KV on cold start so charts show accumulated data.
+  await ensureTickHistoryFromKv();
+
   const [btc, weather, btcHistory, weatherHistory] = await Promise.allSettled([
     fetchCachedBtcSpot(),
     fetchCachedWeather(),
@@ -1121,6 +1265,9 @@ export async function getDemoReferenceData() {
     weatherData?.history && weatherData.history.length >= 4
       ? weatherData.history
       : weatherSeries;
+
+  // Persist ticks to KV periodically (non-blocking).
+  void maybeSaveTickHistoryToKv();
 
   return {
     btcUsd: btcData

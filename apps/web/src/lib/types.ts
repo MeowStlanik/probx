@@ -63,4 +63,8 @@ export interface LpStats {
   simulatedApy: number;
   /** True when numbers come from the in-memory demo snapshot, not the on-chain vault. */
   simulated?: boolean;
+  /** Aggregate stats across ALL markets (including resolved/hidden). */
+  totalVolume?: number;
+  totalTickets?: number;
+  totalResolved?: number;
 }

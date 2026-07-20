@@ -8,25 +8,14 @@ interface Props {
   marketsPreview: MarketSummary[];
   stats: { volume: string; tickets: string; resolved: string; tvl: string };
   onSelectMarket: (id: string) => void;
-  /** Optional live proof chip links (gas / cctp txs). */
-  proofChips?: {
-    gasTxHref?: string;
-    gasTxLabel?: string;
-    cctpLabel?: string;
-  };
 }
 
-// / — hero + proof chips + stats + live markets (BTC + weather). No Flow of USDC.
 export function HomeView({
   heroMarket,
   marketsPreview,
   stats,
-  onSelectMarket,
-  proofChips
+  onSelectMarket
 }: Props) {
-  const gasHref = proofChips?.gasTxHref ?? "https://testnet.arcscan.app";
-  const gasLabel = proofChips?.gasTxLabel ?? "0x3f…a2";
-  const cctpLabel = proofChips?.cctpLabel ?? "~4 min";
 
   return (
     <main>
@@ -73,12 +62,9 @@ export function HomeView({
               settlement is verifiable on Arcscan.
             </p>
 
-            {/* Live USDC proof chips — design handoff */}
+            {/* Feature highlights */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 24 }}>
-              <a
-                href={gasHref}
-                target="_blank"
-                rel="noreferrer"
+              <span
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -89,14 +75,12 @@ export function HomeView({
                   fontSize: 13,
                   color: theme.color.ink,
                   background: "#fff",
-                  boxShadow: theme.shadow.card,
-                  textDecoration: "none"
+                  boxShadow: theme.shadow.card
                 }}
               >
                 <span style={{ width: 8, height: 8, borderRadius: "50%", background: theme.color.yes }} />
-                Gas paid in USDC · tx{" "}
-                <span style={{ fontFamily: theme.font.mono, color: theme.color.blue }}>{gasLabel}</span>
-              </a>
+                No gas tokens needed
+              </span>
               <span
                 style={{
                   display: "inline-flex",
@@ -112,7 +96,7 @@ export function HomeView({
                 }}
               >
                 <span style={{ width: 8, height: 8, borderRadius: "50%", background: theme.color.purple }} />
-                CCTP Base→Arc in <span style={{ fontFamily: theme.font.mono }}>{cctpLabel}</span>
+                Instant USDC settlement
               </span>
               <Link
                 href="/portfolio"
@@ -131,7 +115,7 @@ export function HomeView({
                 }}
               >
                 <span style={{ width: 8, height: 8, borderRadius: "50%", background: theme.color.blue }} />
-                Email → wallet in <span style={{ fontFamily: theme.font.mono }}>30 sec</span>
+                Email sign-up, instant wallet
               </Link>
             </div>
           </div>
