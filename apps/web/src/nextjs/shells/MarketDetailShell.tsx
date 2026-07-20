@@ -49,6 +49,14 @@ export function MarketDetailShell({
   const [now, setNow] = useState(() => serverNow ?? 0);
   const [engineAllowance, setEngineAllowance] = useState(0n);
   const [quotedDebit, setQuotedDebit] = useState(0n);
+  const [liveQuote, setLiveQuote] = useState<{
+    stake: number;
+    fee: number;
+    totalDebit: number;
+    payout: number;
+    accepted: boolean;
+    reason?: string;
+  } | null>(null);
   const marketRef = useRef(market);
   marketRef.current = market;
 
@@ -114,9 +122,11 @@ export function MarketDetailShell({
   }, [load, initial]);
 
   const quoteBuy = useCallback(
-    async (side: Side, stake: number, boost: number) => {
+    async (side: Side, stake: number, boost: number, opts?: { requireWallet?: boolean }) => {
       if (!market) throw new Error("Market not loaded");
-      if (!address) throw new Error("Connect wallet in the header first.");
+      if (opts?.requireWallet && !address) {
+        throw new Error("Connect wallet in the header first.");
+      }
       const marketAddress = resolveMarketAddress(market);
       const risk = parseUnits(String(stake || 0), 6);
       if (risk <= 0n) throw new Error("Stake must be > 0");
@@ -128,7 +138,7 @@ export function MarketDetailShell({
         abi: engineAbi,
         functionName: "quoteTicket",
         args: [marketAddress, outcomeId, risk, boostBps],
-        account: address
+        ...(address ? { account: address } : {})
       })) as {
         totalDebit: bigint;
         payout: bigint;
@@ -137,18 +147,35 @@ export function MarketDetailShell({
         accepted: boolean;
         reason: string;
       };
+
+      const stakeN = Number(formatUnits(risk, 6));
+      const feeN = Number(formatUnits(quote.fee, 6));
+      const debitN = Number(formatUnits(quote.totalDebit, 6));
+      const payoutN = Number(formatUnits(quote.payout, 6));
+      setLiveQuote({
+        stake: stakeN,
+        fee: feeN,
+        totalDebit: debitN,
+        payout: payoutN,
+        accepted: Boolean(quote.accepted),
+        reason: quote.reason
+      });
+      setQuotedDebit(quote.totalDebit);
+
       if (!quote.accepted) {
         throw new Error(quote.reason || "Quote rejected — market locked or LP reserve insufficient.");
       }
-      setQuotedDebit(quote.totalDebit);
 
-      const allowance = await publicClient.readContract({
-        address: getAddress(arcDeployment.usdc),
-        abi: usdcAbi,
-        functionName: "allowance",
-        args: [address, getAddress(arcDeployment.microBoostEngine)]
-      });
-      setEngineAllowance(allowance);
+      let allowance = 0n;
+      if (address) {
+        allowance = await publicClient.readContract({
+          address: getAddress(arcDeployment.usdc),
+          abi: usdcAbi,
+          functionName: "allowance",
+          args: [address, getAddress(arcDeployment.microBoostEngine)]
+        });
+        setEngineAllowance(allowance);
+      }
 
       return { quote, marketAddress, risk, boostBps, outcomeId, allowance };
     },
@@ -160,6 +187,7 @@ export function MarketDetailShell({
     if (!address || !market) {
       setEngineAllowance(0n);
       setQuotedDebit(0n);
+      setLiveQuote(null);
       return;
     }
     let cancelled = false;
@@ -183,10 +211,11 @@ export function MarketDetailShell({
 
   const onApprove = useCallback(
     async (side: Side, stake: number, boost: number) => {
+      if (!address) throw new Error("Connect wallet in the header first.");
       await ensureArcChain();
       const walletClient = getWalletClient();
       if (!walletClient) throw new Error("Wallet provider unavailable.");
-      const { quote } = await quoteBuy(side, stake, boost);
+      const { quote } = await quoteBuy(side, stake, boost, { requireWallet: true });
       const approveHash = await walletClient.writeContract({
         address: getAddress(arcDeployment.usdc),
         abi: usdcAbi,
@@ -229,7 +258,8 @@ export function MarketDetailShell({
       const { quote, marketAddress, risk, boostBps, outcomeId, allowance } = await quoteBuy(
         side,
         stake,
-        boost
+        boost,
+        { requireWallet: true }
       );
       if (!quote.accepted) {
         throw new Error(quote.reason || "Quote rejected — market locked or LP reserve insufficient.");
@@ -320,11 +350,12 @@ export function MarketDetailShell({
       activity={activity}
       chart={chart}
       needsApproval={needsApproval}
+      liveQuote={liveQuote}
       onRetry={() => void load()}
       onBack={() => router.push("/markets")}
       onPreviewQuote={(side, stake, boost) => {
         void quoteBuy(side, stake, boost).catch(() => {
-          /* keep last known needsApproval */
+          /* keep last known needsApproval / liveQuote */
         });
       }}
       onApprove={async (side, stake, boost) => {

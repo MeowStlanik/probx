@@ -10,6 +10,16 @@ import { AmountInput } from "../components/AmountInput";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 
+/** On-chain quote preview from MicroBoostEngine.quoteTicket (USDC units). */
+export type LiveTicketQuote = {
+  stake: number;
+  fee: number;
+  totalDebit: number;
+  payout: number;
+  accepted: boolean;
+  reason?: string;
+};
+
 interface Props {
   state: LoadState;
   market: MarketDetail | null;
@@ -18,6 +28,8 @@ interface Props {
   onBack: () => void;
   /** True when engine allowance is below the quoted total debit for current stake/boost. */
   needsApproval: boolean;
+  /** Live engine quote (fee + totalDebit + payout). Prefer over local estimate when present. */
+  liveQuote?: LiveTicketQuote | null;
   /** Debounced quote refresh when ticket inputs change. */
   onPreviewQuote?: (side: Side, stake: number, boost: number) => void;
   onApprove: (side: Side, stake: number, boost: number) => Promise<void>;
@@ -32,6 +44,22 @@ function fmtClock(sec: number) {
 }
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** Matches MicroBoostEngine.calculateFee: base 0.30% + 4% of (boost − 1×) on stake. */
+function estimateFeeUsdc(stake: number, boost: number): number {
+  if (!(stake > 0) || !(boost >= 1)) return 0;
+  const bps = 10_000;
+  const boostBps = Math.round(boost * bps);
+  const boostPremiumBps = ((boostBps - bps) * 400) / bps;
+  return (stake * (30 + boostPremiumBps)) / bps;
+}
+
+/** Matches QuoteMath.payout: (stake × boost) / price. */
+function estimatePayoutUsdc(stake: number, boost: number, price: number): number {
+  if (!(stake > 0) || !(boost >= 1)) return 0;
+  const p = Math.max(0.05, Math.min(0.95, price));
+  return (stake * boost) / p;
+}
 
 // Simple sparkline from priceHistory (0–1 samples)
 function OddsSparkline({ samples }: { samples: number[] }) {
@@ -68,6 +96,7 @@ export function MarketDetailView({
   onRetry,
   onBack,
   needsApproval,
+  liveQuote,
   onPreviewQuote,
   onApprove,
   onConfirmTicket,
@@ -82,6 +111,18 @@ export function MarketDetailView({
   // Only OPEN accepts new tickets — Lock / Observe / Resolve are view-only.
   const tradingOpen = market?.stage === "OPEN";
 
+  const stakeN = Number(stake) || 0;
+  const price = side === "YES" ? (market?.quotedYes ?? 0.5) : 1 - (market?.quotedYes ?? 0.5);
+  // Prefer engine quote when it matches current stake (within 0.5¢) — source of truth for wallet debit.
+  const quoteMatches =
+    liveQuote != null && Math.abs(liveQuote.stake - stakeN) < 0.005 && stakeN > 0;
+  const feeUsdc = quoteMatches ? liveQuote!.fee : estimateFeeUsdc(stakeN, boost);
+  const totalDebitUsdc = quoteMatches ? liveQuote!.totalDebit : stakeN + feeUsdc;
+  const payoutUsdc = quoteMatches
+    ? liveQuote!.payout
+    : estimatePayoutUsdc(stakeN, boost, price);
+  const feePct = stakeN > 0 ? (feeUsdc / stakeN) * 100 : 0;
+
   useEffect(() => {
     // Keep boost within market max when market loads / changes
     setBoost((b) => Math.min(b, maxBoost));
@@ -90,11 +131,10 @@ export function MarketDetailView({
   // Keep shell allowance / totalDebit in sync with ticket inputs
   useEffect(() => {
     if (!market || !onPreviewQuote) return;
-    const stakeN = Number(stake) || 0;
     if (stakeN <= 0) return;
     const t = window.setTimeout(() => onPreviewQuote(side, stakeN, boost), 350);
     return () => window.clearTimeout(t);
-  }, [market, side, stake, boost, onPreviewQuote]);
+  }, [market, side, stakeN, boost, onPreviewQuote]);
 
   return (
     <main style={{ maxWidth: theme.layout.maxWidth, margin: "0 auto", padding: "32px 24px 80px", flex: 1 }}>
@@ -617,7 +657,27 @@ export function MarketDetailView({
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
                           <span style={{ color: theme.color.muted }}>Stake</span>
                           <span style={{ fontFamily: theme.font.mono, color: theme.color.ink }}>
-                            {money(Number(stake) || 0)}
+                            {money(stakeN)}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
+                          <span style={{ color: theme.color.muted }}>
+                            Fee{feePct > 0 ? ` (${feePct.toFixed(1)}%)` : ""}
+                          </span>
+                          <span style={{ fontFamily: theme.font.mono, color: theme.color.ink }}>
+                            {money(feeUsdc)}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 13 }}>
+                          <span style={{ color: theme.color.muted, fontWeight: 600 }}>You pay</span>
+                          <span
+                            style={{
+                              fontFamily: theme.font.mono,
+                              color: theme.color.ink,
+                              fontWeight: 600
+                            }}
+                          >
+                            {money(totalDebitUsdc)}
                           </span>
                         </div>
                         <div
@@ -630,7 +690,9 @@ export function MarketDetailView({
                             borderTop: `1px solid ${theme.color.border}`
                           }}
                         >
-                          <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>Est. payout</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: theme.color.ink }}>
+                            Est. payout if {side}
+                          </span>
                           <span
                             style={{
                               fontFamily: theme.font.mono,
@@ -639,30 +701,30 @@ export function MarketDetailView({
                               color: theme.color.yes
                             }}
                           >
-                            {money(
-                              ((Number(stake) || 0) /
-                                Math.max(0.05, side === "YES" ? market.quotedYes : 1 - market.quotedYes)) *
-                                boost
-                            )}
+                            {money(payoutUsdc)}
                           </span>
                         </div>
+                        <p style={{ margin: "6px 0 0", fontSize: 11, color: theme.color.muted, lineHeight: 1.4 }}>
+                          Wallet will request <strong>{money(totalDebitUsdc)}</strong> USDC (stake + fee). Max loss =
+                          stake only; fee is paid up front.
+                        </p>
                       </div>
                       {needsApproval ? (
                         <p style={{ margin: "12px 0 0", fontSize: 12, color: theme.color.muted, lineHeight: 1.4 }}>
-                          First <strong>Approve USDC</strong> for the engine, then the button becomes Confirm.
+                          First <strong>Approve USDC</strong> for the engine ({money(totalDebitUsdc)}), then Confirm.
                         </p>
                       ) : null}
                       <Button
                         fullWidth
-                        disabled={busy}
+                        disabled={busy || stakeN <= 0}
                         style={{ marginTop: 14 }}
                         onClick={async () => {
                           setBusy(true);
                           try {
                             if (needsApproval) {
-                              await onApprove(side, Number(stake) || 0, boost);
+                              await onApprove(side, stakeN, boost);
                             } else {
-                              setReceipt(await onConfirmTicket(side, Number(stake) || 0, boost));
+                              setReceipt(await onConfirmTicket(side, stakeN, boost));
                             }
                           } catch (e) {
                             window.alert(e instanceof Error ? e.message : "Ticket failed");
@@ -676,11 +738,11 @@ export function MarketDetailView({
                             ? "Approving…"
                             : "Confirming…"
                           : needsApproval
-                            ? "Approve USDC"
-                            : `Confirm · $${stake} USDC → payout if ${side}`}
+                            ? `Approve ${money(totalDebitUsdc)} USDC`
+                            : `Confirm · pay ${money(totalDebitUsdc)} → ${money(payoutUsdc)} if ${side}`}
                       </Button>
                       <p style={{ textAlign: "center", fontSize: 11, color: theme.color.muted, margin: "10px 0 0" }}>
-                        Gas paid in USDC · you can only lose your stake.
+                        Gas paid in USDC · you can only lose your stake (not the fee).
                       </p>
                     </>
                   ) : null}
