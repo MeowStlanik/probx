@@ -88,11 +88,17 @@ export function HomeShell({
     nowPct: 0
   };
 
-  // Prefer aggregate stats from LP endpoint (all markets incl. resolved/hidden).
-  // Fallback: sum from the visible desk list if aggregates are not yet populated.
-  const volume = stats.totalVolume ?? raw.reduce((s, m) => s + (m.volume || 0), 0);
-  const tickets = stats.totalTickets ?? raw.reduce((s, m) => s + (m.ticketCount || 0), 0);
-  const resolved = stats.totalResolved ?? raw.filter((m) => m.status === "RESOLVED").length;
+  // Prefer aggregate stats from LP endpoint (engine-wide TicketBought + resolved).
+  // Note: `0 ?? fallback` is 0 — only fall back when the field is missing.
+  const fromListVolume = raw.reduce((s, m) => s + (m.volume || 0), 0);
+  const fromListTickets = raw.reduce((s, m) => s + (m.ticketCount || 0), 0);
+  const fromListResolved = raw.filter((m) => m.status === "RESOLVED").length;
+  const volume =
+    typeof stats.totalVolume === "number" ? stats.totalVolume : fromListVolume;
+  const tickets =
+    typeof stats.totalTickets === "number" ? stats.totalTickets : fromListTickets;
+  const resolved =
+    typeof stats.totalResolved === "number" ? stats.totalResolved : fromListResolved;
 
   return (
     <HomeView
@@ -100,8 +106,8 @@ export function HomeShell({
       marketsPreview={preview.length ? preview : [hero]}
       stats={{
         volume: moneyUsdc(volume),
-        tickets: tickets > 0 ? String(tickets) : "—",
-        resolved: resolved > 0 ? String(resolved) : "—",
+        tickets: String(tickets),
+        resolved: String(resolved),
         tvl: moneyUsdc(stats.tvl || 0)
       }}
       onSelectMarket={(id) => {

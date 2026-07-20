@@ -291,7 +291,8 @@ export function getCachedAggregateStats(): AggregateMarketStats | null {
 
 /**
  * Compute + save aggregate stats from an already-fetched market list.
- * Preferred when the caller already read all markets (e.g. cycle worker) — no extra RPC.
+ * Volume/tickets prefer engine-wide TicketBought scan (reliable); per-market
+ * volume fields are often 0 because Arc RPC rejects eth_getLogs over 10k blocks.
  */
 export async function saveAggregateStatsFromMarkets(markets: Market[]): Promise<AggregateMarketStats> {
   let totalVolume = 0;
@@ -302,6 +303,21 @@ export async function saveAggregateStatsFromMarkets(markets: Market[]): Promise<
     totalVolume += m.volume || 0;
     totalTickets += m.ticketCount || 0;
     if (m.status === "RESOLVED") totalResolved++;
+  }
+
+  // Prefer one chunked engine-wide log scan — accurate even when per-market
+  // tradeStats timed out or failed the 10k-block RPC limit.
+  try {
+    const engineTotals = await engineTicketBoughtTotals();
+    if (engineTotals.ticketCount > 0 || engineTotals.volume > 0) {
+      totalVolume = engineTotals.volume;
+      totalTickets = engineTotals.ticketCount;
+    }
+  } catch (error) {
+    console.error(
+      "[aggregate-stats] engine log scan failed:",
+      error instanceof Error ? error.message : error
+    );
   }
 
   const stats: AggregateMarketStats = {
@@ -330,13 +346,28 @@ export async function refreshAggregateStats(): Promise<AggregateMarketStats> {
 
   refreshInflight = (async () => {
     try {
+      // forCycle includes RESOLVED/hidden so Markets resolved can be non-zero.
       const markets = await listOnchainMarkets({ forCycle: true });
       return await saveAggregateStatsFromMarkets(markets);
     } catch (error) {
       console.error("[aggregate-stats] refresh failed:", error instanceof Error ? error.message : error);
-      return (
-        aggregateStatsCache ?? { totalVolume: 0, totalTickets: 0, totalResolved: 0, updatedAt: "" }
-      );
+      // Still try engine-wide totals if market list failed.
+      try {
+        const engineTotals = await engineTicketBoughtTotals();
+        const stats: AggregateMarketStats = {
+          totalVolume: engineTotals.volume,
+          totalTickets: engineTotals.ticketCount,
+          totalResolved: aggregateStatsCache?.totalResolved ?? 0,
+          updatedAt: new Date().toISOString()
+        };
+        aggregateStatsCache = stats;
+        aggregateStatsCacheAt = Date.now();
+        return stats;
+      } catch {
+        return (
+          aggregateStatsCache ?? { totalVolume: 0, totalTickets: 0, totalResolved: 0, updatedAt: "" }
+        );
+      }
     } finally {
       refreshInflight = null;
     }
@@ -558,7 +589,8 @@ async function marketTradeStats(market: `0x${string}`): Promise<{
   yesVolume: number;
   noVolume: number;
 }> {
-  const logs = await ticketBoughtLogsForMarket(market);
+  // Always chunk — Arc public RPC rejects eth_getLogs ranges > 10_000 blocks.
+  const logs = await ticketBoughtLogsForMarket(market, true);
   let totalRisk = 0n;
   let yesRisk = 0n;
   let noRisk = 0n;
@@ -574,6 +606,21 @@ async function marketTradeStats(market: `0x${string}`): Promise<{
     yesVolume: usdcNumber(yesRisk),
     noVolume: usdcNumber(noRisk)
   };
+}
+
+/** Sum all TicketBought on the current engine (all markets) via chunked getLogs. */
+async function engineTicketBoughtTotals(): Promise<{ volume: number; ticketCount: number }> {
+  const logs = await ticketBoughtLogsChunked({}, await ticketScanFromBlock(), await publicClient.getBlockNumber());
+  let totalRisk = 0n;
+  for (const log of logs) {
+    totalRisk += log.args.riskAmount ?? 0n;
+  }
+  return { volume: usdcNumber(totalRisk), ticketCount: logs.length };
+}
+
+async function ticketScanFromBlock(): Promise<bigint> {
+  const latest = await publicClient.getBlockNumber();
+  return recentTicketScanFromBlock(latest);
 }
 
 function emptyMarketTradeStats(): {
@@ -605,11 +652,15 @@ type TicketBoughtLog = {
   };
 };
 
-async function ticketBoughtLogsForMarket(market: `0x${string}`, chunkOnFailure = false) {
+async function ticketBoughtLogsForMarket(market: `0x${string}`, chunkOnFailure = true) {
   const latestBlock = await publicClient.getBlockNumber();
   const fromBlock = recentTicketScanFromBlock(latestBlock);
   if (fromBlock > latestBlock) return [];
   const args = { market };
+  // Arc testnet RPC: eth_getLogs limited to 10_000 blocks — never request full range.
+  if (latestBlock - fromBlock > 9_000n || chunkOnFailure) {
+    return ticketBoughtLogsChunked(args, fromBlock, latestBlock);
+  }
   try {
     return await publicClient.getLogs({
       address: addr(deployment.microBoostEngine),
@@ -619,7 +670,7 @@ async function ticketBoughtLogsForMarket(market: `0x${string}`, chunkOnFailure =
       toBlock: latestBlock
     }) as TicketBoughtLog[];
   } catch {
-    return chunkOnFailure ? ticketBoughtLogsChunked(args, fromBlock, latestBlock) : [];
+    return ticketBoughtLogsChunked(args, fromBlock, latestBlock);
   }
 }
 
@@ -639,21 +690,35 @@ async function ticketBoughtLogsForBuyer(buyer: `0x${string}`, fromBlock: bigint,
 }
 
 async function ticketBoughtLogsChunked(args: TicketBoughtLogArgs, fromBlock: bigint, toBlock: bigint) {
+  // Arc public RPC: eth_getLogs max range 10_000; some gateways flake on 8k — use 4k + retries.
   const chunkSize = configuredLogChunkSize();
   const logs: TicketBoughtLog[] = [];
+  const filterArgs =
+    args.buyer || args.market
+      ? {
+          ...(args.buyer ? { buyer: args.buyer } : {}),
+          ...(args.market ? { market: args.market } : {})
+        }
+      : undefined;
+
   for (let start = fromBlock; start <= toBlock; start += chunkSize) {
     const end = start + chunkSize - 1n > toBlock ? toBlock : start + chunkSize - 1n;
-    try {
-      logs.push(...await publicClient.getLogs({
-        address: addr(deployment.microBoostEngine),
-        event: engineAbi[2],
-        args,
-        fromBlock: start,
-        toBlock: end
-      }) as TicketBoughtLog[]);
-    } catch {
-      // Keep the UI responsive even if one public RPC refuses an old/pruned range.
+    let got: TicketBoughtLog[] | null = null;
+    for (let attempt = 0; attempt < 3 && !got; attempt++) {
+      try {
+        got = (await publicClient.getLogs({
+          address: addr(deployment.microBoostEngine),
+          event: engineAbi[2],
+          ...(filterArgs ? { args: filterArgs } : {}),
+          fromBlock: start,
+          toBlock: end
+        })) as TicketBoughtLog[];
+      } catch {
+        // Brief backoff — public Arc endpoints rate-limit concurrent getLogs.
+        await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+      }
     }
+    if (got) logs.push(...got);
   }
   return logs;
 }
@@ -824,8 +889,9 @@ function configuredRecentScanBlocks(): bigint {
 }
 
 function configuredLogChunkSize(): bigint {
-  const parsed = parseBlockNumber(process.env.ARC_LOG_CHUNK_SIZE ?? 50_000);
-  if (parsed <= 0n) return 9_000n;
+  // Arc RPC hard-limits eth_getLogs to 10_000 blocks; 4k is reliable across public RPCs.
+  const parsed = parseBlockNumber(process.env.ARC_LOG_CHUNK_SIZE ?? "4000");
+  if (parsed <= 0n) return 4_000n;
   return parsed > 9_000n ? 9_000n : parsed;
 }
 
