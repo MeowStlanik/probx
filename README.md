@@ -21,7 +21,7 @@
   <a href="https://testnet.arcscan.app"><img src="https://img.shields.io/badge/Network-Arc%20Testnet-7C5CFF?style=flat-square" alt="Arc Testnet" /></a>
   <a href="#arc-testnet"><img src="https://img.shields.io/badge/Gas-USDC%20native-2775CA?style=flat-square" alt="USDC gas" /></a>
   <a href="#circle-cctp--app-kits"><img src="https://img.shields.io/badge/Circle-Wallets%20%C2%B7%20App%20Kits%20%C2%B7%20CCTP-6B46C1?style=flat-square" alt="Circle" /></a>
-  <img src="https://img.shields.io/badge/Tests-45%20passing-22C55E?style=flat-square" alt="45 forge tests" />
+  <img src="https://img.shields.io/badge/Tests-46%20passing-22C55E?style=flat-square" alt="46 forge tests" />
   <img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT" />
 </p>
 
@@ -142,9 +142,9 @@ sticky over 60s). No free lunch on mispriced flat 50/50 tickets.
 ## Security
 
 The reserve engine holds user funds, so the invariants are covered by tests rather than
-assumed. `pnpm contracts:test` → **45 passing**: 21 scenario + 3 registry + 5 LP vault
-+ 12 accounting invariant checks and fuzz tests, plus 4 self-audit regressions
-(price-mid rail inversion, settle ordering, fee-router access).
+assumed. `pnpm contracts:test` → **46 passing**: 25 scenario + 3 registry + 6 LP vault
++ 12 accounting invariant checks and fuzz tests (includes price-mid, settle CEI,
+fee-router access, and dust-manipulation regressions).
 
 | Area | Guarantee | Test |
 |------|-----------|------|
@@ -295,7 +295,7 @@ Testnet deployment built for a hackathon. Honest limits:
 | [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md) | Address bump after redeploy |
 | [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) | Live contract addresses |
 | [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md) | Minute pinger setup |
-| [`contracts/test/`](./contracts/test/) | 21 scenario + 3 registry guards + 12 accounting checks/fuzz — `pnpm contracts:test` |
+| [`contracts/test/`](./contracts/test/) | **46** forge tests: 25 scenario + 3 registry + 6 LP + 12 accounting/fuzz — `pnpm contracts:test` |
 | [`.env.example`](.env.example) | Full env template |
 | [`LICENSE`](./LICENSE) | MIT |
 
