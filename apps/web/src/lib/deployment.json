@@ -19,7 +19,7 @@
   "oracleAdapter": "0x24CC0e29B4cc678aDe4f866a9808F582BD4f6A17",
   "marketFactory": "0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8",
   "demoMarket": "0xE0C582a36f101E01423e41490307B877F0ecDB6c",
-  "lpSeedUsdc": "400",
+  "lpSeedUsdc": "100000",
   "fromBlock": 53536935,
   "deployedAt": "2026-07-25T05:15:51.510Z"
 }
