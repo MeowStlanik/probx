@@ -1,6 +1,7 @@
 import {
   createOrResumeSession,
   getSessionPublic,
+  logoutSession,
   walletModeInfo,
   writeContractForSession,
   transferUsdcForSession,
@@ -22,7 +23,12 @@ import {
   type CctpSourceKey,
   CCTP
 } from "../services/cctpService.js";
-import { cctpSourceAddress, cctpSourceConfigured, demoFundViaCctp } from "../services/cctpDemoFundService.js";
+import {
+  cctpSourceAddress,
+  cctpSourceConfigured,
+  demoFundViaCctp,
+  verifyInjectedDemoFundAuth
+} from "../services/cctpDemoFundService.js";
 import { requestEmailOtp, consumeEmailOtp, otpDevEchoEnabled } from "../services/emailOtpService.js";
 
 function getAddressSafe(value: string): `0x${string}` | undefined {
@@ -128,8 +134,8 @@ export async function handleWalletGet(
   if (path === "/api/cctp/status") {
     const domain = Number(searchParams.get("domain") ?? "6");
     const txHash = searchParams.get("txHash") ?? "";
-    if (!txHash.startsWith("0x")) {
-      return { status: 400, body: { error: "txHash required" } };
+    if (!isValidTxHash(txHash)) {
+      return { status: 400, body: { error: "invalid transaction hash" } };
     }
     return fetchIrisMessage(domain, txHash).then((result) => ({ status: 200, body: result }));
   }
@@ -256,7 +262,8 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
         to: getAddressSafe(String(body.to ?? "")),
         label: body.label ? String(body.label) : undefined,
         amountUsdc: body.amountUsdc ? String(body.amountUsdc) : undefined,
-        createOnly: true
+        createOnly: true,
+        verifyFromRpc: true
       });
       return { status: 200, body: publicTxView(record) };
     } catch (error) {
@@ -310,6 +317,17 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
     }
   }
 
+  if (path === "/api/wallet/logout") {
+    try {
+      const token = String(body.sessionToken ?? "").trim();
+      if (!token) return { status: 400, body: { error: "sessionToken required" } };
+      await logoutSession(token);
+      return { status: 200, body: { ok: true } };
+    } catch (error) {
+      return { status: 400, body: { error: error instanceof Error ? error.message : "logout failed" } };
+    }
+  }
+
   if (path === "/api/cctp/demo-fund") {
     try {
       if (!cctpSourceConfigured()) {
@@ -317,11 +335,14 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
       }
       const mintTo = String(body.mintTo ?? body.address ?? "");
       const amountUsdc = body.amountUsdc !== undefined ? String(body.amountUsdc) : "2";
-      // Prefer session-bound destination: mint only to the authenticated wallet.
       const email = String(body.email ?? "").trim();
       const sessionToken = String(body.sessionToken ?? "").trim();
-      let destination = mintTo;
+      const signature = String(body.signature ?? "").trim();
+      const nonce = String(body.nonce ?? "").trim();
+
+      let destination: string;
       if (email && sessionToken) {
+        // Embedded / Circle: session proves control of the wallet.
         const session = await getSessionPublic(email, sessionToken);
         if (!session.address) {
           return { status: 400, body: { error: "session has no wallet address" } };
@@ -330,12 +351,24 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
           return { status: 403, body: { error: "mintTo must match session wallet" } };
         }
         destination = session.address;
-      } else if (!getAddressSafe(mintTo)) {
+      } else if (signature && nonce && getAddressSafe(mintTo)) {
+        // Injected: EIP-191 signature over mintTo + amount + nonce.
+        destination = await verifyInjectedDemoFundAuth({
+          mintTo,
+          amountUsdc,
+          nonce,
+          signature
+        });
+      } else {
         return {
           status: 401,
-          body: { error: "email+sessionToken required, or a valid mintTo for injected wallets" }
+          body: {
+            error:
+              "Auth required: email+sessionToken (Circle) or mintTo+signature+nonce (injected EIP-191)"
+          }
         };
       }
+
       const result = await demoFundViaCctp({ mintTo: destination, amountUsdc });
       return { status: 200, body: result };
     } catch (error) {

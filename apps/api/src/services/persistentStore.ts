@@ -182,13 +182,53 @@ export async function acquireLock(
 export async function releaseLock(key: string, token: string): Promise<void> {
   const cfg = kvConfig();
   if (cfg) {
-    // Simple delete if value matches (best-effort without Lua)
-    const current = await kvCommand<string | null>(cfg, ["GET", `lock:${key}`]);
-    if (current === token) {
-      await kvCommand(cfg, ["DEL", `lock:${key}`]);
+    // Atomic compare-and-delete (Lua) so we never drop another worker's lock.
+    try {
+      await kvCommand(cfg, [
+        "EVAL",
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        "1",
+        `lock:${key}`,
+        token
+      ]);
+    } catch {
+      // Fallback if EVAL blocked: best-effort GET/DEL
+      const current = await kvCommand<string | null>(cfg, ["GET", `lock:${key}`]);
+      if (current === token) await kvCommand(cfg, ["DEL", `lock:${key}`]);
     }
     return;
   }
   const cur = localLocks.get(key);
   if (cur?.token === token) localLocks.delete(key);
+}
+
+/**
+ * Atomic set-if-absent with optional TTL (seconds). Returns true if we set the key.
+ * Used for OTP jti / nonces single-use consume.
+ */
+export async function setIfAbsent(
+  key: string,
+  value: unknown,
+  ttlSec = 3600
+): Promise<boolean> {
+  const cfg = kvConfig();
+  const serialized = JSON.stringify(value);
+  if (cfg) {
+    const result = await kvCommand<string | null>(cfg, [
+      "SET",
+      key,
+      serialized,
+      "NX",
+      "EX",
+      String(ttlSec)
+    ]);
+    return result === "OK";
+  }
+  // File fallback: use a dedicated namespace entry
+  const store = new NamespaceStore<{ v: unknown; exp: number }>("set-if-absent");
+  const existing = await store.get(key);
+  const now = Date.now();
+  if (existing && existing.exp > now) return false;
+  await store.set(key, { v: value, exp: now + ttlSec * 1000 });
+  return true;
 }

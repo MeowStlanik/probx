@@ -19,6 +19,7 @@ import type { LpSnapshot, Market, MarketStatus, Outcome, PriceQuote, Ticket } fr
 import { runtimeFile } from "../runtimePaths.js";
 /** Bundled with the API so Vercel serverless always has Arc addresses (fs paths often miss). */
 import bundledArcDeployment from "../config/arc-deployment.json";
+import { waitSuccessfulReceipt } from "./txReceipt.js";
 
 interface DemoMarketDeployment {
   id?: string;
@@ -971,7 +972,7 @@ export async function resolveMarketOnchain(id: string, outcome: Outcome) {
     functionName: "resolve",
     args: [outcome === "YES" ? 1 : 2]
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await waitSuccessfulReceipt(publicClient, hash);
   return { hash, status: receipt.status, market: await getOnchainMarket(id) };
 }
 
@@ -1075,7 +1076,7 @@ export async function cancelMarketOnchain(id: string, reason: string) {
     functionName: "cancel",
     args: [reason]
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const receipt = await waitSuccessfulReceipt(publicClient, hash);
   return { hash, status: receipt.status, market: await getOnchainMarket(id), reason };
 }
 
@@ -1113,8 +1114,14 @@ export async function settleMarketTicketsOnchain(id: string) {
       functionName: "settleTicket",
       args: [ticketId]
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    settled.push({ ticketId: ticketId.toString(), hash, status: receipt.status });
+    try {
+      const receipt = await waitSuccessfulReceipt(publicClient, hash);
+      settled.push({ ticketId: ticketId.toString(), hash, status: receipt.status });
+    } catch (err) {
+      skipped.push(
+        `${ticketId.toString()}: ${err instanceof Error ? err.message : "settle reverted"}`
+      );
+    }
   }
 
   return {
@@ -1190,9 +1197,11 @@ export async function createMarketOnchain(body: {
     functionName: "createMarket",
     args: [question, rulesHash, openTime, lockTime, observationStart, observationEnd, yesPrice]
   });
-  const createReceipt = await publicClient.waitForTransactionReceipt({ hash: createHash });
-  if (createReceipt.status !== "success") {
-    return { createHash, status: createReceipt.status, error: "createMarket transaction failed" };
+  let createReceipt;
+  try {
+    createReceipt = await waitSuccessfulReceipt(publicClient, createHash);
+  } catch {
+    return { createHash, status: "reverted", error: "createMarket transaction failed" };
   }
 
   const logs = parseEventLogs({ abi: factoryAbi, logs: createReceipt.logs, eventName: "MarketCreated" });
@@ -1206,7 +1215,7 @@ export async function createMarketOnchain(body: {
     abi: marketAbi,
     functionName: "open"
   });
-  const openReceipt = await publicClient.waitForTransactionReceipt({ hash: openHash });
+  const openReceipt = await waitSuccessfulReceipt(publicClient, openHash);
   const item: DemoMarketDeployment = {
     id: getAddress(marketAddress),
     label: "Admin-created market",

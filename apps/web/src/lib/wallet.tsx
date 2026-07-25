@@ -144,6 +144,8 @@ type WalletContextValue = {
   error: string | null;
   mode: WalletMode | null;
   email: string | null;
+  /** Embedded session token (for authenticated API calls). */
+  sessionToken: string | null;
   /** MetaMask / injected */
   connect: () => Promise<`0x${string}` | null>;
   /** Step 1: request 6-digit email OTP (returns otpToken for Vercel multi-instance verify). */
@@ -369,10 +371,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       clearEmbeddedSession();
       setEmbedded(null);
       setEmail(null);
+      // Switch mode before ensureArcChain so embedded no-op does not skip network switch.
+      setMode("injected");
       await ensureArcChain();
       const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
       const next = accounts[0] ? getAddress(accounts[0]) : null;
-      setMode("injected");
       setActiveAddress(next);
       if (next) {
         writeConnectedFlag(true);
@@ -502,6 +505,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const disconnect = useCallback(() => {
+    const token = embedded?.sessionToken;
+    if (token) {
+      // Best-effort server revoke so stolen tokens stop working.
+      void fetch(apiUrl("/api/wallet/logout"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sessionToken: token })
+      }).catch(() => undefined);
+    }
     writeConnectedFlag(false);
     clearEmbeddedSession();
     clearOtpChallenge();
@@ -510,7 +522,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setMode(null);
     setActiveAddress(null);
     setError(null);
-  }, [setActiveAddress]);
+  }, [embedded, setActiveAddress]);
 
   const getWalletClient = useCallback((): AppWalletClient | null => {
     if (!address) return null;
@@ -855,6 +867,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     error,
     mode,
     email,
+    sessionToken: embedded?.sessionToken ?? null,
     connect,
     requestEmailOtp,
     verifyEmailOtp,
@@ -879,6 +892,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     error,
     mode,
     email,
+    embedded?.sessionToken,
     connect,
     requestEmailOtp,
     verifyEmailOtp,

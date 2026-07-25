@@ -119,8 +119,11 @@ contract InvariantAccountingTest is MiniTest {
         _assertCoreInvariants();
 
         uint256 shares = pool.sharesOf(address(this));
-        vm.expectRevert(abi.encodeWithSignature("Error(string)", "RESERVED"));
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
         pool.withdraw(shares);
+        // Partial also blocked
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
+        pool.withdraw(1);
         _assertCoreInvariants();
     }
 
@@ -150,8 +153,8 @@ contract InvariantAccountingTest is MiniTest {
         _assertCoreInvariants();
     }
 
-    /// @notice LP withdrawals cannot consume reserved liquidity (partial or full).
-    function testFuzz_withdrawCannotConsumeReserved(uint256 reserveSeed, uint256 shareSeed) external {
+    /// @notice Any open reserve blocks all LP withdrawals (bank-run guard).
+    function testFuzz_withdrawBlockedWhileReserved(uint256 reserveSeed, uint256 shareSeed) external {
         uint256 avail = pool.availableAssets();
         if (avail < 2) return;
         uint256 reserveAmt = _mod(reserveSeed, avail / 2) + 1;
@@ -160,15 +163,10 @@ contract InvariantAccountingTest is MiniTest {
 
         uint256 shares = pool.sharesOf(address(this));
         if (shares == 0) return;
-        // Try withdrawing enough shares to need more than available (post-reserve).
         uint256 tryShares = _mod(shareSeed, shares) + 1;
-        uint256 assetsOut = (tryShares * pool.managedAssets()) / pool.totalShares();
-        if (assetsOut > pool.availableAssets()) {
-            vm.expectRevert(abi.encodeWithSignature("Error(string)", "RESERVED"));
-            pool.withdraw(tryShares);
-        } else {
-            pool.withdraw(tryShares);
-        }
+        if (tryShares > shares) tryShares = shares;
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
+        pool.withdraw(tryShares);
         _assertCoreInvariants();
     }
 
@@ -275,7 +273,10 @@ contract InvariantAccountingTest is MiniTest {
                 // deposit more LP
                 uint256 dep = _mod(s >> 24, 10_000e6) + 1e6;
                 pool.deposit(dep);
-            } else if (op == 3 && pool.sharesOf(address(this)) > 0 && pool.availableAssets() > 1e6) {
+            } else if (
+                op == 3 && pool.reservedAssets() == 0 && pool.sharesOf(address(this)) > 0
+                    && pool.availableAssets() > 1e6
+            ) {
                 uint256 sh = pool.sharesOf(address(this));
                 uint256 trySh = _mod(s >> 32, sh / 4 + 1) + 1;
                 if (trySh > sh) trySh = sh;

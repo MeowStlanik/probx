@@ -179,21 +179,37 @@ export async function ensureTourBtcMarket(): Promise<{
   status?: string;
   error?: string;
 }> {
-  const markets = await listMarkets();
-  const openBtc = markets.find(
-    (m) =>
-      m.status === "OPEN" &&
-      (m.demoRole === "btc_price" || m.category === "crypto-candle" || /BTC/i.test(m.question))
-  );
-  if (openBtc) {
-    return { marketId: openBtc.id, created: false, status: openBtc.status };
+  const { acquireLock, releaseLock } = await import("../services/persistentStore.js");
+  const { randomBytes } = await import("node:crypto");
+  const lockToken = randomBytes(8).toString("hex");
+  const got = await acquireLock("market-create-btc", 90_000, lockToken);
+  if (!got) {
+    // Another instance is creating — re-list for an existing OPEN BTC.
+    const markets = await listMarkets();
+    const openBtc = markets.find(
+      (m) =>
+        m.status === "OPEN" &&
+        (m.demoRole === "btc_price" || m.category === "crypto-candle" || /BTC/i.test(m.question))
+    );
+    if (openBtc) return { marketId: openBtc.id, created: false, status: openBtc.status };
+    return { marketId: null, created: false, error: "market create busy — retry" };
   }
 
   try {
+    // Re-check under lock.
+    const markets = await listMarkets();
+    const openBtc = markets.find(
+      (m) =>
+        m.status === "OPEN" &&
+        (m.demoRole === "btc_price" || m.category === "crypto-candle" || /BTC/i.test(m.question))
+    );
+    if (openBtc) {
+      return { marketId: openBtc.id, created: false, status: openBtc.status };
+    }
+
     const result = await createDemoMarket({
       demoRole: "btc_price",
       category: "crypto-candle",
-      // Longer entry window so the tour user can fund + buy after connect.
       lockSeconds: 90,
       observationSeconds: 60
     });
@@ -225,6 +241,8 @@ export async function ensureTourBtcMarket(): Promise<{
       created: false,
       error: error instanceof Error ? error.message : "ensure tour market failed"
     };
+  } finally {
+    await releaseLock("market-create-btc", lockToken).catch(() => undefined);
   }
 }
 

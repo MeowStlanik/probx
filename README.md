@@ -21,7 +21,7 @@
   <a href="https://testnet.arcscan.app"><img src="https://img.shields.io/badge/Network-Arc%20Testnet-7C5CFF?style=flat-square" alt="Arc Testnet" /></a>
   <a href="#arc-testnet"><img src="https://img.shields.io/badge/Gas-USDC%20native-2775CA?style=flat-square" alt="USDC gas" /></a>
   <a href="#circle-cctp--app-kits"><img src="https://img.shields.io/badge/Circle-Wallets%20%C2%B7%20App%20Kits%20%C2%B7%20CCTP-6B46C1?style=flat-square" alt="Circle" /></a>
-  <img src="https://img.shields.io/badge/Tests-36%20passing-22C55E?style=flat-square" alt="21 scenario + registry + accounting checks" />
+  <img src="https://img.shields.io/badge/Tests-37%20passing-22C55E?style=flat-square" alt="37 forge tests" />
   <img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT" />
 </p>
 
@@ -133,8 +133,8 @@ sticky over 60s). No free lunch on mispriced flat 50/50 tickets.
 ## Security
 
 The reserve engine holds user funds, so the invariants are covered by tests rather than
-assumed. `pnpm contracts:test` → **36 passing**: 21 scenario tests + 3 registry
-guards + 12 accounting invariant checks and fuzz tests.
+assumed. `pnpm contracts:test` → **37 passing**: 21 scenario + 3 registry + 1 LP
+withdraw guard + 12 accounting invariant checks and fuzz tests.
 
 | Area | Guarantee | Test |
 |------|-----------|------|

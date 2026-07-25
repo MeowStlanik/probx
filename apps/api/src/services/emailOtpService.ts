@@ -1,8 +1,7 @@
-import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { runtimeFile } from "../runtimePaths.js";
-import { NamespaceStore } from "./persistentStore.js";
 
 const otpPath = runtimeFile("email-otps.json");
 
@@ -156,8 +155,6 @@ function otpHmacSecret(): string {
 
 let warnedDefaultSecret = false;
 
-const usedOtpJti = new NamespaceStore<{ usedAt: string }>("otp-used-jti");
-
 /** Stateless OTP challenge — survives multi-instance /tmp on Vercel. Includes jti for single-use. */
 function makeOtpToken(email: string, codeHash: string, expiresAt: number): string {
   const jti = randomBytes(16).toString("hex");
@@ -198,12 +195,10 @@ function parseOtpToken(
   }
 }
 
-/** Atomically mark OTP jti used. Returns false if already consumed. */
+/** Atomically mark OTP jti used (SET NX). Returns false if already consumed. */
 async function consumeOtpJti(jti: string): Promise<boolean> {
-  const existing = await usedOtpJti.get(jti);
-  if (existing) return false;
-  await usedOtpJti.set(jti, { usedAt: new Date().toISOString() });
-  return true;
+  const { setIfAbsent } = await import("./persistentStore.js");
+  return setIfAbsent(`otp-jti:${jti}`, { usedAt: new Date().toISOString() }, 24 * 3600);
 }
 
 function hasSmtpConfig(): boolean {

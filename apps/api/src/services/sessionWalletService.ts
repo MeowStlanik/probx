@@ -22,7 +22,14 @@ import {
 } from "./circleWalletService.js";
 import { parseUnits } from "viem";
 import { getMonorepoRoot, runtimeFile } from "../runtimePaths.js";
-import { issueSignedSession, isLegacyOpaqueToken, verifySignedSession } from "./signedSession.js";
+import {
+  issueSignedSession,
+  isLegacyOpaqueToken,
+  isSessionRevoked,
+  revokeSignedSession,
+  verifySignedSession
+} from "./signedSession.js";
+import { waitSuccessfulReceipt } from "./txReceipt.js";
 
 const rootDir = getMonorepoRoot();
 const storePath = runtimeFile("session-wallets.json");
@@ -248,9 +255,12 @@ export async function createOrResumeSession(emailInput: string, opts?: { otpVeri
   return publicSession(record, sessionToken);
 }
 
-function requireSession(emailInput: string, sessionToken: string): SessionRecord {
+async function requireSession(emailInput: string, sessionToken: string): Promise<SessionRecord> {
   const email = normalizeEmail(emailInput);
   const token = (sessionToken || "").trim();
+  if (await isSessionRevoked(token)) {
+    throw new Error("Session revoked. Sign in with email again.");
+  }
   const store = loadStore();
 
   const signed = verifySignedSession(token);
@@ -296,6 +306,9 @@ function requireSession(emailInput: string, sessionToken: string): SessionRecord
 }
 
 export async function getSessionPublic(emailInput: string, sessionToken: string) {
+  if (await isSessionRevoked(sessionToken)) {
+    throw new Error("Session revoked. Sign in with email again.");
+  }
   if (isCircleConfigured()) {
     try {
       return await getCircleSessionPublic(emailInput, sessionToken);
@@ -303,8 +316,13 @@ export async function getSessionPublic(emailInput: string, sessionToken: string)
       // fall through to local only if not a Circle session
     }
   }
-  const record = requireSession(emailInput, sessionToken);
+  const record = await requireSession(emailInput, sessionToken);
   return publicSession(record);
+}
+
+/** Server-side logout: revoke bearer token. */
+export async function logoutSession(sessionToken: string): Promise<void> {
+  await revokeSignedSession(sessionToken);
 }
 
 export type WriteContractBody = {
@@ -338,7 +356,7 @@ export async function writeContractForSession(body: WriteContractBody): Promise<
     }
   }
 
-  const record = requireSession(body.email, body.sessionToken);
+  const record = await requireSession(body.email, body.sessionToken);
   const account = privateKeyToAccount(record.privateKey);
   if (getAddress(account.address) !== getAddress(record.address)) {
     throw new Error("Session wallet integrity check failed.");
@@ -378,7 +396,7 @@ export async function writeContractForSession(body: WriteContractBody): Promise<
   });
 
   try {
-    await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+    await waitSuccessfulReceipt(publicClient, hash, { timeout: 60_000 });
   } catch {
     // client will poll separately
   }
@@ -449,7 +467,7 @@ export async function transferUsdcForSession(body: {
     }
   }
 
-  const record = requireSession(body.email, body.sessionToken);
+  const record = await requireSession(body.email, body.sessionToken);
   const account = privateKeyToAccount(record.privateKey);
   if (getAddress(account.address) === destination) {
     throw new Error("Destination is your own wallet.");
@@ -487,7 +505,7 @@ export async function transferUsdcForSession(body: {
 
   const hash = await walletClient.sendTransaction({ to: arcUsdcAddress, data, value: 0n });
   try {
-    await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+    await waitSuccessfulReceipt(publicClient, hash, { timeout: 60_000 });
   } catch {
     // tracker polls status separately
   }

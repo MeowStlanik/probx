@@ -6,9 +6,10 @@
  * "expired session". Tokens carry email/address/walletId and verify without
  * shared filesystem state.
  */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { runtimeFile } from "../runtimePaths.js";
+import { NamespaceStore } from "./persistentStore.js";
 
 export type SignedSessionPayload = {
   v: 1;
@@ -21,7 +22,8 @@ export type SignedSessionPayload = {
   exp: number;
 };
 
-const DEFAULT_TTL_SEC = 30 * 24 * 60 * 60; // 30 days
+/** Default session lifetime (hours). Override with SESSION_TTL_SEC. */
+const DEFAULT_TTL_SEC = Number(process.env.SESSION_TTL_SEC || String(12 * 60 * 60)); // 12h
 
 let warnedFallbackHmac = false;
 
@@ -98,6 +100,24 @@ export function issueSignedSession(input: {
   return `v1.${body}.${sig}`;
 }
 
+const revokedSessions = new NamespaceStore<{ at: string }>("session-revoked");
+
+function tokenFingerprint(token: string): string {
+  return createHash("sha256").update(token.trim()).digest("hex");
+}
+
+/** Server-side logout: invalidate this bearer token until natural exp. */
+export async function revokeSignedSession(token: string): Promise<void> {
+  const t = (token || "").trim();
+  if (!t) return;
+  await revokedSessions.set(tokenFingerprint(t), { at: new Date().toISOString() });
+}
+
+export async function isSessionRevoked(token: string): Promise<boolean> {
+  const row = await revokedSessions.get(tokenFingerprint(token));
+  return Boolean(row);
+}
+
 export function verifySignedSession(token: string): SignedSessionPayload | null {
   if (!token || typeof token !== "string") return null;
   const parts = token.trim().split(".");
@@ -127,6 +147,14 @@ export function verifySignedSession(token: string): SignedSessionPayload | null 
   } catch {
     return null;
   }
+}
+
+/** Async verify: HMAC + revoke list. Prefer this on write paths. */
+export async function verifySignedSessionAsync(
+  token: string
+): Promise<SignedSessionPayload | null> {
+  if (await isSessionRevoked(token)) return null;
+  return verifySignedSession(token);
 }
 
 /** Legacy opaque hex tokens (pre-HMAC) still stored as sha256 hashes. */

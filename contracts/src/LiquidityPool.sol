@@ -102,11 +102,15 @@ contract LiquidityPool {
         emit Deposited(msg.sender, amount, mintedShares);
     }
 
+    /// @notice Withdraw LP equity. Blocked while any reserve is open so early LPs
+    ///         cannot exit free capital at full NAV and shift loss onto remaining LPs
+    ///         (bank-run / reserved-NAV mispricing). Production: queue/epochs.
     function withdraw(uint256 shares) external returns (uint256 assets) {
         require(shares > 0, "ZERO_SHARES");
         require(sharesOf[msg.sender] >= shares, "SHARES");
+        require(reservedAssets == 0, "ACTIVE_EXPOSURE");
         assets = (shares * managedAssets()) / totalShares;
-        require(availableAssets() >= assets, "RESERVED");
+        require(availableAssets() >= assets, "INSUFFICIENT_AVAILABLE");
         sharesOf[msg.sender] -= shares;
         totalShares -= shares;
         internalAssets -= assets;

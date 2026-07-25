@@ -10,6 +10,8 @@ import "../src/MicroBoostEngine.sol";
 import "../src/OracleAdapter.sol";
 import "../src/MicroMarketFactory.sol";
 
+/// @notice Local/anvil helper. Production Arc deploy uses `scripts/deploy-arc.mjs`.
+///         Must wire marketRegistry + insurance feeRouter or buys/fees break.
 contract Deploy {
     struct Deployment {
         MockUSDC usdc;
@@ -46,6 +48,9 @@ contract Deploy {
         deployment.liquidityPool.setEngine(address(deployment.microBoostEngine));
         deployment.liquidityPool.setFeeRouter(address(deployment.feeRouter));
         deployment.insuranceFund.setEngine(address(deployment.microBoostEngine));
+        deployment.insuranceFund.setFeeRouter(address(deployment.feeRouter));
         deployment.positionTicket.setEngine(address(deployment.microBoostEngine));
+        // Critical: only factory markets can trade against the LP.
+        deployment.microBoostEngine.setMarketRegistry(address(deployment.marketFactory));
     }
 }

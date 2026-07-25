@@ -75,17 +75,39 @@ export async function recordTx(input: {
   amountUsdc?: string;
   /** When true, refuse to overwrite an existing record (public clients). */
   createOnly?: boolean;
+  /** When true, bind owner to chain tx.from if available. */
+  verifyFromRpc?: boolean;
 }): Promise<TxRecord> {
   if (!isValidTxHash(input.hash)) {
     throw new Error("invalid transaction hash");
   }
-  const owner = normalizeOwner(input.owner);
+  let owner = normalizeOwner(input.owner);
   if (!owner) throw new Error("owner required");
 
   const existing = await store.get(input.hash);
   if (existing && input.createOnly) {
     // Do not let arbitrary clients rewrite history for a known hash.
     return existing;
+  }
+
+  let from = input.from ?? existing?.from;
+  if (input.verifyFromRpc || input.createOnly) {
+    try {
+      const tx = await publicClient().getTransaction({ hash: input.hash });
+      if (tx?.from) {
+        from = tx.from as `0x${string}`;
+        // Public clients cannot claim ownership of someone else's broadcast.
+        if (input.createOnly && owner.startsWith("0x") && from.toLowerCase() !== owner) {
+          throw new Error("owner does not match transaction sender");
+        }
+        if (owner.startsWith("0x") && from.toLowerCase() !== owner && input.createOnly) {
+          owner = from.toLowerCase();
+        }
+      }
+    } catch (e) {
+      if (e instanceof Error && e.message.includes("owner does not match")) throw e;
+      // Pending / not yet visible — allow with claimed owner only if createOnly and no existing
+    }
   }
 
   const now = new Date().toISOString();
@@ -95,7 +117,7 @@ export async function recordTx(input: {
     kind: input.kind,
     status: existing?.status === "confirmed" || existing?.status === "failed" ? existing.status : "pending",
     owner: existing?.owner || owner,
-    from: input.from ?? existing?.from,
+    from: from ?? existing?.from,
     to: input.to ?? existing?.to,
     label: input.label ?? existing?.label,
     circleTxId: input.circleTxId ?? existing?.circleTxId,

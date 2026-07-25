@@ -46,9 +46,9 @@ contract InsuranceFund {
     }
 
     /// @notice Accounting hook after FeeRouter has transferred USDC into this fund.
-    ///         Not public: prevents inflating totalFeesReceived without routing fees.
+    ///         Only FeeRouter — owner cannot inflate totalFeesReceived without USDC.
     function receiveFees(uint256 amount) external {
-        require(msg.sender == feeRouter || msg.sender == owner, "ONLY_FEE_ROUTER");
+        require(msg.sender == feeRouter, "ONLY_FEE_ROUTER");
         totalFeesReceived += amount;
         emit FeesReceived(msg.sender, amount);
     }

@@ -52,6 +52,7 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     refreshBalance,
     mode: sessionMode,
     email: sessionEmail,
+    sessionToken,
     hasProvider,
     usdcBalance,
     sendUsdc,
@@ -219,24 +220,32 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     try {
       setStep("burn");
       setMessage("Server CCTP: burning Base Sepolia USDC from demo treasury → Arc…");
+      const amountUsdc = amount || "2";
       const body: Record<string, string> = {
         mintTo,
-        amountUsdc: amount || "2"
+        amountUsdc
       };
-      if (sessionMode === "embedded" && sessionEmail) {
-        // Prefer session-bound mint; server validates email+token when present.
-        try {
-          const raw = sessionStorage.getItem("probx.wallet.embedded");
-          if (raw) {
-            const emb = JSON.parse(raw) as { email?: string; sessionToken?: string };
-            if (emb.email && emb.sessionToken) {
-              body.email = emb.email;
-              body.sessionToken = emb.sessionToken;
-            }
-          }
-        } catch {
-          /* ignore */
-        }
+      if (sessionMode === "embedded" && sessionEmail && sessionToken) {
+        // Use WalletContext session (localStorage-backed) — not sessionStorage.
+        body.email = sessionEmail;
+        body.sessionToken = sessionToken;
+      } else if (sessionMode === "injected" && window.ethereum) {
+        // EIP-191 prove ownership of mintTo for injected wallets.
+        const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+        const message = `ProbX demo-fund\nmintTo:${mintTo}\namount:${amountUsdc}\nnonce:${nonce}`;
+        const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
+        const from = accounts[0];
+        if (!from) throw new Error("Connect MetaMask to authorize demo fund.");
+        const signature = (await window.ethereum.request({
+          method: "personal_sign",
+          params: [message, from]
+        })) as string;
+        body.signature = signature;
+        body.nonce = nonce;
+      } else {
+        throw new Error("Sign in with email or connect MetaMask to use demo fund.");
       }
       const response = await fetch(apiUrl("/api/cctp/demo-fund"), {
         method: "POST",
@@ -285,7 +294,7 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [amount, mintTo, refreshBalance, sessionEmail, sessionMode]);
+  }, [amount, mintTo, refreshBalance, sessionEmail, sessionMode, sessionToken]);
 
   const runFund = useCallback(async () => {
     if (!mintTo) {
