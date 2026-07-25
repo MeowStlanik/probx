@@ -160,7 +160,10 @@ type WalletContextValue = {
   ensureArcChain: () => Promise<void>;
   refreshBalance: () => Promise<void>;
   /** Send USDC to another Arc address. Returns the tx hash. */
-  sendUsdc: (to: string, amount: string) => Promise<`0x${string}`>;
+  sendUsdc: (
+    to: string,
+    amount: string
+  ) => Promise<{ hash: `0x${string}`; provider?: string; fallbackReason?: string }>;
   /** Poll a tx hash for durable status (pending → confirmed / failed). */
   pollTxStatus: (hash: `0x${string}`) => Promise<TxStatusRecord | null>;
   /** Register a tx hash so the tracker reports its status (buy/claim/deposit). */
@@ -719,7 +722,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const sendUsdc = useCallback(
-    async (to: string, amount: string): Promise<`0x${string}`> => {
+    async (
+      to: string,
+      amount: string
+    ): Promise<{ hash: `0x${string}`; provider?: string; fallbackReason?: string }> => {
       if (!address) throw new Error("Connect a wallet first.");
       let destination: `0x${string}`;
       try {
@@ -746,12 +752,21 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             amount: amount.trim()
           })
         });
-        const payload = (await res.json().catch(() => ({}))) as { hash?: string; error?: string };
+        const payload = (await res.json().catch(() => ({}))) as {
+          hash?: string;
+          error?: string;
+          provider?: string;
+          fallbackReason?: string;
+        };
         if (!res.ok || !payload.hash) {
           throw new Error(payload.error || `Transfer failed (HTTP ${res.status})`);
         }
         void refreshBalance(address);
-        return payload.hash as `0x${string}`;
+        return {
+          hash: payload.hash as `0x${string}`,
+          provider: payload.provider,
+          fallbackReason: payload.fallbackReason
+        };
       }
 
       // Injected (MetaMask): transfer USDC directly, then record for tracking.
@@ -778,7 +793,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         })
       }).catch(() => undefined);
       void refreshBalance(address);
-      return hash as `0x${string}`;
+      return { hash: hash as `0x${string}`, provider: "injected-viem" };
     },
     [address, embedded, getWalletClient, mode, refreshBalance]
   );

@@ -423,8 +423,19 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     setSendBusy(true);
     setSendStatus("pending");
     try {
-      const hash = await sendUsdc(sendTo, sendAmount);
+      const result = await sendUsdc(sendTo, sendAmount);
+      const hash = result.hash;
       setSendTx(hash);
+      if (result.provider === "app-kit") {
+        setSendError(""); // clear
+        setMessage(`⚡ via Circle App Kit · send ${sendAmount} USDC`);
+      } else if (result.provider === "viem-fallback") {
+        setMessage(
+          `⚠ App Kit missed → ${result.fallbackReason || "viem fallback"} (tx still sent)`
+        );
+      } else if (result.provider) {
+        setMessage(`Send via ${result.provider}`);
+      }
       // Poll durable status until confirmed / failed.
       let attempts = 0;
       const poll = async (): Promise<void> => {
