@@ -71,13 +71,6 @@ Short-horizon exposure can't use classic margin: liquidations and mark prices do
 payout before the position is accepted, so user downside is bounded by the stake and LP
 downside is bounded by the reserve.
 
-| | Classic leverage | Micro Boost |
-|--|------------------|-------------|
-| Max user loss | Can cascade | **Fixed** = stake |
-| Extra exposure | Borrow / liquidation | **LP reserves** max payout first |
-| Position | Transferable | **Locked**, non-transferable |
-| Settlement | Continuous | **Resolve → settle** |
-
 ```text
 payout ≈ (stake / odds) × boost
 reserve  = payout − stake
@@ -101,15 +94,31 @@ the first layer of house edge and funds modest boost.
 - **Pricing:** raw on-chain prices (with overround) drive payout math.
 - **API:** `applyPriceMargin()` in `quoteEngine.ts` mirrors contract quoting.
 
-### 2. Boost is paid for
-Boost multiplies payout, so without a fee it is pure LP risk.
+### 2. Boost pricing is calibrated, not assumed
 
-| Boost level | Funding |
-|-------------|---------|
-| **≤ ~1.08×** (`1 + margin`) | Covered by book overround in expectation |
-| **Above economic cap** | Boost fee (`BOOST_FEE_BPS = 400` ≈ 4% per unit of boost above 1×) |
+Boost multiplies payout, so its cost to the vault depends on one variable the protocol
+cannot know in advance: **how well the flow prices the book.** A book facing sharp flow
+pays for every unit of boost; a book facing uninformed flow recovers most of it from the
+overround. The boost curve is therefore an empirical parameter, not a constant.
 
-`maxBoost()` respects live LP capacity and treats **≈1.08×** as the self-funded band.
+| Band | Funding |
+|------|---------|
+| **≤ ~1.09×** (`1 + margin`) | Covered by book overround in expectation, independent of flow quality |
+| **Above the self-funded band** | `BOOST_FEE_BPS = 400` recovers part of the cost; the remainder is a **deliberate subsidy** |
+
+That subsidy is the point, not an oversight. The self-funded ceiling scales with realized
+flow quality — the weaker the flow prices the book, the higher boost can go before it costs
+the vault anything. Pricing that curve requires observed settlement data across a meaningful
+sample of tickets, which a testnet deployment does not produce. Until then the vault runs
+boost as a **priced experiment**: `MAX_BOOST_BPS = 50_000` opens the full range so the demo
+generates flow data across it, and the subsidy is the cost of acquiring that data.
+`maxBoost()` respects live LP capacity at every level, so the experiment is bounded by
+available reserves rather than by an assumed edge.
+
+> **Current numbers are initial parameters, not a converged economic model.**
+> Production sizing would set the boost curve from measured flow quality per
+> market type, per horizon, and per cohort — the same way a book prices enhanced
+> odds against observed customer yield rather than against a fixed formula.
 
 ### 3. Timing: hard entry cutoff + lock pause
 
