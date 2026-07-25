@@ -6,11 +6,34 @@
 </p>
 
 <p align="center">
+  <strong><a href="https://probx-rosy.vercel.app">▶ Live demo</a></strong> ·
+  <a href="#see-it-in-2-minutes">See it in 2 minutes</a> ·
+  <a href="#known-limitations">Known limitations</a>
+</p>
+
+<p align="center">
+  <img src="apps/web/public/assets/probx-arc-visual.png" alt="ProbX Arc" width="820" />
+</p>
+
+<p align="center">
   <a href="https://testnet.arcscan.app"><img src="https://img.shields.io/badge/Network-Arc%20Testnet-7C5CFF?style=flat-square" alt="Arc Testnet" /></a>
   <a href="#arc-testnet"><img src="https://img.shields.io/badge/Gas-USDC%20native-2775CA?style=flat-square" alt="USDC gas" /></a>
   <a href="#circle--cctp"><img src="https://img.shields.io/badge/Circle-Wallets%20%2B%20CCTP-6B46C1?style=flat-square" alt="Circle" /></a>
   <img src="https://img.shields.io/badge/License-MIT-22C55E?style=flat-square" alt="MIT" />
 </p>
+
+---
+
+## See it in 2 minutes
+
+1. Open the [live demo](https://probx-rosy.vercel.app) → **Markets**. A BTC and a London-temp market are always running on a ~75s entry / 60s observation cycle.
+2. Sign in with email (Circle Developer-Controlled wallet on Arc) or MetaMask.
+3. Fund with testnet USDC — direct on Arc, or bridge from Base Sepolia via CCTP.
+4. Buy a YES/NO ticket, optionally with Micro Boost. Watch the live chart against the start line, then claim after auto-resolve.
+
+Gas is paid in USDC — there is no ETH step anywhere in that flow.
+
+> Markets are driven by an **external** minute pinger (see [Markets 24/7](#markets-247)). If the list looks empty, the pinger is down, not the app — any page load also kicks the cycle in the background.
 
 ---
 
@@ -59,15 +82,16 @@ Micro Boost multiplies payout, so without a fee it is pure LP risk. Design:
 - Boost fee raised an order of magnitude (`BOOST_FEE_BPS = 400` ≈ **4% per unit of boost above 1×**, was 0.4%).
 - API `maxBoost()` still respects LP capacity but treats **economic max ≈ 1.08×** as the self-funded band.
 
-### 3. Timing: sniper buffer + lock pause
-Entry is not “open until observation starts”:
+### 3. Timing: hard entry cutoff + lock pause
+Entry never runs up to the observation window:
 
 ```text
-open ──► lock (entry − ~12s) ──► pause (~10s) ──► observation ──► resolve
+open ──► lock ──► pause (10s) ──► observation ──► resolve
 ```
 
-- **Sniper buffer:** lock fires **~10–15s before** the nominal end of the entry window so last-millisecond flow cannot reprice against a known print.
-- **Lock pause:** `observationStart = lockTime + pause` so observation does not begin the same second as lock.
+- **Hard cutoff (on-chain):** `MicroMarket.canBuy()` requires `block.timestamp < lockTime`, so buys stop at `lockTime` whether or not anyone has called `lock()` yet.
+- **Lock pause — the guard that actually matters:** `observationStart = lockTime + pause`, default **10s** (`MARKET_LOCK_PAUSE_SECONDS`). No trade can land within 10s of the observation window opening, so nobody enters against a print they already know.
+- **Sniper buffer:** `MARKET_SNIPER_BUFFER_SECONDS` (default **5s**) trims the entry window, but `MARKET_CREATE_TX_SLACK_SECONDS` (default **18s**) pads it to absorb create+open tx latency. Net for a nominal 75s window: `lockTime ≈ open + 88s`, and since a new market only appears in the UI ~10–20s after creation, the *visible* entry window is ~60–75s.
 
 ### 4. Seed odds from the feed, not flat 50/50
 New BTC / weather markets estimate a **fair mid** from live structure before applying overround:
@@ -77,7 +101,7 @@ New BTC / weather markets estimate a **fair mid** from live structure before app
 
 That cuts the free lunch for anyone who would otherwise only buy mispriced 50/50 tickets.
 
-> **Deploy note:** overround + higher boost fee live in **contract bytecode**. Redeploy after changing those constants. Current Arc Testnet deployment: **2026-07-18** (see addresses below).
+> **Deploy note:** overround + higher boost fee live in **contract bytecode**. Redeploy after changing those constants. Current Arc Testnet deployment: **2026-07-19** (see addresses below).
 
 ---
 
@@ -140,7 +164,7 @@ Leave `NEXT_PUBLIC_API_BASE_URL` empty to call same-origin `/api/*` (default for
 
 ```bash
 pnpm contracts:build
-pnpm contracts:test      # 14 forge tests → contracts/test/
+pnpm contracts:test      # 18 forge tests → contracts/test/
 pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 ```
 
@@ -166,6 +190,7 @@ pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 | PositionTicket | [`0x2a8C4a06945071383E00F6187f4B4E925408837D`](https://testnet.arcscan.app/address/0x2a8C4a06945071383E00F6187f4B4E925408837D) |
 | OracleAdapter | [`0x53e06a44DE09f238fb682348D0F9cF733bD1B99A`](https://testnet.arcscan.app/address/0x53e06a44DE09f238fb682348D0F9cF733bD1B99A) |
 | InsuranceFund | [`0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C`](https://testnet.arcscan.app/address/0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C) |
+| FeeRouter | [`0x53480237eb52429400fEF5e0fDB23A73d9983a2C`](https://testnet.arcscan.app/address/0x53480237eb52429400fEF5e0fDB23A73d9983a2C) |
 
 LP seed on deploy: **15 USDC**. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) (mirrors `apps/web/src/lib/deployment.json`).
 
@@ -228,7 +253,9 @@ Connect (email or MetaMask)
     → Send USDC out to any Arc address anytime
 ```
 
-**Admin:** `/admin` — create test markets (BTC / London weather). No UI entry point (header/footer links removed) — open the URL directly. Protect with `ADMIN_SECRET`. Resolver tools under *Advanced*.
+**Admin:** `/admin` — create test markets (BTC / London weather). No UI entry point (header/footer links removed) — open the URL directly. Resolver tools under *Advanced*.
+
+> ⚠️ **`ADMIN_SECRET` is not optional in a shared deploy.** With it unset, the admin endpoints (create / hide / reset / settle / resolve / cancel / simulate) stay **open** to anyone — that is deliberate local-dev convenience, logged with a loud warning at startup. Set it (or `CRON_SECRET`, used as fallback) on Vercel.
 
 ---
 
@@ -239,7 +266,7 @@ API lives as Next.js route handlers under `apps/web/src/app/api/**` (no separate
 | Setting | Value |
 |---------|--------|
 | Framework | Next.js |
-| Root Directory | **repository root** (root `vercel.json`) **or** `apps/web` (see `apps/web/vercel.json`) |
+| Root Directory | **`apps/web`** (uses `apps/web/vercel.json`) |
 | Install | `npm install -g pnpm@9.12.3 && pnpm install` |
 | Build | `pnpm --filter @probx/web build` |
 
@@ -282,9 +309,18 @@ SESSION_WALLET_SECRET=
 MARKET_CYCLE_ENABLED=1
 MARKET_CYCLE_ON_TRAFFIC=1      # background cycle on site traffic (0 = off)
 RPC_BATCH=1                    # JSON-RPC batching (0 = plain per-call requests)
+SESSION_HMAC_SECRET=           # REQUIRED on any shared deploy — signs session tokens
+CRON_THROTTLE_MS=30000         # min gap between anonymous cron/cycle runs (min 5000)
+CORS_ORIGINS=                  # standalone API only; default *
+CCTP_DEMO_MAX_PER_CALL=10      # demo treasury cap, USDC per call
+CCTP_DEMO_DAILY_PER_ADDRESS=25 # demo treasury cap, USDC per address per day
 UPSTASH_REDIS_REST_URL=        # durable wallet map + tx statuses (free tier ok)
 UPSTASH_REDIS_REST_TOKEN=      # KV_REST_API_URL / KV_REST_API_TOKEN also accepted
 ```
+
+> **`SESSION_HMAC_SECRET` unset** → tokens are signed with a random per-instance key
+> that does not survive cold starts, so users get logged out mid-session on Vercel.
+> The server warns loudly rather than falling back to a key committed to this repo.
 
 > **Without the KV vars** the email → wallet mapping and tx statuses fall back
 > to per-instance `/tmp` files — fine locally, ephemeral on Vercel. Set Upstash
@@ -296,7 +332,22 @@ The BTC / weather cycle (create → observe → resolve) needs a trigger about
 **once per minute**. Vercel Hobby cron fires ~once a day, so:
 
 1. **External pinger (recommended):** hit `GET /api/cron/market-cycle?secret=CRON_SECRET` every minute — free on cron-job.org. Full guide: [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md).
+   *Note:* `market-cycle` is intentionally callable **without** a secret (the browser heartbeat below drives it); passing `CRON_SECRET` **bypasses the throttle** rather than granting access. `auto-resolve` does require the secret when one is configured.
 2. **On-traffic fallback (built-in):** while anyone has the site open, the cycle self-runs in the background (throttled 50s across instances via KV). Zero traffic → falls back to the daily cron only.
+3. **GitHub Actions backup:** [`.github/workflows/cron-ping.yml`](.github/workflows/cron-ping.yml) pings both endpoints. Set `PROBX_CRON_BASE_URL` + `PROBX_CRON_SECRET` as repo secrets. GitHub's scheduler floors at ~5 min and slips under load, so treat this as a safety net, not the primary driver.
+
+---
+
+## Known limitations
+
+Testnet demo, built for a hackathon. These are known and deliberate trade-offs, not oversights:
+
+- **Odds are cheap to move with dust trades.** `MicroMarket.applyTradeImpact()` floors price impact at `MIN_IMPACT` (1.5%) for *any* non-zero stake, and there is no minimum ticket size on-chain. A few dozen 0.000001 USDC buys can pin a quote to the 5% bound, after which a real stake quotes at a wildly inflated payout against LP. The fix is a `MIN_USER_RISK_PER_TICKET` guard in `RiskLimits.sol` plus proportional (unfloored) impact — it needs a redeploy, so it is not in the current bytecode.
+- **`resolve()` is callable from `observationStart`, not `observationEnd`.** The resolver key is the only thing enforcing that the full observation window elapses. Tightening the `require` is a one-line change pending redeploy.
+- **LP share price is manipulable by direct transfer.** `LiquidityPool.deposit()` prices shares off `managedAssets()`, i.e. token balance, so a donation inflates share value (classic ERC-4626 first-depositor / donation vector). Fine for a seeded testnet vault, not for mainnet.
+- **Per-user LP exposure cap is loose** — `MAX_LP_RESERVE_PER_USER_BPS = 8000` lets a single address reserve 80% of TVL.
+- **Cron/tour throttles are per-instance.** `cronThrottle.ts` keeps state in process memory, so on serverless N cold instances allow N runs per window. Only the on-traffic cycle kick uses durable KV.
+- **Custodial by design.** Email login means the server holds the signing key (Circle DCW, or a locally encrypted session EOA in fallback). That is the point of the Circle integration, but it is not self-custody.
 
 ---
 
@@ -305,6 +356,8 @@ The BTC / weather cycle (create → observe → resolve) needs a trigger about
 - Deployment addresses: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json)
 - Env template: [`.env.example`](.env.example)
 - External cron pinger (markets 24/7): [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md)
+- Contract tests: [`contracts/test/`](./contracts/test/) — 18 tests, `pnpm contracts:test`
+- License: [`LICENSE`](./LICENSE) (MIT)
 
 ---
 
