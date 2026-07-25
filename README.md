@@ -208,15 +208,16 @@ Local run, Vercel env, SMTP, and cron: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.
 
 | Contract | Address |
 |----------|---------|
-| MicroBoostEngine | [`0x94Bd455DB31ddA0AFA13C8dF0E25D5ef4b787581`](https://testnet.arcscan.app/address/0x94Bd455DB31ddA0AFA13C8dF0E25D5ef4b787581) |
-| LiquidityPool | [`0x647cCdDB471A22651e5e764f000f6a0cf232cacd`](https://testnet.arcscan.app/address/0x647cCdDB471A22651e5e764f000f6a0cf232cacd) |
-| MarketFactory | [`0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8`](https://testnet.arcscan.app/address/0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8) |
-| PositionTicket | [`0x676a25D09c1BB7421AB3a837c554D447f7dA4894`](https://testnet.arcscan.app/address/0x676a25D09c1BB7421AB3a837c554D447f7dA4894) |
-| OracleAdapter | [`0x24CC0e29B4cc678aDe4f866a9808F582BD4f6A17`](https://testnet.arcscan.app/address/0x24CC0e29B4cc678aDe4f866a9808F582BD4f6A17) |
-| InsuranceFund | [`0x93D0f707730D85bf584E4C8DF2bA22aE90A24E68`](https://testnet.arcscan.app/address/0x93D0f707730D85bf584E4C8DF2bA22aE90A24E68) |
-| FeeRouter | [`0x57121e3f572708b6B6ea7D149019e99974ce2b72`](https://testnet.arcscan.app/address/0x57121e3f572708b6B6ea7D149019e99974ce2b72) |
+| MicroBoostEngine | [`0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062`](https://testnet.arcscan.app/address/0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062) |
+| LiquidityPool | [`0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572`](https://testnet.arcscan.app/address/0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572) |
+| MarketFactory | [`0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A`](https://testnet.arcscan.app/address/0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A) |
+| PositionTicket | [`0x6632d31b7A44755D032A714A99dB9C0B923E5b8A`](https://testnet.arcscan.app/address/0x6632d31b7A44755D032A714A99dB9C0B923E5b8A) |
+| OracleAdapter | [`0x57eEc368F233c2c904c8E22F1bf74303797367b6`](https://testnet.arcscan.app/address/0x57eEc368F233c2c904c8E22F1bf74303797367b6) |
+| InsuranceFund | [`0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B`](https://testnet.arcscan.app/address/0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B) |
+| FeeRouter | [`0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181`](https://testnet.arcscan.app/address/0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181) |
 
-Deployed **2026-07-25**. LP seed: **100000 USDC**. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) (mirrors `apps/web/src/lib/deployment.json`).
+Deployed **2026-07-25** (registry security redeploy). LP seed: **100000 USDC**.  
+`marketRegistry` → factory; unregistered markets rejected. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json).
 
 ---
 

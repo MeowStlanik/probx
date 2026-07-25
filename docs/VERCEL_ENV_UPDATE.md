@@ -1,19 +1,19 @@
-# Vercel — что поменять после push (2026-07-25)
+# Vercel — что поменять после push (2026-07-25 full redeploy)
 
 Redeploy: **Production** (и Preview, если пользуешься).
+
+Security redeploy: market registry + 100000 USDC LP seed. Старые адреса **сломают** buy / LP / cycle.
 
 ---
 
 ## Обязательно обновить
 
-Новые контракты после self-audit redeploy. Старые адреса **сломают** buy / LP / cycle.
-
 | Name | Value |
 |------|--------|
-| `NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS` | `0x94Bd455DB31ddA0AFA13C8dF0E25D5ef4b787581` |
-| `NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS` | `0x647cCdDB471A22651e5e764f000f6a0cf232cacd` |
-| `NEXT_PUBLIC_MARKET_FACTORY_ADDRESS` | `0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8` |
-| `ARC_FROM_BLOCK` | `53536935` |
+| `NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS` | `0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062` |
+| `NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS` | `0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572` |
+| `NEXT_PUBLIC_MARKET_FACTORY_ADDRESS` | `0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A` |
+| `ARC_FROM_BLOCK` | `53550453` |
 
 ### Public (проверь, что так)
 
@@ -53,13 +53,13 @@ Redeploy: **Production** (и Preview, если пользуешься).
 
 ---
 
-## Опционально (новое, не обязательно)
+## Опционально
 
 | Name | Когда |
 |------|--------|
-| `CIRCLE_KIT_KEY` | есть kit key из Circle Console |
+| `CIRCLE_KIT_KEY` | kit key из Circle Console |
 | `NEXT_PUBLIC_CIRCLE_KIT_KEY` | то же для браузера |
-| `APP_KIT_STRICT` / `NEXT_PUBLIC_APP_KIT_STRICT` | `1` = без silent fallback на viem/CCTP |
+| `APP_KIT_STRICT` / `NEXT_PUBLIC_APP_KIT_STRICT` | `1` = без silent fallback |
 
 ---
 
@@ -68,8 +68,21 @@ Redeploy: **Production** (и Preview, если пользуешься).
 1. **Deployments → Redeploy** (Production)  
 2. Hard refresh сайта  
 3. Smoke:
-   - `https://<твой-домен>/api/health` → `{"ok":true}`
-   - `https://<твой-домен>/api/lp/stats` → есть `tvl`, `totalVolume`, …
-   - `https://<твой-домен>/api/markets` → адреса `0x…`
+   - `https://probx-web.vercel.app/api/health` → `{"ok":true}`
+   - `https://probx-web.vercel.app/api/lp/stats` → TVL ≈ **100000** USDC
+   - `https://probx-web.vercel.app/api/markets` → адреса `0x…` с нового factory
+4. Email login → Buy **без** MetaMask
 
-Полный JSON деплоя: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json).
+Полный JSON: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json).
+
+### Core contracts (2026-07-25)
+
+| Contract | Address |
+|----------|---------|
+| MicroBoostEngine | [`0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062`](https://testnet.arcscan.app/address/0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062) |
+| LiquidityPool | [`0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572`](https://testnet.arcscan.app/address/0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572) |
+| MarketFactory | [`0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A`](https://testnet.arcscan.app/address/0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A) |
+| PositionTicket | [`0x6632d31b7A44755D032A714A99dB9C0B923E5b8A`](https://testnet.arcscan.app/address/0x6632d31b7A44755D032A714A99dB9C0B923E5b8A) |
+| OracleAdapter | [`0x57eEc368F233c2c904c8E22F1bf74303797367b6`](https://testnet.arcscan.app/address/0x57eEc368F233c2c904c8E22F1bf74303797367b6) |
+| InsuranceFund | [`0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B`](https://testnet.arcscan.app/address/0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B) |
+| FeeRouter | [`0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181`](https://testnet.arcscan.app/address/0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181) |
