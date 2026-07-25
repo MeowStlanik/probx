@@ -159,7 +159,7 @@ type WalletContextValue = {
   /** Drop cached OTP challenge (wrong email / resend / cancel). */
   clearEmailOtp: (email?: string) => void;
   disconnect: () => void;
-  ensureArcChain: () => Promise<void>;
+  ensureArcChain: (opts?: { forceInjected?: boolean }) => Promise<void>;
   refreshBalance: () => Promise<void>;
   /** Send USDC to another Arc address. Returns the tx hash. */
   sendUsdc: (
@@ -262,11 +262,12 @@ export function WalletProvider({ children }: { children: ReactNode }) {
    * Force injected wallet onto Arc Testnet.
    * No-op for embedded (Circle / email) sessions — those already sign on Arc server-side
    * and must not require MetaMask / window.ethereum.
-   * Correct flow for injected: switch → if 4902 add → switch again → verify eth_chainId.
+   * Pass forceInjected=true when switching from embedded → MetaMask in the same tick
+   * (React state `mode` may still be "embedded" due to stale closure).
    */
-  const ensureArcChain = useCallback(async () => {
+  const ensureArcChain = useCallback(async (opts?: { forceInjected?: boolean }) => {
     // Email/Circle session wallets never need an injected chain switch.
-    if (mode === "embedded") return;
+    if (mode === "embedded" && !opts?.forceInjected) return;
 
     if (!window.ethereum) {
       throw new Error(
@@ -371,9 +372,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       clearEmbeddedSession();
       setEmbedded(null);
       setEmail(null);
-      // Switch mode before ensureArcChain so embedded no-op does not skip network switch.
       setMode("injected");
-      await ensureArcChain();
+      // forceInjected: mode state may still be "embedded" in this closure until re-render.
+      await ensureArcChain({ forceInjected: true });
       const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
       const next = accounts[0] ? getAddress(accounts[0]) : null;
       setActiveAddress(next);

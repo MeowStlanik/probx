@@ -230,11 +230,20 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         body.email = sessionEmail;
         body.sessionToken = sessionToken;
       } else if (sessionMode === "injected" && window.ethereum) {
-        // EIP-191 prove ownership of mintTo for injected wallets.
+        // EIP-191 prove ownership of mintTo (includes expiry so signatures cannot be replayed).
         const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
-        const message = `ProbX demo-fund\nmintTo:${mintTo}\namount:${amountUsdc}\nnonce:${nonce}`;
+        const expiresAt = Math.floor(Date.now() / 1000) + 10 * 60;
+        const message = [
+          "ProbX CCTP Demo Funding",
+          `wallet: ${mintTo}`,
+          `amount: ${amountUsdc}`,
+          `nonce: ${nonce}`,
+          `chainId: 5042002`,
+          `expiresAt: ${expiresAt}`,
+          `domain: probx`
+        ].join("\n");
         const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
         const from = accounts[0];
         if (!from) throw new Error("Connect MetaMask to authorize demo fund.");
@@ -244,6 +253,7 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         })) as string;
         body.signature = signature;
         body.nonce = nonce;
+        body.expiresAt = String(expiresAt);
       } else {
         throw new Error("Sign in with email or connect MetaMask to use demo fund.");
       }

@@ -18,7 +18,13 @@ import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 import { randomBytes } from "node:crypto";
 import { CCTP, quoteForwardingBurn } from "./cctpService.js";
-import { NamespaceStore, acquireLock, releaseLock } from "./persistentStore.js";
+import {
+  NamespaceStore,
+  acquireLock,
+  releaseLock,
+  requireDurableKv,
+  setIfAbsent
+} from "./persistentStore.js";
 import { waitSuccessfulReceipt } from "./txReceipt.js";
 
 const FORWARDING_HOOK =
@@ -28,7 +34,6 @@ type DailyUsage = { day: string; used: string };
 
 const dailyStore = new NamespaceStore<DailyUsage>("cctp-demo-fund-daily");
 const globalStore = new NamespaceStore<{ day: string; used: string }>("cctp-demo-fund-global");
-const nonceStore = new NamespaceStore<{ usedAt: string }>("cctp-demo-fund-nonces");
 
 function dailyCapUsdc(): bigint {
   return parseUnits((process.env.CCTP_DEMO_DAILY_PER_ADDRESS || "25").trim() || "25", 6);
@@ -145,24 +150,35 @@ export function cctpSourceAddress(): `0x${string}` | null {
   }
 }
 
-export function demoFundAuthMessage(mintTo: string, amountUsdc: string, nonce: string): string {
-  return `ProbX demo-fund\nmintTo:${getAddress(mintTo)}\namount:${amountUsdc}\nnonce:${nonce}`;
+const DEMO_FUND_CHAIN_ID = 5042002;
+const DEMO_FUND_DOMAIN = "probx";
+
+/** Canonical message for injected-wallet EIP-191 (includes expiry so signatures expire). */
+export function demoFundAuthMessage(params: {
+  mintTo: string;
+  amountUsdc: string;
+  nonce: string;
+  expiresAt: number;
+  chainId?: number;
+}): string {
+  return [
+    "ProbX CCTP Demo Funding",
+    `wallet: ${getAddress(params.mintTo)}`,
+    `amount: ${params.amountUsdc}`,
+    `nonce: ${params.nonce}`,
+    `chainId: ${params.chainId ?? DEMO_FUND_CHAIN_ID}`,
+    `expiresAt: ${params.expiresAt}`,
+    `domain: ${DEMO_FUND_DOMAIN}`
+  ].join("\n");
 }
 
-/** Consume a one-time nonce for injected-wallet EIP-191 auth. */
-export async function consumeDemoFundNonce(nonce: string): Promise<void> {
+/** Consume a one-time nonce after signature validation (atomic SET NX, long TTL). */
+async function consumeDemoFundNonce(nonce: string): Promise<void> {
   const n = (nonce || "").trim();
   if (!/^[a-fA-F0-9]{16,64}$/.test(n)) throw new Error("Invalid demo-fund nonce.");
-  const existing = await nonceStore.get(n);
-  if (existing) throw new Error("Demo-fund nonce already used.");
-  // Prefer atomic set-if-absent when KV supports SET NX
-  const { setIfAbsent } = await import("./persistentStore.js");
-  if (typeof setIfAbsent === "function") {
-    const ok = await setIfAbsent(`cctp-nonce:${n}`, { usedAt: new Date().toISOString() }, 3600);
-    if (!ok) throw new Error("Demo-fund nonce already used.");
-    return;
-  }
-  await nonceStore.set(n, { usedAt: new Date().toISOString() });
+  // Keep nonces for 7 days so signatures cannot be replayed after a short TTL window.
+  const ok = await setIfAbsent(`cctp-nonce:${n}`, { usedAt: new Date().toISOString() }, 7 * 24 * 3600);
+  if (!ok) throw new Error("Demo-fund nonce already used.");
 }
 
 export async function verifyInjectedDemoFundAuth(params: {
@@ -170,9 +186,24 @@ export async function verifyInjectedDemoFundAuth(params: {
   amountUsdc: string;
   nonce: string;
   signature: string;
+  expiresAt: number | string;
 }): Promise<`0x${string}`> {
-  await consumeDemoFundNonce(params.nonce);
-  const message = demoFundAuthMessage(params.mintTo, params.amountUsdc, params.nonce);
+  requireDurableKv("CCTP demo fund auth");
+  const expiresAt = Number(params.expiresAt);
+  if (!Number.isFinite(expiresAt) || expiresAt < Math.floor(Date.now() / 1000)) {
+    throw new Error("Demo-fund signature expired. Request a new signature.");
+  }
+  // Cap challenge lifetime (max 15 minutes from now)
+  if (expiresAt > Math.floor(Date.now() / 1000) + 15 * 60) {
+    throw new Error("Demo-fund expiresAt too far in the future.");
+  }
+
+  const message = demoFundAuthMessage({
+    mintTo: params.mintTo,
+    amountUsdc: params.amountUsdc,
+    nonce: params.nonce,
+    expiresAt
+  });
   const recovered = await recoverMessageAddress({
     message,
     signature: params.signature as `0x${string}`
@@ -180,6 +211,8 @@ export async function verifyInjectedDemoFundAuth(params: {
   if (getAddress(recovered) !== getAddress(params.mintTo)) {
     throw new Error("Signature does not match mintTo address.");
   }
+  // Consume nonce only after signature checks pass (avoids griefing by burning nonces).
+  await consumeDemoFundNonce(params.nonce);
   return getAddress(recovered);
 }
 
@@ -199,6 +232,7 @@ export async function demoFundViaCctp(params: {
   status: "burned_pending_mint";
   domain: number;
 }> {
+  requireDurableKv("CCTP demo fund");
   const key = process.env.CCTP_SOURCE_PRIVATE_KEY;
   if (!key) throw new Error("CCTP_SOURCE_PRIVATE_KEY not set on API.");
 

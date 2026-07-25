@@ -269,8 +269,8 @@ contract InvariantAccountingTest is MiniTest {
                 uint256 r = pool.reservedAssets();
                 uint256 rel = _mod(s >> 16, r) + 1;
                 pool.releaseReserve(rel);
-            } else if (op == 2) {
-                // deposit more LP
+            } else if (op == 2 && pool.reservedAssets() == 0) {
+                // deposit more LP (blocked while exposure open)
                 uint256 dep = _mod(s >> 24, 10_000e6) + 1e6;
                 pool.deposit(dep);
             } else if (

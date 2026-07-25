@@ -19,6 +19,7 @@ import {
   settleMarketTicketsOnchain
 } from "./onchainService.js";
 import { acquireLock, releaseLock } from "./persistentStore.js";
+import { withMarketCreateLock } from "./marketCreateLock.js";
 
 /** Nominal entry window (seconds). createMarketOnchain adds tx slack + lower sniper buffer. */
 const LOCK_SECONDS = 75;
@@ -135,13 +136,14 @@ export async function runMarketCycleOnce(): Promise<{
 
     if (!hasActiveBtc) {
       try {
-        // Re-read immediately before create (another instance may have won the race).
-        const again = await listOnchainMarkets({ forCycle: true });
-        const stillMissing = !again.some(
-          (m) =>
-            isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
-        );
-        if (stillMissing) {
+        await withMarketCreateLock("btc", async () => {
+          // Re-check under the same lock tour uses (market-create:btc).
+          const again = await listOnchainMarkets({ forCycle: true });
+          const stillMissing = !again.some(
+            (m) =>
+              isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+          );
+          if (!stillMissing) return;
           const result = await createMarketOnchain({
             demoRole: "btc_price",
             lockSeconds: LOCK_SECONDS,
@@ -153,20 +155,24 @@ export async function runMarketCycleOnce(): Promise<{
             created.push(String(result.marketAddress));
             console.log(`[market-cycle] created BTC ${result.marketAddress}`);
           }
-        }
+        });
       } catch (error) {
-        errors.push(`create btc: ${error instanceof Error ? error.message : String(error)}`);
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes("lock busy")) {
+          errors.push(`create btc: ${msg}`);
+        }
       }
     }
 
     if (!hasActiveWeather) {
       try {
-        const again = await listOnchainMarkets({ forCycle: true });
-        const stillMissing = !again.some(
-          (m) =>
-            isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
-        );
-        if (stillMissing) {
+        await withMarketCreateLock("weather", async () => {
+          const again = await listOnchainMarkets({ forCycle: true });
+          const stillMissing = !again.some(
+            (m) =>
+              isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+          );
+          if (!stillMissing) return;
           const result = await createMarketOnchain({
             demoRole: "london_weather",
             lockSeconds: LOCK_SECONDS,
@@ -178,9 +184,12 @@ export async function runMarketCycleOnce(): Promise<{
             created.push(String(result.marketAddress));
             console.log(`[market-cycle] created weather ${result.marketAddress}`);
           }
-        }
+        });
       } catch (error) {
-        errors.push(`create weather: ${error instanceof Error ? error.message : String(error)}`);
+        const msg = error instanceof Error ? error.message : String(error);
+        if (!msg.includes("lock busy")) {
+          errors.push(`create weather: ${msg}`);
+        }
       }
     }
 

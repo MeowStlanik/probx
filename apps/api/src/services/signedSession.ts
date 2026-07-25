@@ -100,7 +100,7 @@ export function issueSignedSession(input: {
   return `v1.${body}.${sig}`;
 }
 
-const revokedSessions = new NamespaceStore<{ at: string }>("session-revoked");
+const revokedSessions = new NamespaceStore<{ at: string; exp: number }>("session-revoked");
 
 function tokenFingerprint(token: string): string {
   return createHash("sha256").update(token.trim()).digest("hex");
@@ -108,14 +108,30 @@ function tokenFingerprint(token: string): string {
 
 /** Server-side logout: invalidate this bearer token until natural exp. */
 export async function revokeSignedSession(token: string): Promise<void> {
+  const { requireDurableKv } = await import("./persistentStore.js");
+  requireDurableKv("session revoke");
   const t = (token || "").trim();
   if (!t) return;
-  await revokedSessions.set(tokenFingerprint(t), { at: new Date().toISOString() });
+  // Only accept structurally valid sessions (prevents KV fill with garbage).
+  const payload = verifySignedSession(t);
+  if (!payload) {
+    throw new Error("Invalid session token.");
+  }
+  await revokedSessions.set(tokenFingerprint(t), {
+    at: new Date().toISOString(),
+    exp: payload.exp
+  });
 }
 
 export async function isSessionRevoked(token: string): Promise<boolean> {
   const row = await revokedSessions.get(tokenFingerprint(token));
-  return Boolean(row);
+  if (!row) return false;
+  // Drop expired revoke rows (token already dead by exp).
+  if (row.exp < Math.floor(Date.now() / 1000)) {
+    await revokedSessions.delete(tokenFingerprint(token)).catch(() => undefined);
+    return false;
+  }
+  return true;
 }
 
 export function verifySignedSession(token: string): SignedSessionPayload | null {

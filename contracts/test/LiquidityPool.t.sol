@@ -45,4 +45,35 @@ contract LiquidityPoolTest is MiniTest, TestHarness {
         uint256 out = pool.withdraw(1_000 * 1e6);
         assertTrue(out > 0, "withdraw after clear");
     }
+
+    /// @notice Late deposit cannot buy into open reserved risk (adverse selection).
+    function test_16_Lp_DepositBlockedWhileReserved() external {
+        _deploy();
+        vm.warp(10);
+        _createOpenMarket(500_000);
+        user.buy(address(market), 1, 100 * 1e6, 10_000);
+        assertTrue(pool.reservedAssets() > 0, "need open reserve");
+
+        usdc.mint(address(this), 1_000e6);
+        usdc.approve(address(pool), type(uint256).max);
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
+        pool.deposit(100e6);
+    }
+
+    /// @notice Deposit works again after reserve is released.
+    function test_17_Lp_DepositAfterReserveCleared() external {
+        _deploy();
+        vm.warp(10);
+        _createOpenMarket(500_000);
+        uint256 ticketId = user.buy(address(market), 1, 100 * 1e6, 10_000);
+        vm.warp(50);
+        market.resolve(2);
+        engine.settleTicket(ticketId);
+        assertEq(pool.reservedAssets(), 0, "reserve clear");
+
+        usdc.mint(address(this), 500e6);
+        usdc.approve(address(pool), type(uint256).max);
+        uint256 minted = pool.deposit(500e6);
+        assertTrue(minted > 0, "deposit after clear");
+    }
 }

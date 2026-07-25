@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { initiateDeveloperControlledWalletsClient } from "@circle-fin/developer-controlled-wallets";
 import { encodeFunctionData, getAddress, type Abi } from "viem";
 import { NamespaceStore } from "./persistentStore.js";
-import { issueSignedSession, isLegacyOpaqueToken, verifySignedSession } from "./signedSession.js";
+import {
+  issueSignedSession,
+  isLegacyOpaqueToken,
+  isSessionRevoked,
+  verifySignedSession
+} from "./signedSession.js";
 
 const BLOCKCHAIN = "ARC-TESTNET" as const;
 // USDC (native precompile) on Arc testnet — used for Circle token transfers.
@@ -203,6 +208,11 @@ async function requireCircleSession(emailInput: string, sessionToken: string): P
   const email = normalizeEmail(emailInput);
   const token = (sessionToken || "").trim();
 
+  // Logout/revoke must block write-contract and transfer (not only getSessionPublic).
+  if (await isSessionRevoked(token)) {
+    throw new Error("Session revoked. Sign in with email again.");
+  }
+
   // 1) HMAC tokens work on any instance without a shared session map.
   const signed = verifySignedSession(token);
   if (signed) {
@@ -385,13 +395,18 @@ export async function transferUsdcViaCircle(body: {
     throw new Error("Enter a valid amount greater than 0.");
   }
 
-  // Arc gas is USDC: never sweep 100% of the balance or the tx cannot pay gas.
-  let sendAmount = amount;
-  const amountNum = Number(amount);
-  if (Number.isFinite(amountNum) && amountNum > 2) {
-    const buffered = Math.floor((amountNum - 1) * 1e6) / 1e6;
-    if (buffered > 0) sendAmount = String(buffered);
+  // Send the exact user-confirmed amount (no silent −1 USDC). Gas must remain
+  // in the wallet separately — Circle/Arc will fail if balance is insufficient.
+  const sendAmount = amount;
+  let amountUnits: bigint;
+  try {
+    const [whole, frac = ""] = sendAmount.split(".");
+    const frac6 = (frac + "000000").slice(0, 6);
+    amountUnits = BigInt(whole || "0") * 1_000_000n + BigInt(frac6);
+  } catch {
+    throw new Error("Enter a valid amount greater than 0.");
   }
+  if (amountUnits <= 0n) throw new Error("Enter a valid amount greater than 0.");
 
   let created: Awaited<ReturnType<CircleClient["createTransaction"]>>;
   const fee = { type: "level" as const, config: { feeLevel: "MEDIUM" as const } };
@@ -416,7 +431,6 @@ export async function transferUsdcViaCircle(body: {
       }),
     // 3) Contract execution: USDC.transfer(to, amount)
     async () => {
-      const amountUnits = BigInt(Math.round(Number(sendAmount) * 1e6));
       const callData = encodeFunctionData({
         abi: [
           {

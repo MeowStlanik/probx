@@ -179,12 +179,50 @@ export async function ensureTourBtcMarket(): Promise<{
   status?: string;
   error?: string;
 }> {
-  const { acquireLock, releaseLock } = await import("../services/persistentStore.js");
-  const { randomBytes } = await import("node:crypto");
-  const lockToken = randomBytes(8).toString("hex");
-  const got = await acquireLock("market-create-btc", 90_000, lockToken);
-  if (!got) {
-    // Another instance is creating — re-list for an existing OPEN BTC.
+  const { withMarketCreateLock } = await import("../services/marketCreateLock.js");
+  try {
+    return await withMarketCreateLock("btc", async () => {
+      const markets = await listMarkets();
+      const openBtc = markets.find(
+        (m) =>
+          m.status === "OPEN" &&
+          (m.demoRole === "btc_price" || m.category === "crypto-candle" || /BTC/i.test(m.question))
+      );
+      if (openBtc) {
+        return { marketId: openBtc.id, created: false, status: openBtc.status };
+      }
+
+      const result = await createDemoMarket({
+        demoRole: "btc_price",
+        category: "crypto-candle",
+        lockSeconds: 90,
+        observationSeconds: 60
+      });
+
+      if (result && typeof result === "object" && "error" in result && result.error) {
+        return { marketId: null, created: false, error: String(result.error) };
+      }
+
+      const marketAddress =
+        result && typeof result === "object" && "marketAddress" in result
+          ? String((result as { marketAddress?: string }).marketAddress ?? "")
+          : "";
+      const marketObj =
+        result && typeof result === "object" && "market" in result
+          ? (result as { market?: Market }).market
+          : (result as Market | undefined);
+      const id =
+        marketAddress ||
+        marketObj?.id ||
+        (result && typeof result === "object" && "id" in result ? String((result as Market).id) : "");
+
+      if (!id) {
+        return { marketId: null, created: false, error: "market create returned no id" };
+      }
+      return { marketId: id, created: true, status: "OPEN" };
+    });
+  } catch (error) {
+    // Lock busy: re-list
     const markets = await listMarkets();
     const openBtc = markets.find(
       (m) =>
@@ -192,57 +230,11 @@ export async function ensureTourBtcMarket(): Promise<{
         (m.demoRole === "btc_price" || m.category === "crypto-candle" || /BTC/i.test(m.question))
     );
     if (openBtc) return { marketId: openBtc.id, created: false, status: openBtc.status };
-    return { marketId: null, created: false, error: "market create busy — retry" };
-  }
-
-  try {
-    // Re-check under lock.
-    const markets = await listMarkets();
-    const openBtc = markets.find(
-      (m) =>
-        m.status === "OPEN" &&
-        (m.demoRole === "btc_price" || m.category === "crypto-candle" || /BTC/i.test(m.question))
-    );
-    if (openBtc) {
-      return { marketId: openBtc.id, created: false, status: openBtc.status };
-    }
-
-    const result = await createDemoMarket({
-      demoRole: "btc_price",
-      category: "crypto-candle",
-      lockSeconds: 90,
-      observationSeconds: 60
-    });
-
-    if (result && typeof result === "object" && "error" in result && result.error) {
-      return { marketId: null, created: false, error: String(result.error) };
-    }
-
-    const marketAddress =
-      result && typeof result === "object" && "marketAddress" in result
-        ? String((result as { marketAddress?: string }).marketAddress ?? "")
-        : "";
-    const marketObj =
-      result && typeof result === "object" && "market" in result
-        ? (result as { market?: Market }).market
-        : (result as Market | undefined);
-    const id =
-      marketAddress ||
-      marketObj?.id ||
-      (result && typeof result === "object" && "id" in result ? String((result as Market).id) : "");
-
-    if (!id) {
-      return { marketId: null, created: false, error: "market create returned no id" };
-    }
-    return { marketId: id, created: true, status: "OPEN" };
-  } catch (error) {
     return {
       marketId: null,
       created: false,
       error: error instanceof Error ? error.message : "ensure tour market failed"
     };
-  } finally {
-    await releaseLock("market-create-btc", lockToken).catch(() => undefined);
   }
 }
 

@@ -94,19 +94,32 @@ export async function recordTx(input: {
   if (input.verifyFromRpc || input.createOnly) {
     try {
       const tx = await publicClient().getTransaction({ hash: input.hash });
-      if (tx?.from) {
+      if (!tx?.from) {
+        // Public create: refuse until RPC can bind ownership (prevents race poison).
+        if (input.createOnly) {
+          throw new Error("transaction not yet visible on RPC — retry shortly");
+        }
+      } else {
         from = tx.from as `0x${string}`;
         // Public clients cannot claim ownership of someone else's broadcast.
         if (input.createOnly && owner.startsWith("0x") && from.toLowerCase() !== owner) {
           throw new Error("owner does not match transaction sender");
         }
-        if (owner.startsWith("0x") && from.toLowerCase() !== owner && input.createOnly) {
+        // Trusted server paths may correct owner to chain sender.
+        if (!input.createOnly && owner.startsWith("0x") && from.toLowerCase() !== owner) {
           owner = from.toLowerCase();
         }
       }
     } catch (e) {
-      if (e instanceof Error && e.message.includes("owner does not match")) throw e;
-      // Pending / not yet visible — allow with claimed owner only if createOnly and no existing
+      if (e instanceof Error && (
+        e.message.includes("owner does not match") ||
+        e.message.includes("not yet visible")
+      )) {
+        throw e;
+      }
+      if (input.createOnly) {
+        throw new Error("transaction not yet visible on RPC — retry shortly");
+      }
     }
   }
 

@@ -83,8 +83,11 @@ contract LiquidityPool {
         return internalAssets - lockedUserRisk - reservedAssets;
     }
 
+    /// @notice Deposit LP equity. Blocked while any reserve is open so late LPs
+    ///         cannot buy into known profitable settlements (adverse selection).
     function deposit(uint256 amount) external returns (uint256 mintedShares) {
         require(amount > 0, "ZERO_AMOUNT");
+        require(reservedAssets == 0, "ACTIVE_EXPOSURE");
         uint256 assetsBefore = managedAssets();
         require(usdc.transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM");
         // Empty vault (no shares) → 1:1 mint. Insolvent vault (shares but zero equity)

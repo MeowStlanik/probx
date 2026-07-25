@@ -352,19 +352,20 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
         }
         destination = session.address;
       } else if (signature && nonce && getAddressSafe(mintTo)) {
-        // Injected: EIP-191 signature over mintTo + amount + nonce.
+        // Injected: EIP-191 signature over wallet/amount/nonce/expiresAt/domain.
         destination = await verifyInjectedDemoFundAuth({
           mintTo,
           amountUsdc,
           nonce,
-          signature
+          signature,
+          expiresAt: body.expiresAt !== undefined ? String(body.expiresAt) : ""
         });
       } else {
         return {
           status: 401,
           body: {
             error:
-              "Auth required: email+sessionToken (Circle) or mintTo+signature+nonce (injected EIP-191)"
+              "Auth required: email+sessionToken (Circle) or mintTo+signature+nonce+expiresAt (injected EIP-191)"
           }
         };
       }

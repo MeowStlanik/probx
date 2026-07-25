@@ -34,6 +34,33 @@ export function persistenceMode(): "kv" | "file" {
   return kvConfig() ? "kv" : "file";
 }
 
+/** True on Vercel / production shared hosts where process-local state is unsafe. */
+export function isSharedRuntime(): boolean {
+  return Boolean(
+    process.env.VERCEL ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.NODE_ENV === "production"
+  );
+}
+
+/**
+ * Fail closed for security-critical paths (CCTP faucet, session revoke, OTP jti)
+ * when durable KV is not configured on a shared runtime.
+ */
+export function requireDurableKv(feature: string): void {
+  if (!isSharedRuntime()) return;
+  if (persistenceMode() !== "kv") {
+    throw new Error(
+      `${feature} requires durable KV (UPSTASH_REDIS_REST_URL / KV_REST_API_URL) on shared deploys.`
+    );
+  }
+}
+
+/** Shared lock name for market creation by role — tour + cycle must use the same key. */
+export function marketCreateLockKey(role: "btc" | "weather"): string {
+  return `market-create:${role}`;
+}
+
 async function kvCommand<T = unknown>(cfg: KvConfig, command: unknown[]): Promise<T | null> {
   const res = await fetch(cfg.url, {
     method: "POST",
