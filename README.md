@@ -1,8 +1,8 @@
 <h1 align="center">ProbX Arc</h1>
 
 <p align="center">
-  <strong>USDC-native conditional settlement on Arc</strong><br/>
-  LP-underwritten payouts · Circle Wallets · App Kits · CCTP
+  <strong>Programmable USDC settlement on Arc</strong><br/>
+  Conditional escrow · parametric payouts · LP-underwritten reserves · Circle stack
 </p>
 
 <p align="center">
@@ -29,11 +29,15 @@
 
 ## What this is
 
-ProbX is a **conditional settlement engine**: capital is reserved up front against an
-outcome, the outcome is resolved by an oracle, and USDC settles automatically — all in
-one 60-second cycle, all denominated in USDC.
+ProbX is **programmable USDC settlement infrastructure** on Arc: capital is reserved up
+front against a binary condition, an oracle posts the outcome, and USDC settles
+automatically — no ETH, no multi-asset gas path.
 
-Three primitives make it work:
+Built for **parametric insurance, SLA compensation, and conditional escrow**. Short-horizon
+BTC / London-temp markets in the live demo are a **fast technical loop** (fund → position →
+resolve → claim in ~2 minutes), not the product thesis.
+
+Three primitives:
 
 | Primitive | What it does |
 |-----------|--------------|
@@ -41,22 +45,17 @@ Three primitives make it work:
 | **Reserve engine** | Reserves the max payout *before* accepting a position — no undercollateralised exposure |
 | **Micro Boost** | Optional payout multiplier, gated by live LP capacity |
 
-The first application built on top is **short-horizon prediction markets** (BTC direction,
-London temperature). The same engine underwrites any binary condition that an oracle can
-resolve — insurance triggers, parametric payouts, conditional escrow.
-
-**Why Arc:** a 60-second settlement cycle is not viable when a user needs a second asset
-for gas and confirmation takes twelve seconds. On Arc, gas is USDC and finality is
-sub-second, so the entire flow — fund, position, resolve, claim — happens inside the
-window and never touches ETH.
+**Why Arc:** a tight settlement cycle is not viable when a user needs a second asset for
+gas and confirmation takes twelve seconds. On Arc, gas is USDC and finality is sub-second,
+so the entire flow — fund, position, resolve, claim — stays in one asset.
 
 ---
 
 ## See it in 2 minutes
 
-1. Open the [live demo](https://probx-web.vercel.app) → **Markets**. A BTC and a London-temp market run continuously on a ~75s entry / 60s observation cycle.
+1. Open the [live demo](https://probx-web.vercel.app) → **Markets**. Continuous demo loops (BTC direction / London temp) exercise the full reserve → resolve → claim path on a ~75s entry / 60s observation cycle.
 2. Sign in with email (Circle Developer-Controlled wallet on Arc) or MetaMask.
-3. Fund with testnet USDC — directly on Arc, or from Base Sepolia via **App Kit bridge**.
+3. Fund with testnet USDC — directly on Arc, or from Base Sepolia via **App Kit bridge** (mint lands on the **session** Arc address shown in the UI).
 4. Take a YES/NO position, optionally with Micro Boost. Watch the live chart against the start line, then claim after auto-resolve.
 
 Gas is paid in USDC. There is no ETH step anywhere in that flow.
@@ -257,19 +256,21 @@ Connect (email or MetaMask)
     → Send USDC out to any Arc address anytime
 ```
 
-**Admin:** `/admin` — create test markets (BTC / London weather). No UI entry point; open
-the URL directly. Resolver tools under *Advanced*. Set `ADMIN_SECRET` (or `CRON_SECRET`)
-on shared deploys — without it, admin endpoints stay open (local-dev convenience).
+**Admin:** `/admin` — create test markets (demo oracles). No UI entry point; open the URL
+directly. On Vercel/production, admin is **closed** unless `ADMIN_SECRET` (or `CRON_SECRET`)
+is set; locally it stays open with a warning.
 
 ---
 
 ## Scope
 
-Testnet deployment built for a hackathon. Deliberate scope choices:
+Testnet deployment built for a hackathon. Honest limits:
 
-- **Custodial by design.** Email login means the server holds the signing key (Circle Developer-Controlled wallet, or a locally encrypted session EOA in fallback). That is the Circle Wallets integration, not self-custody. MetaMask users hold their own keys throughout.
-- **Demo-sized risk parameters.** **100000 USDC** seeded vault with deliberately loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000` — one address can reserve 80% of TVL). Sized so a single demo session can exercise the full boost range, not for production underwriting.
-- **Two oracle sources.** Coinbase spot and Open-Meteo, both with fallback hosts. Production would want redundant independent feeds with attestation.
+- **Settlement engine first; markets are the demo.** The on-chain product is reserve accounting + LP underwriting + USDC settlement. Minute BTC tickets show the cycle works; they are not a production betting product.
+- **Custodial by design (email path).** Circle Developer-Controlled wallets (or a local session EOA fallback) mean the server can sign for email users. MetaMask users hold their own keys.
+- **Oracle is centralized today.** Owner/oracle can resolve; feeds are server-side (Coinbase / Open-Meteo). No quorum, on-chain attestation, or dispute period yet — acceptable for demo, not production infrastructure claims.
+- **Demo risk parameters.** **100000 USDC** seeded vault with loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000`). Sized so a demo can exercise full boost range.
+- **Ops dependencies.** External minute pinger for 24/7 cycles; `ADMIN_SECRET` / `OTP_HMAC_SECRET` required on shared deploys (fail closed on Vercel when unset).
 
 ---
 

@@ -2,7 +2,7 @@
   "name": "probx-arc-micro",
   "version": "0.1.0",
   "private": true,
-  "description": "USDC-native short prediction markets with LP-backed Micro Boost on Arc EVM.",
+  "description": "Programmable USDC settlement infrastructure on Arc — conditional escrow, parametric payouts, LP-underwritten reserves.",
   "scripts": {
     "dev": "pnpm --parallel dev",
     "dev:web": "pnpm --filter @probx/web dev",
@@ -20,9 +20,12 @@
     "pack:release": "bash scripts/pack-release.sh"
   },
   "keywords": [
-    "prediction-market",
+    "settlement",
+    "conditional-escrow",
+    "parametric-insurance",
     "arc",
     "usdc",
+    "circle",
     "defi",
     "foundry",
     "nextjs"

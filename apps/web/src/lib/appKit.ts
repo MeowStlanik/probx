@@ -61,6 +61,16 @@ function pickHash(result: unknown): `0x${string}` | null {
   return null;
 }
 
+function requireRecipientAddress(address: string): string {
+  const trimmed = (address || "").trim();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(trimmed)) {
+    throw new Error(
+      "recipientAddress is required for App Kit bridge/spend — pass the Arc destination (e.g. Circle email wallet), not only the browser adapter."
+    );
+  }
+  return trimmed;
+}
+
 /** Same-chain USDC send on Arc via App Kit. */
 export async function appKitSendUsdc(params: {
   to: string;
@@ -80,15 +90,21 @@ export async function appKitSendUsdc(params: {
 
 /**
  * Bridge USDC from Base/Eth Sepolia → Arc Testnet via App Kit (CCTP under the hood).
- * Mint lands on the connected browser wallet address on Arc (adapter destination).
+ *
+ * Always pass `recipientAddress` (session / Circle email wallet on Arc). Omitting it
+ * mints to the browser wallet address derived from the adapter — wrong when MetaMask
+ * burns on source but the user expects funds on the email session wallet.
  */
 export async function appKitBridgeToArc(params: {
   source: AppKitSourceChain;
   amount: string;
+  /** Arc mint destination — must match the address shown in the Fund UI. */
+  recipientAddress: string;
   onProgress?: (msg: string) => void;
 }): Promise<{ hash: `0x${string}` | null; raw: unknown }> {
+  const recipientAddress = requireRecipientAddress(params.recipientAddress);
   const adapter = await browserAdapter();
-  params.onProgress?.(`App Kit bridge ${params.source} → Arc_Testnet…`);
+  params.onProgress?.(`App Kit bridge ${params.source} → Arc_Testnet → ${recipientAddress.slice(0, 10)}…`);
 
   const k = kit();
   const unsubs: Array<() => void> = [];
@@ -111,8 +127,9 @@ export async function appKitBridgeToArc(params: {
 
     const result = await k.bridge({
       from: { adapter, chain: params.source },
-      to: { adapter, chain: ARC },
-      amount: params.amount
+      to: { adapter, chain: ARC, recipientAddress },
+      amount: params.amount,
+      token: "USDC"
     });
     return { hash: pickHash(result), raw: result };
   } finally {
@@ -126,27 +143,60 @@ export async function appKitBridgeToArc(params: {
   }
 }
 
+export type UnifiedBalanceResult = {
+  mode: "unified-balance" | "bridge-fallback";
+  phase: "complete" | "deposit_only" | "spend_pending";
+  hash: `0x${string}` | null;
+  raw: unknown;
+  /** True when deposit already succeeded and spend still needs a retry (no bridge fallback). */
+  depositCompleted?: boolean;
+};
+
 /**
  * Unified Balance: deposit on source chain, spend to an Arc recipient (e.g. user or vault).
- * Requires Gateway support on the chains; falls back to bridge if UB fails.
+ *
+ * Deposit and spend are separate try blocks:
+ * - deposit fails → safe to fall back to a single App Kit bridge (no double-move)
+ * - deposit ok, spend fails → do NOT bridge again; surface deposit-complete + retryable spend
  */
 export async function appKitUnifiedBalanceToArc(params: {
   source: AppKitSourceChain;
   amount: string;
   recipientAddress: string;
   onProgress?: (msg: string) => void;
-}): Promise<{ mode: "unified-balance" | "bridge-fallback"; hash: `0x${string}` | null; raw: unknown }> {
+}): Promise<UnifiedBalanceResult> {
+  const recipientAddress = requireRecipientAddress(params.recipientAddress);
   const adapter = await browserAdapter();
   const k = kit();
   params.onProgress?.(`Unified Balance deposit on ${params.source}…`);
 
+  let deposit: unknown;
   try {
-    const deposit = await k.unifiedBalance.deposit({
+    deposit = await k.unifiedBalance.deposit({
       from: { adapter, chain: params.source },
       amount: params.amount,
       token: "USDC"
     });
-    params.onProgress?.("Spending Unified Balance on Arc…");
+  } catch (depositError) {
+    params.onProgress?.(
+      `Unified Balance deposit unavailable (${depositError instanceof Error ? depositError.message : "error"}) — falling back to App Kit bridge…`
+    );
+    const bridged = await appKitBridgeToArc({
+      source: params.source,
+      amount: params.amount,
+      recipientAddress,
+      onProgress: params.onProgress
+    });
+    return {
+      mode: "bridge-fallback",
+      phase: "complete",
+      hash: bridged.hash,
+      raw: { depositError, bridge: bridged.raw }
+    };
+  }
+
+  params.onProgress?.("Spending Unified Balance on Arc…");
+  try {
     const spend = await k.unifiedBalance.spend({
       amount: params.amount,
       token: "USDC",
@@ -157,24 +207,24 @@ export async function appKitUnifiedBalanceToArc(params: {
       to: {
         adapter,
         chain: ARC,
-        recipientAddress: params.recipientAddress
+        recipientAddress
       }
     });
     return {
       mode: "unified-balance",
+      phase: "complete",
       hash: pickHash(spend) ?? pickHash(deposit),
-      raw: { deposit, spend }
+      raw: { deposit, spend },
+      depositCompleted: true
     };
-  } catch (ubError) {
-    params.onProgress?.(
-      `Unified Balance unavailable (${ubError instanceof Error ? ubError.message : "error"}) — falling back to App Kit bridge…`
+  } catch (spendError) {
+    // Deposit already moved funds into Gateway balance — never auto-bridge the same amount again.
+    const why = spendError instanceof Error ? spendError.message : String(spendError);
+    throw new Error(
+      `Unified Balance deposit succeeded, but spend to ${recipientAddress.slice(0, 10)}… failed (${why}). ` +
+        `Funds are in the Gateway/UB balance — retry spend only; do not bridge the same amount again. ` +
+        `Deposit tx: ${pickHash(deposit) ?? "see wallet activity"}.`
     );
-    const bridged = await appKitBridgeToArc({
-      source: params.source,
-      amount: params.amount,
-      onProgress: params.onProgress
-    });
-    return { mode: "bridge-fallback", hash: bridged.hash, raw: bridged.raw };
   }
 }
 

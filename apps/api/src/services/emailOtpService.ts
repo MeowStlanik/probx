@@ -110,9 +110,20 @@ function hashCode(email: string, code: string): string {
   return createHmac("sha256", otpHmacSecret()).update(`${email}:${code}`).digest("hex");
 }
 
+const DEV_OTP_FALLBACK = "probx-dev-otp-hmac-change-me";
+
+function isSharedRuntime(): boolean {
+  return Boolean(
+    process.env.VERCEL ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.NODE_ENV === "production"
+  );
+}
+
 /**
  * Shared secret for signed OTP tokens (must be identical on every Vercel instance).
- * Prefer a dedicated OTP_HMAC_SECRET in Vercel env; other keys are fallbacks only.
+ * Prefer a dedicated OTP_HMAC_SECRET; other env keys are emergency fallbacks only.
+ * The hard-coded dev string is rejected on shared/production runtimes.
  */
 function otpHmacSecret(): string {
   const secret = (
@@ -121,17 +132,25 @@ function otpHmacSecret(): string {
     process.env.CIRCLE_API_KEY ||
     process.env.BREVO_API_KEY ||
     process.env.SMTP_PASS ||
-    "probx-dev-otp-hmac-change-me"
+    ""
   ).trim();
-  const resolved = secret || "probx-dev-otp-hmac-change-me";
-  if (resolved === "probx-dev-otp-hmac-change-me" && !warnedDefaultSecret) {
-    warnedDefaultSecret = true;
-    console.warn(
-      "[security] OTP_HMAC_SECRET is not set — OTP tokens signed with the public fallback secret. " +
-        "Set OTP_HMAC_SECRET in any shared environment."
+
+  if (secret) return secret;
+
+  if (isSharedRuntime()) {
+    throw new Error(
+      "OTP_HMAC_SECRET is required on shared/production runtimes (no public fallback secret)."
     );
   }
-  return resolved;
+
+  if (!warnedDefaultSecret) {
+    warnedDefaultSecret = true;
+    console.warn(
+      "[security] OTP_HMAC_SECRET is not set — OTP tokens signed with the local-dev fallback secret. " +
+        "Set OTP_HMAC_SECRET before any shared deploy."
+    );
+  }
+  return DEV_OTP_FALLBACK;
 }
 
 let warnedDefaultSecret = false;

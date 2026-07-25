@@ -275,6 +275,8 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         const bridged = await appKitBridgeToArc({
           source: sourceKeyToAppKitChain(source),
           amount: amount || "1",
+          // Mint to the session wallet shown in the UI (Circle email), not the MetaMask burner.
+          recipientAddress: mintTo,
           onProgress: (msg) => setMessage(`⚡ App Kit: ${msg}`)
         });
         if (bridged.hash) setBurnTx(bridged.hash);

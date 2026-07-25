@@ -2,7 +2,7 @@
 # Vercel Hobby only runs native crons ~once/day — this keeps markets resolving.
 #
 # Repo secrets (Settings → Secrets and variables → Actions):
-#   PROBX_CRON_BASE_URL  = https://probx-rosy.vercel.app   (production only, NOT a *.vercel.app deploy preview)
+#   PROBX_CRON_BASE_URL  = https://probx-web.vercel.app   (production only, NOT a deploy preview)
 #   PROBX_CRON_SECRET    = same value as CRON_SECRET on Vercel
 #
 name: Cron ping (production)
@@ -36,7 +36,7 @@ jobs:
           case "$BASE" in
             *stlaniks-projects.vercel.app*|*git-*.vercel.app*)
               echo "BASE looks like a preview deploy URL: $BASE"
-              echo "Use the production alias https://probx-rosy.vercel.app"
+              echo "Use the production alias https://probx-web.vercel.app"
               exit 1
               ;;
           esac

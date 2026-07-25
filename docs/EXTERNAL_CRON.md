@@ -6,7 +6,7 @@ Vercel Hobby runs native crons infrequently (often ~once per day). For live BTC 
 
 | Use for jury / cron | Do **not** use |
 |---------------------|----------------|
-| **https://probx-rosy.vercel.app** | `probx-….vercel.app` deploy previews (`*-stlaniks-projects.vercel.app`) |
+| **https://probx-web.vercel.app** | `probx-….vercel.app` deploy previews (`*-stlaniks-projects.vercel.app`) |
 
 Vercel Cron and this pinger must target **production**. If the jury opens a preview while resolve runs on production (or vice versa), markets look stuck.
 
@@ -37,7 +37,7 @@ Workflow: [`.github/workflows/cron-ping.yml`](../.github/workflows/cron-ping.yml
 
 1. Repo → **Settings → Secrets and variables → Actions**
 2. Add:
-   - `PROBX_CRON_BASE_URL` = `https://probx-rosy.vercel.app`
+   - `PROBX_CRON_BASE_URL` = `https://probx-web.vercel.app`
    - `PROBX_CRON_SECRET` = same as Vercel `CRON_SECRET`
 3. Enable Actions on the default branch (workflow runs on `schedule: * * * * *` + manual **Run workflow**).
 
@@ -52,13 +52,13 @@ GitHub may delay minute cron under load (often 1–5 min). Still far better than
 3. URL (pick one style):
 
 ```text
-https://probx-rosy.vercel.app/api/cron/auto-resolve?secret=YOUR_CRON_SECRET
+https://probx-web.vercel.app/api/cron/auto-resolve?secret=YOUR_CRON_SECRET
 ```
 
 Or URL without query + header:
 
 ```text
-URL:    https://probx-rosy.vercel.app/api/cron/auto-resolve
+URL:    https://probx-web.vercel.app/api/cron/auto-resolve
 Header: Authorization: Bearer YOUR_CRON_SECRET
 ```
 
@@ -66,7 +66,7 @@ Header: Authorization: Bearer YOUR_CRON_SECRET
 5. Optional second job for market create/rotate:
 
 ```text
-https://probx-rosy.vercel.app/api/cron/market-cycle?secret=YOUR_CRON_SECRET
+https://probx-web.vercel.app/api/cron/market-cycle?secret=YOUR_CRON_SECRET
 ```
 
 6. Enable notifications on non-2xx if available.
@@ -86,12 +86,12 @@ If your plan has a request timeout setting, set it to **60s** anyway.
 ```bash
 # should be 401 if CRON_SECRET is set on prod
 curl -sS -o /dev/null -w "%{http_code}\n" \
-  https://probx-rosy.vercel.app/api/cron/auto-resolve
+  https://probx-web.vercel.app/api/cron/auto-resolve
 
 # should be 200 with secret (fast ack; work continues on server)
 curl -sS -w "\nHTTP %{http_code} time %{time_total}s\n" \
   -H "Authorization: Bearer $CRON_SECRET" \
-  "https://probx-rosy.vercel.app/api/cron/auto-resolve?secret=$CRON_SECRET"
+  "https://probx-web.vercel.app/api/cron/auto-resolve?secret=$CRON_SECRET"
 ```
 
 Expect JSON like `{ "ok": true, "accepted": true, ... }` in under ~2 seconds.
@@ -100,7 +100,7 @@ Expect JSON like `{ "ok": true, "accepted": true, ... }` in under ~2 seconds.
 
 ## Jury checklist
 
-- [ ] Share **https://probx-rosy.vercel.app** (not a preview URL)  
+- [ ] Share **https://probx-web.vercel.app** (not a preview URL)  
 - [ ] `CRON_SECRET` set on Vercel **Production**  
-- [ ] External pinger (Actions or cron-job.org) hits **probx-rosy** every minute  
+- [ ] External pinger (Actions or cron-job.org) hits **probx-web** every minute  
 - [ ] `ORACLE_PRIVATE_KEY` / `PRIVATE_KEY` set so resolve can sign on Arc  

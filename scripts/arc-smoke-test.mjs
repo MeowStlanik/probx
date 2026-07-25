@@ -110,6 +110,8 @@ const marketAbi = [
   { type: "function", name: "openTime", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint64" }] },
   { type: "function", name: "lockTime", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint64" }] },
   { type: "function", name: "observationStart", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint64" }] },
+  // resolve() requires block.timestamp >= observationEnd (not observationStart)
+  { type: "function", name: "observationEnd", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint64" }] },
   { type: "function", name: "canBuy", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "bool" }] },
   { type: "function", name: "owner", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
   { type: "function", name: "oracle", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
@@ -207,16 +209,21 @@ async function pickMarket() {
     : candidates.find((item) => item.role === "near_lock") ?? candidates.find((item) => item.role === "open") ?? candidates[0];
   if (!selected?.market) throw new Error("No demo market configured. Run scripts/arc-demo-markets.mjs first or set MARKET_ID_OR_ADDRESS.");
   const address = getAddress(selected.market);
-  const [status, canBuy, openTime, lockTime, observationStart] = await Promise.all([
+  const [status, canBuy, openTime, lockTime, observationStart, observationEnd] = await Promise.all([
     publicClient.readContract({ address, abi: marketAbi, functionName: "status" }),
     publicClient.readContract({ address, abi: marketAbi, functionName: "canBuy" }),
     publicClient.readContract({ address, abi: marketAbi, functionName: "openTime" }),
     publicClient.readContract({ address, abi: marketAbi, functionName: "lockTime" }),
-    publicClient.readContract({ address, abi: marketAbi, functionName: "observationStart" })
+    publicClient.readContract({ address, abi: marketAbi, functionName: "observationStart" }),
+    publicClient.readContract({ address, abi: marketAbi, functionName: "observationEnd" })
   ]);
-  console.log(`Market status=${statusName(Number(status))}, canBuy=${canBuy}, lock=${new Date(Number(lockTime) * 1000).toISOString()}`);
+  console.log(
+    `Market status=${statusName(Number(status))}, canBuy=${canBuy}, ` +
+      `lock=${new Date(Number(lockTime) * 1000).toISOString()}, ` +
+      `obsEnd=${new Date(Number(observationEnd) * 1000).toISOString()}`
+  );
   if (!canBuy) throw new Error("Selected market is not buyable. Create fresh demo markets or pass an OPEN market via MARKET_ID_OR_ADDRESS.");
-  return { id: selected.id ?? address, address, openTime, lockTime, observationStart };
+  return { id: selected.id ?? address, address, openTime, lockTime, observationStart, observationEnd };
 }
 
 async function maybeResolve(market) {
@@ -225,18 +232,24 @@ async function maybeResolve(market) {
     console.log("Resolve skipped: ORACLE_PRIVATE_KEY is not set.");
     return;
   }
-  const [owner, oracleAddress] = await Promise.all([
+  const [owner, oracleAddress, observationEnd] = await Promise.all([
     publicClient.readContract({ address: market.address, abi: marketAbi, functionName: "owner" }),
-    publicClient.readContract({ address: market.address, abi: marketAbi, functionName: "oracle" })
+    publicClient.readContract({ address: market.address, abi: marketAbi, functionName: "oracle" }),
+    // Re-read so we wait for observationEnd even if pickMarket used a stale clock
+    publicClient.readContract({ address: market.address, abi: marketAbi, functionName: "observationEnd" })
   ]);
   const signer = oracle.account.address.toLowerCase();
   if (signer !== owner.toLowerCase() && signer !== oracleAddress.toLowerCase()) {
     console.log(`Resolve skipped: signer is not owner/oracle for this market. owner=${owner}, oracle=${oracleAddress}`);
     return;
   }
-  const waitMs = Math.max(0, Number(market.observationStart - BigInt(Math.floor(Date.now() / 1000))) + 2) * 1000;
+  // MicroMarket.resolve requires block.timestamp >= observationEnd (OBSERVATION_NOT_ENDED otherwise).
+  const endTs = Number(observationEnd ?? market.observationEnd);
+  const waitMs = Math.max(0, endTs - Math.floor(Date.now() / 1000) + 2) * 1000;
   if (waitMs > 0) {
-    console.log(`Waiting ${Math.ceil(waitMs / 1000)}s for observation window...`);
+    console.log(
+      `Waiting ${Math.ceil(waitMs / 1000)}s until observationEnd (${new Date(endTs * 1000).toISOString()})…`
+    );
     await sleep(waitMs);
   }
   const resolveHash = await oracle.writeContract({

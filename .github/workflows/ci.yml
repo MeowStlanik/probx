@@ -1,0 +1,65 @@
+# Build + forge tests on every push/PR. Smoke (live Arc) stays manual.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Contracts (forge test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test
+        run: forge test -vv
+
+  web:
+    name: Web build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web
+        run: pnpm --filter @probx/web build
+        env:
+          # Public placeholders so Next can compile without secrets
+          NEXT_PUBLIC_CHAIN_ID: "5042002"
+          NEXT_PUBLIC_ARC_RPC_URL: https://rpc.testnet.arc.network
+          NEXT_PUBLIC_USDC_ADDRESS: "0x3600000000000000000000000000000000000000"
+          NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS: "0x94Bd455DB31ddA0AFA13C8dF0E25D5ef4b787581"
+          NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS: "0x647cCdDB471A22651e5e764f000f6a0cf232cacd"
+          NEXT_PUBLIC_MARKET_FACTORY_ADDRESS: "0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8"

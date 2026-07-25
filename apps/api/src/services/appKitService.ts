@@ -66,22 +66,31 @@ export async function sendUsdcViaAppKit(params: {
 /**
  * Bridge USDC → Arc via App Kit (CCTP under the hood).
  * source: Ethereum_Sepolia | Base_Sepolia
+ *
+ * Pass `recipientAddress` when mint must land on a different Arc wallet than the
+ * signing key (e.g. demo treasury burns, user email wallet receives).
  */
 export async function bridgeUsdcToArcViaAppKit(params: {
   privateKey: string;
   amount: string;
   source?: "Ethereum_Sepolia" | "Base_Sepolia";
+  /** Arc mint destination; defaults to the signer address from privateKey. */
+  recipientAddress?: string;
 }): Promise<{ result: unknown; provider: "app-kit-bridge" }> {
   const kit = getKit();
   const adapter = createViemAdapterFromPrivateKey({
     privateKey: normalizePk(params.privateKey)
   });
   const source = params.source ?? ETH_SEPOLIA;
+  const recipient = (params.recipientAddress || "").trim();
 
   const result = await kit.bridge({
     from: { adapter, chain: source },
-    to: { adapter, chain: ARC_CHAIN },
-    amount: params.amount
+    to: recipient
+      ? { adapter, chain: ARC_CHAIN, recipientAddress: recipient }
+      : { adapter, chain: ARC_CHAIN },
+    amount: params.amount,
+    token: "USDC"
   });
 
   return { result, provider: "app-kit-bridge" };

@@ -5,8 +5,9 @@
  * Behaviour:
  * - ADMIN_SECRET (or CRON_SECRET as fallback) set  → caller must prove it via
  *   `adminSecret` in the JSON body or `?secret=` / `?admin_secret=` query param.
- * - Nothing configured → endpoints stay open (local dev convenience) with a
- *   one-time loud warning. Production MUST set ADMIN_SECRET.
+ * - Nothing configured:
+ *   - local/dev → endpoints stay open with a one-time loud warning
+ *   - Vercel / NODE_ENV=production → endpoints stay CLOSED (fail closed)
  */
 import { timingSafeEqual } from "node:crypto";
 
@@ -14,6 +15,15 @@ let warnedMissingSecret = false;
 
 function expectedAdminSecret(): string {
   return (process.env.ADMIN_SECRET || process.env.CRON_SECRET || "").trim();
+}
+
+/** Shared / production-like hosts must not leave admin open without a secret. */
+function isSharedRuntime(): boolean {
+  return Boolean(
+    process.env.VERCEL ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME ||
+      process.env.NODE_ENV === "production"
+  );
 }
 
 export function adminSecretConfigured(): boolean {
@@ -26,11 +36,21 @@ export function isAdminAuthorized(input: {
 }): boolean {
   const expected = expectedAdminSecret();
   if (!expected) {
+    if (isSharedRuntime()) {
+      if (!warnedMissingSecret) {
+        warnedMissingSecret = true;
+        console.error(
+          "[security] ADMIN_SECRET is not set on a shared/production runtime — admin endpoints are CLOSED. " +
+            "Set ADMIN_SECRET (or CRON_SECRET) in the environment."
+        );
+      }
+      return false;
+    }
     if (!warnedMissingSecret) {
       warnedMissingSecret = true;
       console.warn(
-        "[security] ADMIN_SECRET is not set — admin endpoints (create/resolve/cancel/reset) are OPEN. " +
-          "Set ADMIN_SECRET in production."
+        "[security] ADMIN_SECRET is not set — admin endpoints (create/resolve/cancel/reset) are OPEN (local dev only). " +
+          "Set ADMIN_SECRET before any shared deploy."
       );
     }
     return true;

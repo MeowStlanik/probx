@@ -105,7 +105,7 @@ APP_KIT_STRICT=0               # 1 = hard-fail instead of App Kit → viem/CCTP 
 > per-instance `/tmp` files — fine locally, ephemeral on Vercel. Set Upstash (free) for
 > production reliability.
 
-> ⚠️ **`ADMIN_SECRET` is not optional in a shared deploy.** With it unset, the admin endpoints (create / hide / reset / settle / resolve / cancel / simulate) stay **open** — deliberate local-dev convenience, logged with a loud warning at startup. Set it (or `CRON_SECRET`, used as fallback) on Vercel.
+> ⚠️ **`ADMIN_SECRET` is required on Vercel / production.** With it unset on a shared runtime, admin endpoints **fail closed** (403). Locally (no `VERCEL`, non-production) they stay open with a loud warning for convenience. Same rule: **`OTP_HMAC_SECRET` is required on Vercel** — the public dev fallback is rejected.
 
 ---
 
