@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://probx-rosy.vercel.app">▶ Live demo</a></strong> ·
+  <strong><a href="https://probx-web.vercel.app">▶ Live demo</a></strong> ·
   <a href="#see-it-in-2-minutes">See it in 2 minutes</a> ·
   <a href="#known-limitations">Known limitations</a>
 </p>
@@ -26,7 +26,7 @@
 
 ## See it in 2 minutes
 
-1. Open the [live demo](https://probx-rosy.vercel.app) → **Markets**. A BTC and a London-temp market are always running on a ~75s entry / 60s observation cycle.
+1. Open the [live demo](https://probx-web.vercel.app) → **Markets**. A BTC and a London-temp market are always running on a ~75s entry / 60s observation cycle.
 2. Sign in with email (Circle Developer-Controlled wallet on Arc) or MetaMask.
 3. Fund with testnet USDC — direct on Arc, or bridge from Base Sepolia via CCTP.
 4. Buy a YES/NO ticket, optionally with Micro Boost. Watch the live chart against the start line, then claim after auto-resolve.
