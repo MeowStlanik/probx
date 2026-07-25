@@ -101,6 +101,8 @@ New BTC / weather markets estimate a **fair mid** from live structure before app
 
 That cuts the free lunch for anyone who would otherwise only buy mispriced 50/50 tickets.
 
+> These guards address **informed flow**, not **quote manipulation** — the current bytecode lets a quote be moved cheaply before entry. See [Known limitations](#known-limitations).
+
 > **Deploy note:** overround + higher boost fee live in **contract bytecode**. Redeploy after changing those constants. Current Arc Testnet deployment: **2026-07-19** (see addresses below).
 
 ---
@@ -164,7 +166,7 @@ Leave `NEXT_PUBLIC_API_BASE_URL` empty to call same-origin `/api/*` (default for
 
 ```bash
 pnpm contracts:build
-pnpm contracts:test      # 18 forge tests → contracts/test/
+pnpm contracts:test      # 19 forge tests → contracts/test/
 pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 ```
 
@@ -340,14 +342,18 @@ The BTC / weather cycle (create → observe → resolve) needs a trigger about
 
 ## Known limitations
 
-Testnet demo, built for a hackathon. These are known and deliberate trade-offs, not oversights:
+Testnet demo built for a hackathon. Two categories — deliberate scope choices, and real bugs found during a self-audit that need a redeploy to land.
 
-- **Odds are cheap to move with dust trades.** `MicroMarket.applyTradeImpact()` floors price impact at `MIN_IMPACT` (1.5%) for *any* non-zero stake, and there is no minimum ticket size on-chain. A few dozen 0.000001 USDC buys can pin a quote to the 5% bound, after which a real stake quotes at a wildly inflated payout against LP. The fix is a `MIN_USER_RISK_PER_TICKET` guard in `RiskLimits.sol` plus proportional (unfloored) impact — it needs a redeploy, so it is not in the current bytecode.
-- **`resolve()` is callable from `observationStart`, not `observationEnd`.** The resolver key is the only thing enforcing that the full observation window elapses. Tightening the `require` is a one-line change pending redeploy.
-- **LP share price is manipulable by direct transfer.** `LiquidityPool.deposit()` prices shares off `managedAssets()`, i.e. token balance, so a donation inflates share value (classic ERC-4626 first-depositor / donation vector). Fine for a seeded testnet vault, not for mainnet.
-- **Per-user LP exposure cap is loose** — `MAX_LP_RESERVE_PER_USER_BPS = 8000` lets a single address reserve 80% of TVL.
-- **Cron/tour throttles are per-instance.** `cronThrottle.ts` keeps state in process memory, so on serverless N cold instances allow N runs per window. Only the on-traffic cycle kick uses durable KV.
-- **Custodial by design.** Email login means the server holds the signing key (Circle DCW, or a locally encrypted session EOA in fallback). That is the point of the Circle integration, but it is not self-custody.
+### By design
+
+- **Custodial.** Email login means the server holds the signing key (Circle Developer-Controlled wallet, or a locally encrypted session EOA in fallback). That is the Circle integration, not self-custody.
+- **Testnet only**, with a 15 USDC seeded vault and deliberately loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000` — one address can reserve 80% of TVL). Sized for a demo, not for underwriting.
+
+### Known bugs — fix identified, pending redeploy
+
+- **Quotes are cheap to move.** `MicroMarket.applyTradeImpact()` floors price impact at `MIN_IMPACT` (1.5%) for *any* non-zero stake, and there is no minimum ticket size on-chain, so a quote can be pinned to the 5.4% bound (5% mid × 1.08 overround) for a negligible cost. A real stake then quotes at ~18.5× on a ~50/50 event — enough to drain the seeded vault in one cycle. Fix: `MIN_USER_RISK_PER_TICKET` in `RiskLimits.sol` plus proportional (unfloored) impact. PoC: [`contracts/test/DustManipulation.t.sol`](./contracts/test/DustManipulation.t.sol).
+- **`resolve()` is callable from `observationStart`, not `observationEnd`.** The resolver key is the only thing enforcing that the full observation window elapses. One-line `require` change.
+- **LP share price is manipulable by direct transfer.** `LiquidityPool.deposit()` prices shares off `managedAssets()`, i.e. token balance, so a donation inflates share value (classic ERC-4626 donation vector).
 
 ---
 
@@ -356,7 +362,7 @@ Testnet demo, built for a hackathon. These are known and deliberate trade-offs, 
 - Deployment addresses: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json)
 - Env template: [`.env.example`](.env.example)
 - External cron pinger (markets 24/7): [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md)
-- Contract tests: [`contracts/test/`](./contracts/test/) — 18 tests, `pnpm contracts:test`
+- Contract tests: [`contracts/test/`](./contracts/test/) — 19 tests, `pnpm contracts:test`
 - License: [`LICENSE`](./LICENSE) (MIT)
 
 ---
