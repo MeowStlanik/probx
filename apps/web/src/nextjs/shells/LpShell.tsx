@@ -6,7 +6,7 @@ import { fetchRecentLpLedger, recordLocalLpAction, type LpLedgerRow } from "@/li
 import { arcDeployment, poolAbi, usdcAbi } from "@/lib/onchain";
 import { readableWalletError, useWallet } from "@/lib/wallet";
 import { moneyUsdc } from "../mapMarket";
-import { LPView, type LpAction } from "../views/LPView";
+import { LPView, type LpAction, type LpAnyChainSource } from "../views/LPView";
 
 /**
  * Wires LPView → LiquidityPool deposit/withdraw + /api/lp/stats + recent deposits.
@@ -195,6 +195,34 @@ export function LpShell({
     ]
   );
 
+  const onAnyChainDeposit = useCallback(
+    async (source: LpAnyChainSource, amount: number) => {
+      if (!address) return "Connect wallet in the header first (Arc mint + vault deposit target).";
+      if (!(amount > 0)) return "Enter an amount greater than zero.";
+      try {
+        const { appKitUnifiedBalanceToArc } = await import("@/lib/appKit");
+        const fund = await appKitUnifiedBalanceToArc({
+          source,
+          amount: String(amount),
+          recipientAddress: address,
+          onProgress: () => {
+            /* progress surfaced via final message */
+          }
+        });
+        // After USDC lands on Arc, deposit into the vault with the session/browser wallet.
+        await ensureArcChain();
+        await refresh();
+        // Approve then deposit into the underwriting vault (never send raw USDC as donation).
+        const ap = await onAction("approve", amount);
+        const dep = await onAction("deposit", amount);
+        return `⚡ via Circle App Kit (${fund.mode}) → Arc → vault deposit.\n${ap}\n${dep}`;
+      } catch (error) {
+        return readableWalletError(error);
+      }
+    },
+    [address, ensureArcChain, onAction, refresh]
+  );
+
   return (
     <LPView
       tvl={moneyUsdc(tvl, 2)}
@@ -206,6 +234,7 @@ export function LpShell({
       yourShare={yourShare}
       allowanceUsdc={allowanceUsdc}
       onAction={onAction}
+      onAnyChainDeposit={onAnyChainDeposit}
     />
   );
 }

@@ -29,7 +29,7 @@ contract ReserveAccountingTest is MiniTest, TestHarness {
         _createOpenMarket(500_000);
         uint256 ticketId = user.buy(address(market), 1, 100 * 1e6, 20_000);
 
-        vm.warp(20);
+        vm.warp(50);
         market.resolve(2);
         engine.settleTicket(ticketId);
 
@@ -46,7 +46,7 @@ contract ReserveAccountingTest is MiniTest, TestHarness {
         uint256 ticketId = user.buy(address(market), 1, 100 * 1e6, 20_000);
         uint256 balanceBefore = usdc.balanceOf(address(user));
 
-        vm.warp(20);
+        vm.warp(50);
         market.resolve(1);
         engine.settleTicket(ticketId);
 

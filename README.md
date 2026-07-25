@@ -182,30 +182,48 @@ pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 | USDC | `0x3600000000000000000000000000000000000000` |
 | Deployer | `0x4604a582B66431481D5320fed67C785bdb4D7Fe0` |
 
-### Core contracts (redeployed 2026-07-19 — audit fixes)
+### Core contracts (redeployed 2026-07-25 — self-audit fixes)
 
 | Contract | Address |
 |----------|---------|
-| MicroBoostEngine | [`0x9458631dc97C8320db6b2224BD8E22bC627E2211`](https://testnet.arcscan.app/address/0x9458631dc97C8320db6b2224BD8E22bC627E2211) |
-| LiquidityPool | [`0xedc959c24c8EbC26b7E5cC994b37a47727E50a2E`](https://testnet.arcscan.app/address/0xedc959c24c8EbC26b7E5cC994b37a47727E50a2E) |
-| MarketFactory | [`0xf0ac9759DCFf5565C4adD7Ae5B15DdBeF8f6B1Cc`](https://testnet.arcscan.app/address/0xf0ac9759DCFf5565C4adD7Ae5B15DdBeF8f6B1Cc) |
-| PositionTicket | [`0x2a8C4a06945071383E00F6187f4B4E925408837D`](https://testnet.arcscan.app/address/0x2a8C4a06945071383E00F6187f4B4E925408837D) |
-| OracleAdapter | [`0x53e06a44DE09f238fb682348D0F9cF733bD1B99A`](https://testnet.arcscan.app/address/0x53e06a44DE09f238fb682348D0F9cF733bD1B99A) |
-| InsuranceFund | [`0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C`](https://testnet.arcscan.app/address/0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C) |
-| FeeRouter | [`0x53480237eb52429400fEF5e0fDB23A73d9983a2C`](https://testnet.arcscan.app/address/0x53480237eb52429400fEF5e0fDB23A73d9983a2C) |
+| MicroBoostEngine | [`0x94Bd455DB31ddA0AFA13C8dF0E25D5ef4b787581`](https://testnet.arcscan.app/address/0x94Bd455DB31ddA0AFA13C8dF0E25D5ef4b787581) |
+| LiquidityPool | [`0x647cCdDB471A22651e5e764f000f6a0cf232cacd`](https://testnet.arcscan.app/address/0x647cCdDB471A22651e5e764f000f6a0cf232cacd) |
+| MarketFactory | [`0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8`](https://testnet.arcscan.app/address/0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8) |
+| PositionTicket | [`0x676a25D09c1BB7421AB3a837c554D447f7dA4894`](https://testnet.arcscan.app/address/0x676a25D09c1BB7421AB3a837c554D447f7dA4894) |
+| OracleAdapter | [`0x24CC0e29B4cc678aDe4f866a9808F582BD4f6A17`](https://testnet.arcscan.app/address/0x24CC0e29B4cc678aDe4f866a9808F582BD4f6A17) |
+| InsuranceFund | [`0x93D0f707730D85bf584E4C8DF2bA22aE90A24E68`](https://testnet.arcscan.app/address/0x93D0f707730D85bf584E4C8DF2bA22aE90A24E68) |
+| FeeRouter | [`0x57121e3f572708b6B6ea7D149019e99974ce2b72`](https://testnet.arcscan.app/address/0x57121e3f572708b6B6ea7D149019e99974ce2b72) |
+
+LP seed on deploy: **400 USDC**. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json).
+
+
+LP seed on deploy: **400 USDC**.
 
 
 ---
 
-## Circle & CCTP
+## Circle, CCTP & App Kits
 
 | Capability | Implementation |
 |------------|----------------|
 | Email login | Circle **Developer-Controlled** wallets on `ARC-TESTNET` |
 | Fallback | Local encrypted session EOA if `CIRCLE_*` incomplete |
 | OTP | App-issued 6-digit code (Gmail SMTP in prod; `EMAIL_OTP_DEV_ECHO=1` shows code in UI locally) |
-| Bridge | CCTP v2 **Forwarding** Base/Eth Sepolia → Arc |
+| **Send** | Circle **App Kit** `kit.send` on Arc (session EOA); Circle DCW transfer via `tokenId`; raw viem fallback |
+| **Bridge** | **App Kit** `kit.bridge` primary (Fund modal); manual CCTP v2 Forwarding fallback |
+| **LP liquidity** | On-Arc vault deposit + **Any chain** tab (Unified Balance when available, else App Kit bridge → deposit) |
 | Gas | User pays **USDC** on Arc |
+
+Optional: `CIRCLE_KIT_KEY` / `NEXT_PUBLIC_CIRCLE_KIT_KEY` from Circle Console for authenticated kit features.
+
+**Judge visibility:** successful App Kit flows message as `⚡ via Circle App Kit`. If App Kit fails, the UI/API **names the fallback** (`viem-fallback` / “manual CCTP”) — never silent. Set `APP_KIT_STRICT=1` / `NEXT_PUBLIC_APP_KIT_STRICT=1` to hard-fail instead of falling back.
+
+**Release zip (no secrets):**
+```bash
+git add -A && git commit -m "…"   # local commit of what you want packed
+pnpm pack:release                 # git archive → ../probx-release-*.zip
+```
+Never zip the working directory by hand — `.secrets/` and `.env` must not leave the machine.
 
 MetaMask can burn on the source chain while **mint lands on the email session** — separate CCTP connect, no session hijack.
 
@@ -280,9 +298,9 @@ NEXT_PUBLIC_API_BASE_URL=
 NEXT_PUBLIC_CHAIN_ID=5042002
 NEXT_PUBLIC_ARC_RPC_URL=https://rpc.testnet.arc.network
 NEXT_PUBLIC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
-NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS=0x9458631dc97C8320db6b2224BD8E22bC627E2211
-NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS=0xedc959c24c8EbC26b7E5cC994b37a47727E50a2E
-NEXT_PUBLIC_MARKET_FACTORY_ADDRESS=0xf0ac9759DCFf5565C4adD7Ae5B15DdBeF8f6B1Cc
+NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS=0x94Bd455DB31ddA0AFA13C8dF0E25D5ef4b787581
+NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS=0x647cCdDB471A22651e5e764f000f6a0cf232cacd
+NEXT_PUBLIC_MARKET_FACTORY_ADDRESS=0x5FE8988706f7E1654968D77c920C19c48C1Ec2f8
 ```
 
 **Server-only** (Sensitive; no `NEXT_PUBLIC_` prefix)
@@ -348,11 +366,15 @@ Testnet demo built for a hackathon. Two categories — deliberate scope choices,
 - **Custodial.** Email login means the server holds the signing key (Circle Developer-Controlled wallet, or a locally encrypted session EOA in fallback). That is the Circle integration, not self-custody.
 - **Testnet only**, with a 15 USDC seeded vault and deliberately loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000` — one address can reserve 80% of TVL). Sized for a demo, not for underwriting.
 
-### Known bugs — fix identified, pending redeploy
+### Self-audit: found and fixed
 
-- **Quotes are cheap to move.** `MicroMarket.applyTradeImpact()` floors price impact at `MIN_IMPACT` (1.5%) for *any* non-zero stake, and there is no minimum ticket size on-chain, so a quote can be pinned to the 5.4% bound (5% mid × 1.08 overround) for a negligible cost. A real stake then quotes at ~18.5× on a ~50/50 event — enough to drain the seeded vault in one cycle. Fix: `MIN_USER_RISK_PER_TICKET` in `RiskLimits.sol` plus proportional (unfloored) impact. PoC: [`contracts/test/DustManipulation.t.sol`](./contracts/test/DustManipulation.t.sol).
-- **`resolve()` is callable from `observationStart`, not `observationEnd`.** The resolver key is the only thing enforcing that the full observation window elapses. One-line `require` change.
-- **LP share price is manipulable by direct transfer.** `LiquidityPool.deposit()` prices shares off `managedAssets()`, i.e. token balance, so a donation inflates share value (classic ERC-4626 donation vector).
+These issues were found in a self-audit, fixed on-chain, and covered by regression tests (`pnpm contracts:test` — **21** green).
+
+| Bug | Fix | Test |
+|-----|-----|------|
+| **Dust quote manipulation** — `MIN_IMPACT` floor moved price for any non-zero stake | `MIN_USER_RISK_PER_TICKET = 0.25 USDC` (`MIN_RISK`); impact is proportional (no floor) | [`DustManipulation.t.sol`](./contracts/test/DustManipulation.t.sol) `test_19` |
+| **`resolve()` before observation end** | `require(block.timestamp >= observationEnd)` | [`ObservationResolve.t.sol`](./contracts/test/ObservationResolve.t.sol) `test_20` |
+| **LP donation / ERC-4626 share inflation** | `internalAssets` ledger; share price ignores raw balance | [`DonationAttack.t.sol`](./contracts/test/DonationAttack.t.sol) `test_21` |
 
 ---
 
@@ -361,7 +383,7 @@ Testnet demo built for a hackathon. Two categories — deliberate scope choices,
 - Deployment addresses: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json)
 - Env template: [`.env.example`](.env.example)
 - External cron pinger (markets 24/7): [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md)
-- Contract tests: [`contracts/test/`](./contracts/test/) — 19 tests, `pnpm contracts:test`
+- Contract tests: [`contracts/test/`](./contracts/test/) — 21 tests, `pnpm contracts:test`
 - License: [`LICENSE`](./LICENSE) (MIT)
 
 ---

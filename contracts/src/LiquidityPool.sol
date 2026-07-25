@@ -7,6 +7,10 @@ interface IERC20LikeForPool {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
+/// @notice LP vault for Micro Boost reserves.
+/// @dev Share pricing uses `internalAssets` (accounting ledger), NOT raw token
+///      balance — so direct USDC donations cannot inflate share price (ERC-4626
+///      donation attack).
 contract LiquidityPool {
     IERC20LikeForPool public immutable usdc;
     address public owner;
@@ -14,6 +18,8 @@ contract LiquidityPool {
     address public feeRouter;
 
     uint256 public totalShares;
+    /// @dev Accounting base for share price / managedAssets. Ignores donated tokens.
+    uint256 public internalAssets;
     uint256 public reservedAssets;
     uint256 public lockedUserRisk;
     uint256 public totalFeesEarned;
@@ -63,16 +69,18 @@ contract LiquidityPool {
         emit FeeRouterSet(feeRouter_);
     }
 
+    /// @notice Raw token balance — debug / dashboard only. Do not use for share pricing.
     function totalAssets() public view returns (uint256) {
         return usdc.balanceOf(address(this));
     }
 
+    /// @notice LP-owned assets (excludes locked user risk). Based on internal ledger.
     function managedAssets() public view returns (uint256) {
-        return totalAssets() - lockedUserRisk;
+        return internalAssets - lockedUserRisk;
     }
 
     function availableAssets() public view returns (uint256) {
-        return totalAssets() - lockedUserRisk - reservedAssets;
+        return internalAssets - lockedUserRisk - reservedAssets;
     }
 
     function deposit(uint256 amount) external returns (uint256 mintedShares) {
@@ -87,6 +95,7 @@ contract LiquidityPool {
         require(mintedShares > 0, "ZERO_SHARES");
         sharesOf[msg.sender] += mintedShares;
         totalShares += mintedShares;
+        internalAssets += amount;
         emit Deposited(msg.sender, amount, mintedShares);
     }
 
@@ -97,6 +106,7 @@ contract LiquidityPool {
         require(availableAssets() >= assets, "RESERVED");
         sharesOf[msg.sender] -= shares;
         totalShares -= shares;
+        internalAssets -= assets;
         require(usdc.transfer(msg.sender, assets), "TRANSFER");
         emit Withdrawn(msg.sender, assets, shares);
     }
@@ -109,6 +119,9 @@ contract LiquidityPool {
 
     function lockUserRisk(uint256 amount) external onlyEngine {
         lockedUserRisk += amount;
+        // User stake sits on the pool but is not LP equity — still counted in internalAssets
+        // because buyTicket transfers risk USDC into the pool.
+        internalAssets += amount;
         emit UserRiskLocked(amount);
     }
 
@@ -126,6 +139,10 @@ contract LiquidityPool {
         require(lockedUserRisk >= riskAmount, "RISK");
         reservedAssets -= reservedAmount;
         lockedUserRisk -= riskAmount;
+        // Net LP loss on a win is payout - risk (the reserved amount).
+        // risk was already in internalAssets via lockUserRisk; remove full payout.
+        require(internalAssets >= payout, "INTERNAL");
+        internalAssets -= payout;
         require(usdc.transfer(to, payout), "TRANSFER");
         emit PayoutPaid(to, payout, reservedAmount, riskAmount);
     }
@@ -135,6 +152,7 @@ contract LiquidityPool {
         require(lockedUserRisk >= riskAmount, "RISK");
         reservedAssets -= reservedAmount;
         lockedUserRisk -= riskAmount;
+        // Losing user stake stays as LP equity (already in internalAssets from lockUserRisk).
         totalUserLossesReceived += riskAmount;
         emit LossSettled(riskAmount, reservedAmount);
     }
@@ -144,11 +162,15 @@ contract LiquidityPool {
         require(lockedUserRisk >= riskAmount, "RISK");
         reservedAssets -= reservedAmount;
         lockedUserRisk -= riskAmount;
+        require(internalAssets >= riskAmount, "INTERNAL");
+        internalAssets -= riskAmount;
         require(usdc.transfer(to, riskAmount), "TRANSFER");
         emit RiskRefunded(to, riskAmount, reservedAmount);
     }
 
     function creditFee(uint256 amount) external onlyFeeRouter {
+        // FeeRouter transfers USDC into the pool before calling this.
+        internalAssets += amount;
         totalFeesEarned += amount;
         emit FeesCredited(amount);
     }

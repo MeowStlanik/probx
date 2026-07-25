@@ -16,7 +16,8 @@
     "deploy:arc": "node scripts/deploy-arc.mjs",
     "demo:markets": "node scripts/arc-demo-markets.mjs",
     "smoke:arc": "node scripts/arc-smoke-test.mjs",
-    "rpc:arc": "node scripts/arc-rpc-preflight.mjs"
+    "rpc:arc": "node scripts/arc-rpc-preflight.mjs",
+    "pack:release": "bash scripts/pack-release.sh"
   },
   "keywords": [
     "prediction-market",

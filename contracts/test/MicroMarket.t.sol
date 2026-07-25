@@ -17,6 +17,7 @@ contract MicroMarketTest is MiniTest, TestHarness {
         vm.warp(20);
         market.lock();
         assertEq(uint256(market.status()), uint256(MicroMarket.Status.Locked), "not locked");
+        vm.warp(50); // observationEnd
         market.resolve(1);
         assertEq(uint256(market.status()), uint256(MicroMarket.Status.Resolved), "not resolved");
         market.archive();

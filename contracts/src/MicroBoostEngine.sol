@@ -104,6 +104,9 @@ contract MicroBoostEngine {
         if (riskAmount == 0) {
             return _rejectedQuote("ZERO_RISK");
         }
+        if (riskAmount < RiskLimits.MIN_USER_RISK_PER_TICKET) {
+            return _rejectedQuote("MIN_RISK");
+        }
         if (riskAmount > RiskLimits.MAX_USER_RISK_PER_TICKET) {
             return _rejectedQuote("RISK_CAP");
         }

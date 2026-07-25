@@ -7,6 +7,13 @@ import { issueSignedSession, isLegacyOpaqueToken, verifySignedSession } from "./
 const BLOCKCHAIN = "ARC-TESTNET" as const;
 // USDC (native precompile) on Arc testnet — used for Circle token transfers.
 const ARC_USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
+/**
+ * Circle system token ids on ARC-TESTNET (from getWalletTokenBalance).
+ * createTransaction with walletId cannot combine tokenAddress+blockchain (SDK
+ * union types); use tokenId instead or "API parameter invalid".
+ */
+const ARC_USDC_TOKEN_ID_ERC20 = "ef87c8c3-85de-598a-af50-c5135eecfa74";
+const ARC_USDC_TOKEN_ID_NATIVE = "15dc2b5d-0994-58b0-bf8c-3a0501148ee8";
 
 type CircleMapRecord = {
   email: string;
@@ -378,23 +385,84 @@ export async function transferUsdcViaCircle(body: {
     throw new Error("Enter a valid amount greater than 0.");
   }
 
+  // Arc gas is USDC: never sweep 100% of the balance or the tx cannot pay gas.
+  let sendAmount = amount;
+  const amountNum = Number(amount);
+  if (Number.isFinite(amountNum) && amountNum > 2) {
+    const buffered = Math.floor((amountNum - 1) * 1e6) / 1e6;
+    if (buffered > 0) sendAmount = String(buffered);
+  }
+
   let created: Awaited<ReturnType<CircleClient["createTransaction"]>>;
-  try {
-    created = await client.createTransaction({
-      walletId: record.walletId,
-      tokenAddress: ARC_USDC_ADDRESS,
-      destinationAddress: destination,
-      amount: [amount],
-      fee: { type: "level", config: { feeLevel: "MEDIUM" } }
-    });
-  } catch (error) {
-    const detail =
-      error && typeof error === "object" && "response" in error
-        ? JSON.stringify((error as { response?: { data?: unknown } }).response?.data ?? {})
-        : error instanceof Error
-          ? error.message
-          : String(error);
-    throw new Error(`Circle transfer failed: ${detail || "unknown"}. Wallet needs Arc USDC for gas.`);
+  const fee = { type: "level" as const, config: { feeLevel: "MEDIUM" as const } };
+  const attempts: Array<() => Promise<Awaited<ReturnType<CircleClient["createTransaction"]>>>> = [
+    // 1) ERC-20 USDC tokenId (preferred with walletId — no blockchain field clash)
+    () =>
+      client.createTransaction({
+        walletId: record.walletId,
+        tokenId: ARC_USDC_TOKEN_ID_ERC20,
+        destinationAddress: destination,
+        amount: [sendAmount],
+        fee
+      }),
+    // 2) Native Arc USDC tokenId
+    () =>
+      client.createTransaction({
+        walletId: record.walletId,
+        tokenId: ARC_USDC_TOKEN_ID_NATIVE,
+        destinationAddress: destination,
+        amount: [sendAmount],
+        fee
+      }),
+    // 3) Contract execution: USDC.transfer(to, amount)
+    async () => {
+      const amountUnits = BigInt(Math.round(Number(sendAmount) * 1e6));
+      const callData = encodeFunctionData({
+        abi: [
+          {
+            type: "function",
+            name: "transfer",
+            stateMutability: "nonpayable",
+            inputs: [
+              { name: "to", type: "address" },
+              { name: "amount", type: "uint256" }
+            ],
+            outputs: [{ name: "", type: "bool" }]
+          }
+        ] as const,
+        functionName: "transfer",
+        args: [destination, amountUnits]
+      });
+      return (await client.createContractExecutionTransaction({
+        walletId: record.walletId,
+        contractAddress: ARC_USDC_ADDRESS,
+        callData,
+        fee
+      })) as Awaited<ReturnType<CircleClient["createTransaction"]>>;
+    }
+  ];
+
+  const errors: string[] = [];
+  created = undefined as unknown as Awaited<ReturnType<CircleClient["createTransaction"]>>;
+  for (const attempt of attempts) {
+    try {
+      created = await attempt();
+      break;
+    } catch (error) {
+      const detail =
+        error && typeof error === "object" && "response" in error
+          ? JSON.stringify((error as { response?: { data?: unknown } }).response?.data ?? {})
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      errors.push(detail || "unknown");
+    }
+  }
+  if (!created) {
+    throw new Error(
+      `Circle transfer failed after ${attempts.length} strategies: ${errors.join(" | ")}. ` +
+        `On Arc, leave ~1 USDC for gas (tried ${sendAmount}).`
+    );
   }
 
   const circleTxId = (created.data as { id?: string } | undefined)?.id;

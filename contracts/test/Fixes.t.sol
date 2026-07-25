@@ -87,7 +87,7 @@ contract FixesTest is MiniTest, TestHarness {
         uint256 ticketId = user.buy(address(market), 1, 100 * 1e6, 20_000);
         PositionTicket.Ticket memory position = ticket.getTicket(ticketId);
 
-        vm.warp(20);
+        vm.warp(50);
         market.resolve(1);
         engine.settleTicket(ticketId);
 

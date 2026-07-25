@@ -14,7 +14,7 @@ contract SettlementTest is MiniTest, TestHarness {
         _createOpenMarket(400_000);
         uint256 ticketId = user.buy(address(market), 1, 100 * 1e6, 30_000);
 
-        vm.warp(20);
+        vm.warp(50);
         market.resolve(1);
         engine.settleTicket(ticketId);
 
@@ -36,7 +36,7 @@ contract SettlementTest is MiniTest, TestHarness {
         _createOpenMarket(400_000);
         uint256 ticketId = user.buy(address(market), 1, 100 * 1e6, 30_000);
 
-        vm.warp(20);
+        vm.warp(50);
         market.resolve(2);
         engine.settleTicket(ticketId);
 
@@ -68,7 +68,7 @@ contract SettlementTest is MiniTest, TestHarness {
         uint256 firstTicketId = user.buy(address(market), 1, 100 * 1e6, 20_000);
         uint256 secondTicketId = user.buy(address(market), 2, 50 * 1e6, 10_000);
 
-        vm.warp(20);
+        vm.warp(50);
         market.resolve(1);
         uint256[] memory ids = new uint256[](2);
         ids[0] = firstTicketId;

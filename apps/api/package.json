@@ -11,6 +11,8 @@
     "test": "tsx src/services/quoteEngine.test.ts"
   },
   "dependencies": {
+    "@circle-fin/adapter-viem-v2": "1.14.0",
+    "@circle-fin/app-kit": "1.10.0",
     "@circle-fin/developer-controlled-wallets": "^10.8.0",
     "nodemailer": "^9.0.3",
     "viem": "^2.21.53"

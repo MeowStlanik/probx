@@ -10,6 +10,8 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@circle-fin/adapter-viem-v2": "1.14.0",
+    "@circle-fin/app-kit": "1.10.0",
     "@circle-fin/developer-controlled-wallets": "^10.8.0",
     "driver.js": "^1.7.0",
     "lucide-react": "^0.468.0",

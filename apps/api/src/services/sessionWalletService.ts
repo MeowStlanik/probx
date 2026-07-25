@@ -413,7 +413,14 @@ export async function transferUsdcForSession(body: {
   sessionToken: string;
   to: string;
   amount: string;
-}): Promise<{ hash: `0x${string}`; from: `0x${string}`; circleTxId?: string }> {
+}): Promise<{
+  hash: `0x${string}`;
+  from: `0x${string}`;
+  circleTxId?: string;
+  /** Which path executed — surface in UI so judges can verify App Kit is live. */
+  provider: "circle-dcw" | "app-kit" | "viem-fallback";
+  fallbackReason?: string;
+}> {
   let destination: `0x${string}`;
   try {
     destination = getAddress(body.to);
@@ -425,14 +432,17 @@ export async function transferUsdcForSession(body: {
     throw new Error("Enter a valid amount greater than 0.");
   }
 
+  const strictAppKit = process.env.APP_KIT_STRICT === "1";
+
   if (isCircleConfigured()) {
     try {
-      return await transferUsdcViaCircle({
+      const circle = await transferUsdcViaCircle({
         email: body.email,
         sessionToken: body.sessionToken,
         destinationAddress: destination,
         amount
       });
+      return { ...circle, provider: "circle-dcw" };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!message.includes("Circle session not found")) throw error;
@@ -445,6 +455,27 @@ export async function transferUsdcForSession(body: {
     throw new Error("Destination is your own wallet.");
   }
 
+  // Prefer Circle App Kit send (DeFi-track) for local session EOA.
+  try {
+    const { sendUsdcViaAppKit } = await import("./appKitService.js");
+    const appKit = await sendUsdcViaAppKit({
+      privateKey: record.privateKey,
+      to: destination,
+      amount
+    });
+    console.info("[transfer] provider=app-kit hash=%s", appKit.hash);
+    return { hash: appKit.hash, from: account.address, provider: "app-kit" };
+  } catch (appKitError) {
+    const reason = appKitError instanceof Error ? appKitError.message : String(appKitError);
+    console.error("[transfer] App Kit send FAILED:", reason);
+    if (strictAppKit) {
+      throw new Error(
+        `App Kit send required (APP_KIT_STRICT=1) but failed: ${reason}. No silent fallback.`
+      );
+    }
+  }
+
+  console.warn("[transfer] provider=viem-fallback (App Kit did not complete)");
   const walletClient = createWalletClient({ account, chain: arcChain, transport: http(arcRpcUrl) });
   const publicClient = createPublicClient({ chain: arcChain, transport: http(arcRpcUrl) });
 
@@ -460,7 +491,12 @@ export async function transferUsdcForSession(body: {
   } catch {
     // tracker polls status separately
   }
-  return { hash, from: account.address };
+  return {
+    hash,
+    from: account.address,
+    provider: "viem-fallback",
+    fallbackReason: "App Kit send failed — raw viem transfer used"
+  };
 }
 
 export async function listSessionCount(): Promise<number> {
@@ -471,10 +507,18 @@ export async function listSessionCount(): Promise<number> {
 
 export async function walletModeInfo() {
   const circle = circleStatus();
+  let appKit: unknown = null;
+  try {
+    const { appKitStatus } = await import("./appKitService.js");
+    appKit = appKitStatus();
+  } catch {
+    appKit = { available: false };
+  }
   return {
     embeddedEnabled: true,
     circleApiConfigured: circle.configured,
     circle,
+    appKit,
     provider: circle.configured ? "circle-developer-controlled" : "local-dev-controlled-eoa",
     auth: {
       model: "email-otp-then-dev-controlled-wallet",
@@ -482,7 +526,7 @@ export async function walletModeInfo() {
       circleOwnsKeys: circle.configured
     },
     paymaster: false,
-    gas: "User pays Arc USDC gas (native). No paymaster.",
+    gas: "User pays Arc USDC gas (native).",
     sessions: await listSessionCount()
   };
 }

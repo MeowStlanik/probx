@@ -63,6 +63,9 @@ function estimatePayoutUsdc(stake: number, boost: number, price: number): number
 
 function humanQuoteReason(reason: string | undefined, stake: number, maxStake: number): string {
   const r = (reason || "").toUpperCase();
+  if (r.includes("MIN_RISK") || stake < 0.25) {
+    return "Minimum stake is 0.25 USDC per ticket.";
+  }
   if (r.includes("RISK_CAP") || stake > maxStake) {
     return `Max stake is ${maxStake} USDC per ticket. Lower stake to continue.`;
   }
@@ -137,7 +140,8 @@ export function MarketDetailView({
     0.05,
     Math.min(0.95, side === "YES" ? (market?.quotedYes ?? 0.5) : 1 - (market?.quotedYes ?? 0.5))
   );
-  // On-chain max stake is 100 USDC (RiskLimits.MAX_USER_RISK_PER_TICKET).
+  // On-chain stake bounds (RiskLimits).
+  const MIN_STAKE_USDC = 0.25;
   const MAX_STAKE_USDC = 100;
   // Prefer engine quote only when accepted with real debit — rejected quotes return zeros
   // (RISK_CAP / BOOST_CAP) and must not wipe the local fee/payout estimate.
@@ -160,9 +164,11 @@ export function MarketDetailView({
     stakeN > 0;
   const rejectHint = quoteRejected
     ? humanQuoteReason(liveQuote!.reason, stakeN, MAX_STAKE_USDC)
-    : stakeN > MAX_STAKE_USDC
-      ? `Max stake is ${MAX_STAKE_USDC} USDC per ticket (protocol RISK_CAP).`
-      : null;
+    : stakeN > 0 && stakeN < MIN_STAKE_USDC
+      ? `Minimum stake is ${MIN_STAKE_USDC} USDC per ticket.`
+      : stakeN > MAX_STAKE_USDC
+        ? `Max stake is ${MAX_STAKE_USDC} USDC per ticket (protocol RISK_CAP).`
+        : null;
 
   useEffect(() => {
     // Keep boost within market max when market loads / changes

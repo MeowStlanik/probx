@@ -8,6 +8,7 @@ import { AmountInput } from "../components/AmountInput";
 import { Button } from "../components/Button";
 
 export type LpAction = "approve" | "deposit" | "withdraw";
+export type LpAnyChainSource = "Base_Sepolia" | "Ethereum_Sepolia";
 
 interface Props {
   tvl: string;
@@ -20,9 +21,11 @@ interface Props {
   /** Current USDC allowance to the vault (human units). */
   allowanceUsdc: number;
   onAction: (action: LpAction, amount: number) => Promise<string>;
+  /** Multichain fund → Arc → optional vault deposit via App Kit. */
+  onAnyChainDeposit?: (source: LpAnyChainSource, amount: number) => Promise<string>;
 }
 
-// /lp — vault stats, recent deposits, deposit/withdraw panel.
+// /lp — vault stats, recent deposits, deposit/withdraw + App Kit multichain fund.
 export function LPView({
   tvl,
   reserved,
@@ -32,10 +35,12 @@ export function LPView({
   apy,
   yourShare,
   allowanceUsdc,
-  onAction
+  onAction,
+  onAnyChainDeposit
 }: Props) {
-  const [tab, setTab] = useState<"deposit" | "withdraw">("deposit");
+  const [tab, setTab] = useState<"deposit" | "withdraw" | "anychain">("deposit");
   const [amount, setAmount] = useState("1");
+  const [anySource, setAnySource] = useState<LpAnyChainSource>("Base_Sepolia");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -45,6 +50,7 @@ export function LPView({
   const buttonLabel = useMemo(() => {
     if (busy) return "Working…";
     if (tab === "withdraw") return "Withdraw USDC";
+    if (tab === "anychain") return "Bridge → Arc & deposit";
     if (needsApproval) return "Approve USDC";
     return "Deposit USDC";
   }, [tab, needsApproval, busy]);
@@ -72,7 +78,8 @@ export function LPView({
     <main style={{ maxWidth: theme.layout.maxWidth, margin: "0 auto", padding: "40px 24px 72px", flex: 1 }}>
       <h1 style={{ fontSize: 26, fontWeight: 600, color: theme.color.ink }}>LP vault</h1>
       <p style={{ fontSize: 13.5, color: theme.color.muted, margin: "6px 0 28px" }}>
-        Liquidity backing every ticket&apos;s payout on Arc.
+        Liquidity underwriting every Micro Boost ticket on Arc. Deposit on Arc or fund from any CCTP chain via{" "}
+        <strong>Circle App Kit</strong>.
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16 }}>
@@ -117,7 +124,13 @@ export function LPView({
           }}
         >
           <div style={{ display: "flex", gap: 6, background: theme.color.tint, borderRadius: 9, padding: 4 }}>
-            {(["deposit", "withdraw"] as const).map((t) => (
+            {(
+              [
+                ["deposit", "Deposit"],
+                ["withdraw", "Withdraw"],
+                ["anychain", "Any chain"]
+              ] as const
+            ).map(([t, label]) => (
               <button
                 key={t}
                 type="button"
@@ -130,7 +143,7 @@ export function LPView({
                   border: "none",
                   borderRadius: 7,
                   padding: 9,
-                  fontSize: 12.5,
+                  fontSize: 12,
                   fontWeight: 600,
                   cursor: "pointer",
                   fontFamily: theme.font.sans,
@@ -139,10 +152,41 @@ export function LPView({
                   boxShadow: tab === t ? "0 1px 2px rgba(16,32,64,.08)" : "none"
                 }}
               >
-                {t === "deposit" ? "Deposit" : "Withdraw"}
+                {label}
               </button>
             ))}
           </div>
+
+          {tab === "anychain" ? (
+            <>
+              <p style={{ margin: "14px 0 0", fontSize: 12.5, color: theme.color.muted, lineHeight: 1.45 }}>
+                Uses <strong>Circle App Kit</strong> (Unified Balance when available, else CCTP bridge) to move USDC
+                onto Arc, then deposits into this vault. Requires a browser wallet on the source chain.
+              </p>
+              <label
+                style={{ display: "block", fontSize: 12, color: theme.color.muted, margin: "14px 0 6px", fontWeight: 500 }}
+              >
+                Source chain
+              </label>
+              <select
+                value={anySource}
+                onChange={(e) => setAnySource(e.target.value as LpAnyChainSource)}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: `1px solid ${theme.color.border}`,
+                  fontSize: 13,
+                  fontFamily: theme.font.sans,
+                  background: "#fff"
+                }}
+              >
+                <option value="Base_Sepolia">Base Sepolia</option>
+                <option value="Ethereum_Sepolia">Ethereum Sepolia</option>
+              </select>
+            </>
+          ) : null}
+
           <label style={{ display: "block", fontSize: 12, color: theme.color.muted, margin: "18px 0 6px", fontWeight: 500 }}>
             Amount
           </label>
@@ -176,12 +220,20 @@ export function LPView({
           ) : null}
           <Button
             fullWidth
-            disabled={busy}
+            disabled={busy || (tab === "anychain" && !onAnyChainDeposit)}
             style={{ marginTop: 16 }}
             onClick={async () => {
               setBusy(true);
               setMessage(null);
               try {
+                if (tab === "anychain") {
+                  if (!onAnyChainDeposit) {
+                    setMessage("Multichain deposit is not wired.");
+                    return;
+                  }
+                  setMessage(await onAnyChainDeposit(anySource, amountNum));
+                  return;
+                }
                 const action: LpAction =
                   tab === "withdraw" ? "withdraw" : needsApproval ? "approve" : "deposit";
                 setMessage(await onAction(action, amountNum));
@@ -201,7 +253,8 @@ export function LPView({
                 border: `1px solid ${isError ? theme.color.noBorder : theme.color.yesBorder}`,
                 borderRadius: 10,
                 padding: "10px 12px",
-                fontSize: 12.5
+                fontSize: 12.5,
+                whiteSpace: "pre-wrap"
               }}
             >
               {message}

@@ -3,6 +3,9 @@ pragma solidity ^0.8.24;
 
 library RiskLimits {
     uint256 internal constant BPS = 10_000;
+    /// @dev Minimum stake per ticket (0.25 USDC). Prevents dust trades that only
+    ///      hit the price-impact floor and manipulate the book for free.
+    uint256 internal constant MIN_USER_RISK_PER_TICKET = 250_000; // 0.25 USDC
     uint256 internal constant MAX_USER_RISK_PER_TICKET = 100 * 1e6;
     uint256 internal constant MAX_PAYOUT_PER_TICKET = 2_500 * 1e6;
     /// @dev Hard protocol cap (5x). Economic boost for a given book is lower:

@@ -16,7 +16,8 @@ contract MicroMarket {
     uint256 public constant OVERROUND_BPS = 10_800; // 108%
     /// @dev Small virtual book so 0.1 USDC demo trades move odds by ~1–2 percentage points.
     uint256 public constant IMPACT_LIQUIDITY = 2e6; // 2 USDC
-    uint256 public constant MIN_IMPACT = 15_000; // 1.5%
+    /// @dev Upper bound only — impact is strictly proportional to stake (no floor).
+    ///      Dust manipulation was closed via MIN_USER_RISK_PER_TICKET, not a price floor.
     uint256 public constant MAX_IMPACT = 120_000; // 12%
 
     enum Status {
@@ -140,7 +141,8 @@ contract MicroMarket {
             status = Status.Locked;
             emit Locked(uint64(block.timestamp));
         }
-        require(block.timestamp >= observationStart, "OBSERVATION_NOT_STARTED");
+        // Must wait for the full observation window — not just its start.
+        require(block.timestamp >= observationEnd, "OBSERVATION_NOT_ENDED");
         winningOutcome = outcome;
         status = Status.Resolved;
         emit Resolved(outcome);
@@ -176,9 +178,8 @@ contract MicroMarket {
         require(riskAmount > 0, "ZERO_RISK");
 
         uint256 depth = IMPACT_LIQUIDITY + totalYesRisk + totalNoRisk;
-        // risk/(2*depth) of full scale — with 2 USDC book, 0.1 USDC ≈ 2.5% before clamps.
+        // risk/(2*depth) of full scale — strictly proportional (no MIN_IMPACT floor).
         uint256 impact = (riskAmount * PRICE_SCALE) / (depth * 2);
-        if (impact < MIN_IMPACT) impact = MIN_IMPACT;
         if (impact > MAX_IMPACT) impact = MAX_IMPACT;
 
         // Recover fair mid from quoted YES (undo overround), apply impact on mid, re-quote.
