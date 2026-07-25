@@ -199,31 +199,143 @@ export function LpShell({
     source: LpAnyChainSource;
     amount: string;
     recipientAddress: string;
+    sourceWalletAddress?: string;
     depositHash?: string | null;
   } | null>(null);
+
+  const pendingFromStorage = useCallback(
+    (p: {
+      source: LpAnyChainSource | string;
+      amount: string;
+      recipientAddress: string;
+      sourceWalletAddress?: string;
+      depositHash?: string | null;
+    }) => ({
+      source: p.source as LpAnyChainSource,
+      amount: p.amount,
+      recipientAddress: p.recipientAddress,
+      sourceWalletAddress: p.sourceWalletAddress,
+      depositHash: p.depositHash
+    }),
+    []
+  );
 
   useEffect(() => {
     void import("@/lib/appKit").then(({ loadPendingUbSpend }) => {
       const p = loadPendingUbSpend();
       if (!p) return;
-      setPendingUbSpend({
-        source: p.source,
-        amount: p.amount,
-        recipientAddress: p.recipientAddress,
-        depositHash: p.depositHash
-      });
+      setPendingUbSpend(pendingFromStorage(p));
     });
-  }, []);
+  }, [pendingFromStorage]);
 
+  /**
+   * Approve + deposit using live on-chain reads (never stale React state).
+   * Polls Arc USDC balance after bridge/spend because mint can lag a few seconds.
+   */
   const finishVaultAfterFund = useCallback(
     async (amount: number, fundMode: string) => {
+      if (!address) return "Connect wallet in the header first.";
+      const assets = parseUnits(String(amount || 0), 6);
+      if (assets <= 0n) return "Enter an amount greater than zero.";
+
       await ensureArcChain();
+      const walletClient = getWalletClient();
+      if (!walletClient) return "Wallet provider unavailable.";
+
+      const usdc = getAddress(arcDeployment.usdc);
+      const pool = getAddress(arcDeployment.liquidityPool);
+
+      // Poll until mint lands (or soft timeout with a clear message).
+      const maxAttempts = 18; // ~45s at 2.5s
+      const delayMs = 2500;
+      let balanceNow = 0n;
+      for (let i = 0; i < maxAttempts; i++) {
+        balanceNow = (await publicClient.readContract({
+          address: usdc,
+          abi: usdcAbi,
+          functionName: "balanceOf",
+          args: [address]
+        })) as bigint;
+        if (balanceNow >= assets) break;
+        if (i < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+      }
+
+      if (balanceNow < assets) {
+        await refresh();
+        return (
+          `⚡ via Circle App Kit (${fundMode}) → Arc OK, but vault deposit paused: ` +
+          `USDC has not arrived on Arc yet (have ${formatUnits(balanceNow, 6)}, need ${amount}). ` +
+          `Wait a moment, then deposit from the Deposit tab.`
+        );
+      }
+
+      let allowanceNow = (await publicClient.readContract({
+        address: usdc,
+        abi: usdcAbi,
+        functionName: "allowance",
+        args: [address, pool]
+      })) as bigint;
+
+      const steps: string[] = [];
+
+      if (allowanceNow < assets) {
+        const approveHash = await walletClient.writeContract({
+          address: usdc,
+          abi: usdcAbi,
+          functionName: "approve",
+          args: [pool, assets]
+        });
+        trackTx({ hash: approveHash, kind: "approve", label: `Approve ${amount} USDC for LP` });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        steps.push(`Approved ${amount} USDC`);
+        allowanceNow = (await publicClient.readContract({
+          address: usdc,
+          abi: usdcAbi,
+          functionName: "allowance",
+          args: [address, pool]
+        })) as bigint;
+        if (allowanceNow < assets) {
+          await refresh();
+          return `Approve mined but allowance still low — try Deposit USDC manually.`;
+        }
+      } else {
+        steps.push("Allowance already sufficient");
+      }
+
+      // Re-read balance right before deposit (still no React state)
+      balanceNow = (await publicClient.readContract({
+        address: usdc,
+        abi: usdcAbi,
+        functionName: "balanceOf",
+        args: [address]
+      })) as bigint;
+      if (balanceNow < assets) {
+        await refresh();
+        return "USDC balance dropped before deposit — check wallet and try Deposit tab.";
+      }
+
+      const depositHash = await walletClient.writeContract({
+        address: pool,
+        abi: poolAbi,
+        functionName: "deposit",
+        args: [assets]
+      });
+      trackTx({
+        hash: depositHash,
+        kind: "deposit",
+        label: `Deposit ${amount} USDC to LP`,
+        amountUsdc: String(amount)
+      });
+      await publicClient.waitForTransactionReceipt({ hash: depositHash });
+      recordLocalLpAction({ kind: "Deposit", amountUsdc: amount, tx: depositHash });
+      steps.push(`Deposited ${amount} USDC to the LP vault`);
       await refresh();
-      const ap = await onAction("approve", amount);
-      const dep = await onAction("deposit", amount);
-      return `⚡ via Circle App Kit (${fundMode}) → Arc → vault deposit.\n${ap}\n${dep}`;
+      await refreshLedger();
+      return `⚡ via Circle App Kit (${fundMode}) → Arc → vault deposit.\n${steps.join("\n")}`;
     },
-    [ensureArcChain, onAction, refresh]
+    [address, ensureArcChain, getWalletClient, publicClient, refresh, refreshLedger, trackTx]
   );
 
   const onAnyChainDeposit = useCallback(
@@ -246,28 +358,15 @@ export function LpShell({
       } catch (error) {
         const { UbSpendPendingError, loadPendingUbSpend } = await import("@/lib/appKit");
         if (error instanceof UbSpendPendingError) {
-          setPendingUbSpend({
-            source: error.pending.source,
-            amount: error.pending.amount,
-            recipientAddress: error.pending.recipientAddress,
-            depositHash: error.pending.depositHash
-          });
+          setPendingUbSpend(pendingFromStorage(error.pending));
           return error.message;
         }
-        // Re-hydrate from storage if another code path persisted it
         const pending = loadPendingUbSpend();
-        if (pending) {
-          setPendingUbSpend({
-            source: pending.source,
-            amount: pending.amount,
-            recipientAddress: pending.recipientAddress,
-            depositHash: pending.depositHash
-          });
-        }
+        if (pending) setPendingUbSpend(pendingFromStorage(pending));
         return readableWalletError(error);
       }
     },
-    [address, finishVaultAfterFund]
+    [address, finishVaultAfterFund, pendingFromStorage]
   );
 
   const onCompleteUbSpend = useCallback(async () => {
@@ -279,7 +378,8 @@ export function LpShell({
       const fund = await appKitSpendUnifiedBalance({
         source: pending.source,
         amount: pending.amount,
-        recipientAddress: pending.recipientAddress || address
+        recipientAddress: pending.recipientAddress || address,
+        sourceWalletAddress: pending.sourceWalletAddress
       });
       setPendingUbSpend(null);
       const amountNum = Number(pending.amount);

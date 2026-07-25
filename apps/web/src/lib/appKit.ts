@@ -40,6 +40,23 @@ async function browserAdapter() {
   return createViemAdapterFromProvider({ provider: window.ethereum as never });
 }
 
+/** Active injected wallet address (source-side MetaMask for UB deposit/spend). */
+export async function getBrowserWalletAddress(): Promise<string> {
+  if (typeof window === "undefined" || !window.ethereum) {
+    throw new Error("Browser wallet (MetaMask / injected) is required for App Kit.");
+  }
+  const accounts = (await window.ethereum.request({ method: "eth_requestAccounts" })) as string[];
+  const addr = (accounts[0] || "").trim();
+  if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) {
+    throw new Error("Connect the browser wallet that funded the Unified Balance deposit.");
+  }
+  return addr;
+}
+
+function sameAddress(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
 function pickHash(result: unknown): `0x${string}` | null {
   if (!result || typeof result !== "object") return null;
   const r = result as Record<string, unknown>;
@@ -149,6 +166,8 @@ export type PendingUbSpend = {
   source: AppKitSourceChain;
   amount: string;
   recipientAddress: string;
+  /** Browser wallet that signed the UB deposit (must match on retry). Optional on legacy entries. */
+  sourceWalletAddress?: string;
   depositHash: `0x${string}` | null;
   createdAt: number;
   purpose?: "lp" | "fund";
@@ -196,6 +215,21 @@ export function loadPendingUbSpend(): PendingUbSpend | null {
   }
 }
 
+/** Ensure the connected browser wallet is the one that deposited into Unified Balance. */
+export async function assertPendingSourceWallet(pending: PendingUbSpend): Promise<void> {
+  if (!pending.sourceWalletAddress) {
+    // Legacy entries without source wallet — still attempt, but warn via throw is too harsh
+    return;
+  }
+  const current = await getBrowserWalletAddress();
+  if (!sameAddress(current, pending.sourceWalletAddress)) {
+    throw new Error(
+      `Switch MetaMask to ${pending.sourceWalletAddress.slice(0, 8)}…${pending.sourceWalletAddress.slice(-4)} ` +
+        `(the wallet that deposited into Unified Balance). Currently connected: ${current.slice(0, 8)}…`
+    );
+  }
+}
+
 export function savePendingUbSpend(pending: PendingUbSpend): void {
   if (typeof window === "undefined") return;
   try {
@@ -219,9 +253,21 @@ export async function appKitSpendUnifiedBalance(params: {
   source: AppKitSourceChain;
   amount: string;
   recipientAddress: string;
+  /** If set, must match the connected browser wallet. */
+  sourceWalletAddress?: string;
   onProgress?: (msg: string) => void;
 }): Promise<UnifiedBalanceResult> {
   const recipientAddress = requireRecipientAddress(params.recipientAddress);
+  if (params.sourceWalletAddress) {
+    await assertPendingSourceWallet({
+      source: params.source,
+      amount: params.amount,
+      recipientAddress,
+      sourceWalletAddress: params.sourceWalletAddress,
+      depositHash: null,
+      createdAt: Date.now()
+    });
+  }
   const adapter = await browserAdapter();
   const k = kit();
   params.onProgress?.("Completing transfer — spending Unified Balance on Arc…");
@@ -265,6 +311,7 @@ export async function appKitUnifiedBalanceToArc(params: {
   onProgress?: (msg: string) => void;
 }): Promise<UnifiedBalanceResult> {
   const recipientAddress = requireRecipientAddress(params.recipientAddress);
+  const sourceWalletAddress = await getBrowserWalletAddress();
   const adapter = await browserAdapter();
   const k = kit();
   params.onProgress?.(`Unified Balance deposit on ${params.source}…`);
@@ -324,6 +371,7 @@ export async function appKitUnifiedBalanceToArc(params: {
       source: params.source,
       amount: params.amount,
       recipientAddress,
+      sourceWalletAddress,
       depositHash: pickHash(deposit),
       createdAt: Date.now(),
       purpose: params.purpose

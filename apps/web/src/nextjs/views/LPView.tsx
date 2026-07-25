@@ -15,6 +15,7 @@ export type PendingUbSpendUi = {
   source: LpAnyChainSource;
   amount: string;
   recipientAddress: string;
+  sourceWalletAddress?: string;
   depositHash?: string | null;
 };
 
@@ -191,6 +192,9 @@ export function LPView({
               <br />
               <span style={{ color: theme.color.muted, fontSize: 12 }}>
                 {pendingUbSpend.amount} USDC · {pendingUbSpend.source.replace("_", " ")}
+                {pendingUbSpend.sourceWalletAddress
+                  ? ` · source ${pendingUbSpend.sourceWalletAddress.slice(0, 6)}…${pendingUbSpend.sourceWalletAddress.slice(-4)}`
+                  : ""}
                 {pendingUbSpend.depositHash
                   ? ` · deposit ${pendingUbSpend.depositHash.slice(0, 10)}…`
                   : ""}
