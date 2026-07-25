@@ -219,22 +219,62 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     try {
       setStep("burn");
       setMessage("Server CCTP: burning Base Sepolia USDC from demo treasury → Arc…");
+      const body: Record<string, string> = {
+        mintTo,
+        amountUsdc: amount || "2"
+      };
+      if (sessionMode === "embedded" && sessionEmail) {
+        // Prefer session-bound mint; server validates email+token when present.
+        try {
+          const raw = sessionStorage.getItem("probx.wallet.embedded");
+          if (raw) {
+            const emb = JSON.parse(raw) as { email?: string; sessionToken?: string };
+            if (emb.email && emb.sessionToken) {
+              body.email = emb.email;
+              body.sessionToken = emb.sessionToken;
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       const response = await fetch(apiUrl("/api/cctp/demo-fund"), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mintTo, amountUsdc: amount || "2" })
+        body: JSON.stringify(body)
       });
       const payload = (await response.json()) as {
         error?: string;
         burnTxHash?: string;
         forwardTxHash?: string;
+        status?: string;
+        domain?: number;
       };
       if (!response.ok) throw new Error(payload.error || `Demo fund HTTP ${response.status}`);
       if (payload.burnTxHash) setBurnTx(payload.burnTxHash);
-      if (payload.forwardTxHash) setMintTx(payload.forwardTxHash);
+      let forwardHash = payload.forwardTxHash ?? null;
+      if (forwardHash) setMintTx(forwardHash);
+
+      // Burn returns immediately; poll status so we don't double-burn on timeout.
+      if (payload.burnTxHash && payload.status === "burned_pending_mint") {
+        setStep("attestation");
+        setMessage("Burn confirmed — waiting for Circle mint on Arc…");
+        const domain = payload.domain ?? 6;
+        const started = Date.now();
+        while (Date.now() - started < 5 * 60_000) {
+          const st = await pollCctpStatus(domain, payload.burnTxHash);
+          if (st.status === "forwarded" && st.forwardTxHash) {
+            forwardHash = st.forwardTxHash;
+            setMintTx(st.forwardTxHash);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 4000));
+        }
+      }
+
       setStep("done");
       setMessage(
-        payload.forwardTxHash
+        forwardHash
           ? "Demo CCTP complete — USDC minted on Arc. Keep a little for gas."
           : "Burn sent — mint may still finalize; refresh balance in a minute."
       );
@@ -245,7 +285,7 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [amount, mintTo, refreshBalance]);
+  }, [amount, mintTo, refreshBalance, sessionEmail, sessionMode]);
 
   const runFund = useCallback(async () => {
     if (!mintTo) {
@@ -343,7 +383,10 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         functionName: "approve",
         args: [sourceCfg.tokenMessengerV2 as `0x${string}`, totalBurn]
       });
-      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      {
+        const { waitSuccessfulReceipt } = await import("@/lib/txReceipt");
+        await waitSuccessfulReceipt(publicClient, approveHash);
+      }
 
       setStep("burn");
       setMessage(`Burning USDC → mint to ProbX Arc ${shortHex(mintTo)}…`);
@@ -363,7 +406,10 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         ]
       });
       setBurnTx(burnHash);
-      await publicClient.waitForTransactionReceipt({ hash: burnHash });
+      {
+        const { waitSuccessfulReceipt } = await import("@/lib/txReceipt");
+        await waitSuccessfulReceipt(publicClient, burnHash);
+      }
 
       setStep("attestation");
       setMessage("Waiting for Circle Forwarding Service mint on Arc…");

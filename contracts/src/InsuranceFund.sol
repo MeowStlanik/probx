@@ -10,9 +10,11 @@ contract InsuranceFund {
     IERC20LikeForInsurance public immutable usdc;
     address public owner;
     address public engine;
+    address public feeRouter;
     uint256 public totalFeesReceived;
 
     event EngineSet(address indexed engine);
+    event FeeRouterSet(address indexed feeRouter);
     event FeesReceived(address indexed sender, uint256 amount);
     event ShortfallCovered(address indexed to, uint256 amount);
     event Withdrawn(address indexed to, uint256 amount);
@@ -38,7 +40,15 @@ contract InsuranceFund {
         emit EngineSet(engine_);
     }
 
+    function setFeeRouter(address feeRouter_) external onlyOwner {
+        feeRouter = feeRouter_;
+        emit FeeRouterSet(feeRouter_);
+    }
+
+    /// @notice Accounting hook after FeeRouter has transferred USDC into this fund.
+    ///         Not public: prevents inflating totalFeesReceived without routing fees.
     function receiveFees(uint256 amount) external {
+        require(msg.sender == feeRouter || msg.sender == owner, "ONLY_FEE_ROUTER");
         totalFeesReceived += amount;
         emit FeesReceived(msg.sender, amount);
     }

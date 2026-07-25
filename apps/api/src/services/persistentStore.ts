@@ -147,3 +147,48 @@ export class NamespaceStore<V> {
     return Object.keys(this.readFile()).length;
   }
 }
+
+/**
+ * Distributed lock via Redis SET NX PX when KV is configured.
+ * Falls back to a process-local Map for single-instance dev.
+ */
+const localLocks = new Map<string, { token: string; expiresAt: number }>();
+
+export async function acquireLock(
+  key: string,
+  ttlMs: number,
+  token: string
+): Promise<boolean> {
+  const cfg = kvConfig();
+  if (cfg) {
+    // SET key token NX PX ttl
+    const result = await kvCommand<string | null>(cfg, [
+      "SET",
+      `lock:${key}`,
+      token,
+      "NX",
+      "PX",
+      String(ttlMs)
+    ]);
+    return result === "OK";
+  }
+  const now = Date.now();
+  const cur = localLocks.get(key);
+  if (cur && cur.expiresAt > now) return false;
+  localLocks.set(key, { token, expiresAt: now + ttlMs });
+  return true;
+}
+
+export async function releaseLock(key: string, token: string): Promise<void> {
+  const cfg = kvConfig();
+  if (cfg) {
+    // Simple delete if value matches (best-effort without Lua)
+    const current = await kvCommand<string | null>(cfg, ["GET", `lock:${key}`]);
+    if (current === token) {
+      await kvCommand(cfg, ["DEL", `lock:${key}`]);
+    }
+    return;
+  }
+  const cur = localLocks.get(key);
+  if (cur?.token === token) localLocks.delete(key);
+}

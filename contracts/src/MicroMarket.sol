@@ -154,8 +154,14 @@ contract MicroMarket {
         emit Cancelled(reason);
     }
 
+    /// @notice Hide a terminal market from listings. Blocked while any LP exposure remains
+    ///         so settleTicket can still run (Resolved/Cancelled/Archived all settle).
     function archive() external onlyOwner {
         require(status == Status.Resolved || status == Status.Cancelled, "NOT_FINAL");
+        // engine is MicroBoostEngine — marketHasNoExposure(address)
+        (bool ok, bytes memory data) =
+            engine.staticcall(abi.encodeWithSignature("marketHasNoExposure(address)", address(this)));
+        require(ok && data.length >= 32 && abi.decode(data, (bool)), "OPEN_TICKETS");
         status = Status.Archived;
         emit Archived();
     }

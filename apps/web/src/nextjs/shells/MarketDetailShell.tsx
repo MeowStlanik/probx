@@ -235,7 +235,8 @@ export function MarketDetailShell({
         args: [getAddress(arcDeployment.microBoostEngine), quote.totalDebit]
       });
       trackTx({ hash: approveHash, kind: "approve", label: "Approve USDC" });
-      await publicClient.waitForTransactionReceipt({ hash: approveHash, timeout: 120_000 });
+      const { waitSuccessfulReceipt } = await import("@/lib/txReceipt");
+      await waitSuccessfulReceipt(publicClient, approveHash, { timeout: 120_000 });
       const allw = await publicClient.readContract({
         address: getAddress(arcDeployment.usdc),
         abi: usdcAbi,
@@ -302,9 +303,11 @@ export function MarketDetailShell({
         args: [marketAddress, outcomeId, risk, boostBps]
       });
       trackTx({ hash, kind: "buy", label: `Buy ${side} · ${market.question}` });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
-      // Critical: broadcast hash ≠ success. Reverted buys used to show "Ticket confirmed".
-      if (receipt.status !== "success") {
+      const { waitSuccessfulReceipt } = await import("@/lib/txReceipt");
+      let receipt;
+      try {
+        receipt = await waitSuccessfulReceipt(publicClient, hash, { timeout: 120_000 });
+      } catch {
         throw new Error(
           `Transaction reverted on-chain (${hash.slice(0, 10)}…). ` +
             `Common causes: insufficient USDC, market already locked, or allowance too low. No ticket was minted.`

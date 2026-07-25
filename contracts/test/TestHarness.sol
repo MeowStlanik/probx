@@ -58,9 +58,11 @@ contract TestHarness {
         ticket = new PositionTicket();
         engine = new MicroBoostEngine(address(usdc), address(pool), address(feeRouter), address(ticket));
         factory = new MicroMarketFactory(address(engine), address(this));
+        engine.setMarketRegistry(address(factory));
         pool.setEngine(address(engine));
         pool.setFeeRouter(address(feeRouter));
         insuranceFund.setEngine(address(engine));
+        insuranceFund.setFeeRouter(address(feeRouter));
         ticket.setEngine(address(engine));
 
         if (lpAmount > 0) {

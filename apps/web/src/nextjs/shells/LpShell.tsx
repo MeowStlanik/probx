@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatUnits, getAddress, parseUnits } from "viem";
 import { fetchRecentLpLedger, recordLocalLpAction, type LpLedgerRow } from "@/lib/lpDeposits";
 import { arcDeployment, poolAbi, usdcAbi } from "@/lib/onchain";
+import { waitSuccessfulReceipt } from "@/lib/txReceipt";
 import { readableWalletError, useWallet } from "@/lib/wallet";
 import { moneyUsdc } from "../mapMarket";
 import { LPView, type LpAction, type LpAnyChainSource } from "../views/LPView";
@@ -53,12 +54,14 @@ export function LpShell({
         publicClient.readContract({ address: pool, abi: poolAbi, functionName: "totalShares" }),
         publicClient.readContract({ address: pool, abi: poolAbi, functionName: "managedAssets" })
       ]);
-      setTvl(Number(formatUnits(totalAssets, 6)));
+      // TVL = LP equity (managedAssets), not raw token balance (includes locked user risk / donations).
+      setTvl(Number(formatUnits(managedAssets, 6)));
       setReserved(Number(formatUnits(reservedAssets, 6)));
       setAvailable(Number(formatUnits(availableOnchain, 6)));
       setTotalShares(totalSh);
       setManaged(managedAssets);
       setAvailableAssets(availableOnchain);
+      void totalAssets; // raw contract balance available if needed later
 
       if (address) {
         const [sh, bal, allw] = await Promise.all([
@@ -134,7 +137,7 @@ export function LpShell({
             args: [getAddress(arcDeployment.liquidityPool), assets]
           });
           trackTx({ hash, kind: "approve", label: `Approve ${amount} USDC for LP` });
-          await publicClient.waitForTransactionReceipt({ hash });
+          await waitSuccessfulReceipt(publicClient, hash);
           await refresh();
           return `Approved ${amount} USDC — now press Deposit USDC.`;
         }
@@ -149,7 +152,7 @@ export function LpShell({
             args: [assets]
           });
           trackTx({ hash, kind: "deposit", label: `Deposit ${amount} USDC to LP`, amountUsdc: String(amount) });
-          await publicClient.waitForTransactionReceipt({ hash });
+          await waitSuccessfulReceipt(publicClient, hash);
           recordLocalLpAction({ kind: "Deposit", amountUsdc: amount, tx: hash });
           await refresh();
           await refreshLedger();
@@ -169,8 +172,8 @@ export function LpShell({
           functionName: "withdraw",
           args: [sharesNeeded]
         });
-        trackTx({ hash, kind: "deposit", label: `Withdraw ${amount} USDC from LP`, amountUsdc: String(amount) });
-        await publicClient.waitForTransactionReceipt({ hash });
+        trackTx({ hash, kind: "other", label: `Withdraw ${amount} USDC from LP`, amountUsdc: String(amount) });
+        await waitSuccessfulReceipt(publicClient, hash);
         recordLocalLpAction({ kind: "Withdraw", amountUsdc: amount, tx: hash });
         await refresh();
         await refreshLedger();
@@ -230,10 +233,10 @@ export function LpShell({
 
   /**
    * Approve + deposit using live on-chain reads (never stale React state).
-   * Polls Arc USDC balance after bridge/spend because mint can lag a few seconds.
+   * Polls for *balance increase* after bridge/spend (not absolute ≥ amount).
    */
   const finishVaultAfterFund = useCallback(
-    async (amount: number, fundMode: string) => {
+    async (amount: number, fundMode: string, balanceBefore: bigint) => {
       if (!address) return "Connect wallet in the header first.";
       const assets = parseUnits(String(amount || 0), 6);
       if (assets <= 0n) return "Enter an amount greater than zero.";
@@ -244,11 +247,12 @@ export function LpShell({
 
       const usdc = getAddress(arcDeployment.usdc);
       const pool = getAddress(arcDeployment.liquidityPool);
+      const targetBalance = balanceBefore + assets;
 
-      // Poll until mint lands (or soft timeout with a clear message).
+      // Poll until bridged/spent amount lands (delta vs pre-fund balance).
       const maxAttempts = 18; // ~45s at 2.5s
       const delayMs = 2500;
-      let balanceNow = 0n;
+      let balanceNow = balanceBefore;
       for (let i = 0; i < maxAttempts; i++) {
         balanceNow = (await publicClient.readContract({
           address: usdc,
@@ -256,17 +260,17 @@ export function LpShell({
           functionName: "balanceOf",
           args: [address]
         })) as bigint;
-        if (balanceNow >= assets) break;
+        if (balanceNow >= targetBalance) break;
         if (i < maxAttempts - 1) {
           await new Promise((r) => setTimeout(r, delayMs));
         }
       }
 
-      if (balanceNow < assets) {
+      if (balanceNow < targetBalance) {
         await refresh();
         return (
           `⚡ via Circle App Kit (${fundMode}) → Arc OK, but vault deposit paused: ` +
-          `USDC has not arrived on Arc yet (have ${formatUnits(balanceNow, 6)}, need ${amount}). ` +
+          `USDC has not arrived yet (have ${formatUnits(balanceNow, 6)}, need +${amount} from bridge). ` +
           `Wait a moment, then deposit from the Deposit tab.`
         );
       }
@@ -288,7 +292,7 @@ export function LpShell({
           args: [pool, assets]
         });
         trackTx({ hash: approveHash, kind: "approve", label: `Approve ${amount} USDC for LP` });
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        await waitSuccessfulReceipt(publicClient, approveHash);
         steps.push(`Approved ${amount} USDC`);
         allowanceNow = (await publicClient.readContract({
           address: usdc,
@@ -304,7 +308,6 @@ export function LpShell({
         steps.push("Allowance already sufficient");
       }
 
-      // Re-read balance right before deposit (still no React state)
       balanceNow = (await publicClient.readContract({
         address: usdc,
         abi: usdcAbi,
@@ -328,7 +331,7 @@ export function LpShell({
         label: `Deposit ${amount} USDC to LP`,
         amountUsdc: String(amount)
       });
-      await publicClient.waitForTransactionReceipt({ hash: depositHash });
+      await waitSuccessfulReceipt(publicClient, depositHash);
       recordLocalLpAction({ kind: "Deposit", amountUsdc: amount, tx: depositHash });
       steps.push(`Deposited ${amount} USDC to the LP vault`);
       await refresh();
@@ -338,11 +341,22 @@ export function LpShell({
     [address, ensureArcChain, getWalletClient, publicClient, refresh, refreshLedger, trackTx]
   );
 
+  const readUsdcBalance = useCallback(async () => {
+    if (!address) return 0n;
+    return (await publicClient.readContract({
+      address: getAddress(arcDeployment.usdc),
+      abi: usdcAbi,
+      functionName: "balanceOf",
+      args: [address]
+    })) as bigint;
+  }, [address, publicClient]);
+
   const onAnyChainDeposit = useCallback(
     async (source: LpAnyChainSource, amount: number) => {
       if (!address) return "Connect wallet in the header first (Arc mint + vault deposit target).";
       if (!(amount > 0)) return "Enter an amount greater than zero.";
       try {
+        const balanceBefore = await readUsdcBalance();
         const { appKitUnifiedBalanceToArc } = await import("@/lib/appKit");
         const fund = await appKitUnifiedBalanceToArc({
           source,
@@ -354,7 +368,7 @@ export function LpShell({
           }
         });
         setPendingUbSpend(null);
-        return await finishVaultAfterFund(amount, fund.mode);
+        return await finishVaultAfterFund(amount, fund.mode, balanceBefore);
       } catch (error) {
         const { UbSpendPendingError, loadPendingUbSpend } = await import("@/lib/appKit");
         if (error instanceof UbSpendPendingError) {
@@ -366,7 +380,7 @@ export function LpShell({
         return readableWalletError(error);
       }
     },
-    [address, finishVaultAfterFund, pendingFromStorage]
+    [address, finishVaultAfterFund, pendingFromStorage, readUsdcBalance]
   );
 
   const onCompleteUbSpend = useCallback(async () => {
@@ -374,6 +388,7 @@ export function LpShell({
     const pending = pendingUbSpend;
     if (!pending) return "No pending Unified Balance spend to complete.";
     try {
+      const balanceBefore = await readUsdcBalance();
       const { appKitSpendUnifiedBalance } = await import("@/lib/appKit");
       const fund = await appKitSpendUnifiedBalance({
         source: pending.source,
@@ -386,11 +401,11 @@ export function LpShell({
       if (!(amountNum > 0)) {
         return `⚡ Unified Balance spend complete (${fund.hash ?? "ok"}). Deposit into vault manually if needed.`;
       }
-      return await finishVaultAfterFund(amountNum, fund.mode);
+      return await finishVaultAfterFund(amountNum, fund.mode, balanceBefore);
     } catch (error) {
       return readableWalletError(error);
     }
-  }, [address, finishVaultAfterFund, pendingUbSpend]);
+  }, [address, finishVaultAfterFund, pendingUbSpend, readUsdcBalance]);
 
   const onDismissUbSpend = useCallback(() => {
     void import("@/lib/appKit").then(({ clearPendingUbSpend }) => clearPendingUbSpend());

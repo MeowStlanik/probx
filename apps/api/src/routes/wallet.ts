@@ -6,16 +6,15 @@ import {
   transferUsdcForSession,
   type WriteContractBody
 } from "../services/sessionWalletService.js";
-import { getTx, listTxForOwner, recordTx, type TxKind } from "../services/txTrackerService.js";
+import {
+  getTx,
+  isValidTxHash,
+  listTxForOwner,
+  publicTxView,
+  recordTx,
+  type TxKind
+} from "../services/txTrackerService.js";
 import { getAddress } from "viem";
-
-function getAddressSafe(value: string): `0x${string}` | undefined {
-  try {
-    return getAddress(value);
-  } catch {
-    return undefined;
-  }
-}
 import {
   cctpPublicConfig,
   fetchIrisMessage,
@@ -25,6 +24,14 @@ import {
 } from "../services/cctpService.js";
 import { cctpSourceAddress, cctpSourceConfigured, demoFundViaCctp } from "../services/cctpDemoFundService.js";
 import { requestEmailOtp, consumeEmailOtp, otpDevEchoEnabled } from "../services/emailOtpService.js";
+
+function getAddressSafe(value: string): `0x${string}` | undefined {
+  try {
+    return getAddress(value);
+  } catch {
+    return undefined;
+  }
+}
 
 export async function handleWalletGet(
   path: string,
@@ -46,17 +53,44 @@ export async function handleWalletGet(
 
   if (path === "/api/wallet/tx") {
     const hash = (searchParams.get("hash") ?? "").trim();
-    if (hash.startsWith("0x")) {
-      const record = await getTx(hash as `0x${string}`);
+    if (hash) {
+      if (!isValidTxHash(hash)) {
+        return { status: 400, body: { error: "invalid transaction hash" } };
+      }
+      const record = await getTx(hash);
       if (!record) return { status: 404, body: { error: "tx not found" } };
-      return { status: 200, body: record };
+      // Never leak owner (email/address) via public hash lookup.
+      return { status: 200, body: publicTxView(record) };
     }
-    const owner =
-      (headers["x-session-email"] ?? "").trim() ||
-      (searchParams.get("owner") ?? "").trim();
-    if (!owner) return { status: 400, body: { error: "hash or owner required" } };
-    const records = await listTxForOwner(owner);
-    return { status: 200, body: { records } };
+    // Listing requires a verified session (email) or an explicit address owner
+    // that matches the session wallet address.
+    const email = (headers["x-session-email"] ?? "").trim();
+    const sessionToken = (headers["x-session-token"] ?? "").trim();
+    const ownerParam = (searchParams.get("owner") ?? "").trim();
+    if (email && sessionToken) {
+      try {
+        const session = await getSessionPublic(email, sessionToken);
+        // Prefer address-scoped listing; fall back to email only for legacy records.
+        const byAddress = session.address ? await listTxForOwner(session.address) : [];
+        const byEmail = await listTxForOwner(email);
+        const merged = [...byAddress];
+        for (const r of byEmail) {
+          if (!merged.some((x) => x.hash === r.hash)) merged.push(r);
+        }
+        return { status: 200, body: { records: merged.map(publicTxView) } };
+      } catch (error) {
+        return { status: 401, body: { error: error instanceof Error ? error.message : "unauthorized" } };
+      }
+    }
+    if (ownerParam && /^0x[a-fA-F0-9]{40}$/i.test(ownerParam)) {
+      // Address listing is allowed (no email PII); still strip owner field from rows.
+      const records = await listTxForOwner(ownerParam);
+      return { status: 200, body: { records: records.map(publicTxView) } };
+    }
+    return {
+      status: 400,
+      body: { error: "hash, or session headers, or owner=0x address required" }
+    };
   }
 
   if (path === "/api/cctp/config") {
@@ -137,7 +171,7 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
 
   if (path === "/api/wallet/session/verify-otp") {
     try {
-      const email = consumeEmailOtp(
+      const email = await consumeEmailOtp(
         String(body.email ?? ""),
         String(body.code ?? ""),
         body.otpToken !== undefined ? String(body.otpToken) : undefined
@@ -155,7 +189,7 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
     const code = body.code !== undefined ? String(body.code) : "";
     try {
       if (code) {
-        const verified = consumeEmailOtp(email, code);
+        const verified = await consumeEmailOtp(email, code);
         const session = await createOrResumeSession(verified, { otpVerified: true });
         return { status: 201, body: { ...session, emailVerified: true } };
       }
@@ -193,17 +227,38 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
   if (path === "/api/wallet/tx/record") {
     try {
       const hash = String(body.hash ?? "");
-      if (!hash.startsWith("0x")) return { status: 400, body: { error: "hash required" } };
+      if (!isValidTxHash(hash)) {
+        return { status: 400, body: { error: "invalid transaction hash" } };
+      }
+      // Prefer Arc address as owner; never store raw email when address is present.
+      let owner = String(body.owner ?? body.from ?? "").trim();
+      const email = String(body.email ?? "").trim();
+      const sessionToken = String(body.sessionToken ?? "").trim();
+      if (email && sessionToken) {
+        try {
+          const session = await getSessionPublic(email, sessionToken);
+          if (session.address) owner = session.address;
+        } catch {
+          /* unauthenticated record still allowed for injected wallets with address owner */
+        }
+      }
+      if (!owner || owner.includes("@")) {
+        // Reject email-as-owner to avoid PII indexes; require 0x address.
+        const from = getAddressSafe(String(body.from ?? ""));
+        if (!from) return { status: 400, body: { error: "owner must be a 0x address" } };
+        owner = from;
+      }
       const record = await recordTx({
         hash: hash as `0x${string}`,
         kind: (String(body.kind ?? "other") || "other") as TxKind,
-        owner: String(body.owner ?? ""),
+        owner,
         from: getAddressSafe(String(body.from ?? "")),
         to: getAddressSafe(String(body.to ?? "")),
         label: body.label ? String(body.label) : undefined,
-        amountUsdc: body.amountUsdc ? String(body.amountUsdc) : undefined
+        amountUsdc: body.amountUsdc ? String(body.amountUsdc) : undefined,
+        createOnly: true
       });
-      return { status: 200, body: record };
+      return { status: 200, body: publicTxView(record) };
     } catch (error) {
       return { status: 400, body: { error: error instanceof Error ? error.message : "record failed" } };
     }
@@ -262,7 +317,26 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
       }
       const mintTo = String(body.mintTo ?? body.address ?? "");
       const amountUsdc = body.amountUsdc !== undefined ? String(body.amountUsdc) : "2";
-      const result = await demoFundViaCctp({ mintTo, amountUsdc });
+      // Prefer session-bound destination: mint only to the authenticated wallet.
+      const email = String(body.email ?? "").trim();
+      const sessionToken = String(body.sessionToken ?? "").trim();
+      let destination = mintTo;
+      if (email && sessionToken) {
+        const session = await getSessionPublic(email, sessionToken);
+        if (!session.address) {
+          return { status: 400, body: { error: "session has no wallet address" } };
+        }
+        if (mintTo && getAddressSafe(mintTo) && getAddress(mintTo) !== getAddress(session.address)) {
+          return { status: 403, body: { error: "mintTo must match session wallet" } };
+        }
+        destination = session.address;
+      } else if (!getAddressSafe(mintTo)) {
+        return {
+          status: 401,
+          body: { error: "email+sessionToken required, or a valid mintTo for injected wallets" }
+        };
+      }
+      const result = await demoFundViaCctp({ mintTo: destination, amountUsdc });
       return { status: 200, body: result };
     } catch (error) {
       return {

@@ -78,6 +78,11 @@ export async function getMarket(id: string): Promise<Market | undefined> {
 export async function getMarketQuote(id: string, params: URLSearchParams, userAddress?: string) {
   if (onchainEnabled()) {
     try {
+      // Propagate user so on-chain EXPOSURE_CAP uses the right msg.sender.
+      if (userAddress && !params.get("user") && !params.get("address")) {
+        params = new URLSearchParams(params);
+        params.set("user", userAddress);
+      }
       const quote = await quoteOnchainTicket(id, params);
       if (quote) return quote;
     } catch {

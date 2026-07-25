@@ -87,9 +87,12 @@ contract LiquidityPool {
         require(amount > 0, "ZERO_AMOUNT");
         uint256 assetsBefore = managedAssets();
         require(usdc.transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM");
-        if (totalShares == 0 || assetsBefore == 0) {
+        // Empty vault (no shares) → 1:1 mint. Insolvent vault (shares but zero equity)
+        // must not mint fresh capital that dilutes into dead share holders.
+        if (totalShares == 0) {
             mintedShares = amount;
         } else {
+            require(assetsBefore > 0, "INSOLVENT_VAULT");
             mintedShares = (amount * totalShares) / assetsBefore;
         }
         require(mintedShares > 0, "ZERO_SHARES");

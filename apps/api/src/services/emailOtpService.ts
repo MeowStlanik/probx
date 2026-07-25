@@ -1,7 +1,8 @@
-import { createHash, createHmac, randomInt, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { runtimeFile } from "../runtimePaths.js";
+import { NamespaceStore } from "./persistentStore.js";
 
 const otpPath = runtimeFile("email-otps.json");
 
@@ -155,16 +156,22 @@ function otpHmacSecret(): string {
 
 let warnedDefaultSecret = false;
 
-/** Stateless OTP challenge — survives multi-instance /tmp on Vercel. */
+const usedOtpJti = new NamespaceStore<{ usedAt: string }>("otp-used-jti");
+
+/** Stateless OTP challenge — survives multi-instance /tmp on Vercel. Includes jti for single-use. */
 function makeOtpToken(email: string, codeHash: string, expiresAt: number): string {
-  const payload = Buffer.from(JSON.stringify({ e: email, h: codeHash, x: expiresAt }), "utf8").toString(
-    "base64url"
-  );
+  const jti = randomBytes(16).toString("hex");
+  const payload = Buffer.from(
+    JSON.stringify({ e: email, h: codeHash, x: expiresAt, j: jti }),
+    "utf8"
+  ).toString("base64url");
   const sig = createHmac("sha256", otpHmacSecret()).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
 
-function parseOtpToken(token: string): { email: string; codeHash: string; expiresAt: number } | null {
+function parseOtpToken(
+  token: string
+): { email: string; codeHash: string; expiresAt: number; jti?: string } | null {
   const parts = String(token || "").split(".");
   if (parts.length !== 2) return null;
   const [payload, sig] = parts;
@@ -177,12 +184,26 @@ function parseOtpToken(token: string): { email: string; codeHash: string; expire
       e?: string;
       h?: string;
       x?: number;
+      j?: string;
     };
     if (!data.e || !data.h || !Number.isFinite(data.x)) return null;
-    return { email: data.e, codeHash: data.h, expiresAt: Number(data.x) };
+    return {
+      email: data.e,
+      codeHash: data.h,
+      expiresAt: Number(data.x),
+      jti: typeof data.j === "string" ? data.j : undefined
+    };
   } catch {
     return null;
   }
+}
+
+/** Atomically mark OTP jti used. Returns false if already consumed. */
+async function consumeOtpJti(jti: string): Promise<boolean> {
+  const existing = await usedOtpJti.get(jti);
+  if (existing) return false;
+  await usedOtpJti.set(jti, { usedAt: new Date().toISOString() });
+  return true;
 }
 
 function hasSmtpConfig(): boolean {
@@ -443,7 +464,11 @@ function shortProviderError(error?: string): string {
   return error.slice(0, 140);
 }
 
-export function consumeEmailOtp(emailInput: string, codeInput: string, otpToken?: string): string {
+export async function consumeEmailOtp(
+  emailInput: string,
+  codeInput: string,
+  otpToken?: string
+): Promise<string> {
   const email = normalizeEmail(emailInput);
   const code = String(codeInput ?? "").trim();
   if (!isValidEmail(email)) throw new Error("Enter a valid email address.");
@@ -466,6 +491,13 @@ export function consumeEmailOtp(emailInput: string, codeInput: string, otpToken?
     // token path had no attempt cap at all — see enforceOtpVerifyAttemptLimit).
     enforceOtpVerifyAttemptLimit(email);
     if (parsed.codeHash !== hashCode(email, code)) throw new Error("Invalid code. Try again.");
+    // Single-use: mark jti consumed (durable when KV is configured).
+    if (parsed.jti) {
+      const firstUse = await consumeOtpJti(parsed.jti);
+      if (!firstUse) {
+        throw new Error("This login code was already used. Request a new code.");
+      }
+    }
     clearOtpVerifyAttempts(email);
     // Clear optional local store entry
     try {

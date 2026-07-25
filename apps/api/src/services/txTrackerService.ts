@@ -58,6 +58,12 @@ function normalizeOwner(owner: string): string {
   return owner.trim().toLowerCase();
 }
 
+const TX_HASH_RE = /^0x[a-fA-F0-9]{64}$/;
+
+export function isValidTxHash(hash: string): hash is `0x${string}` {
+  return TX_HASH_RE.test(hash);
+}
+
 export async function recordTx(input: {
   hash: `0x${string}`;
   kind: TxKind;
@@ -67,24 +73,46 @@ export async function recordTx(input: {
   label?: string;
   circleTxId?: string;
   amountUsdc?: string;
+  /** When true, refuse to overwrite an existing record (public clients). */
+  createOnly?: boolean;
 }): Promise<TxRecord> {
+  if (!isValidTxHash(input.hash)) {
+    throw new Error("invalid transaction hash");
+  }
+  const owner = normalizeOwner(input.owner);
+  if (!owner) throw new Error("owner required");
+
+  const existing = await store.get(input.hash);
+  if (existing && input.createOnly) {
+    // Do not let arbitrary clients rewrite history for a known hash.
+    return existing;
+  }
+
   const now = new Date().toISOString();
   const record: TxRecord = {
     id: input.hash,
     hash: input.hash,
     kind: input.kind,
-    status: "pending",
-    owner: normalizeOwner(input.owner),
-    from: input.from,
-    to: input.to,
-    label: input.label,
-    circleTxId: input.circleTxId,
-    amountUsdc: input.amountUsdc,
-    createdAt: now,
-    updatedAt: now
+    status: existing?.status === "confirmed" || existing?.status === "failed" ? existing.status : "pending",
+    owner: existing?.owner || owner,
+    from: input.from ?? existing?.from,
+    to: input.to ?? existing?.to,
+    label: input.label ?? existing?.label,
+    circleTxId: input.circleTxId ?? existing?.circleTxId,
+    amountUsdc: input.amountUsdc ?? existing?.amountUsdc,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    blockNumber: existing?.blockNumber,
+    error: existing?.error
   };
   await store.set(record.id, record);
   return record;
+}
+
+/** Public view: never expose owner email/address via hash lookup. */
+export function publicTxView(record: TxRecord): Omit<TxRecord, "owner"> & { owner?: undefined } {
+  const { owner: _owner, ...rest } = record;
+  return rest;
 }
 
 /** Read the receipt and move pending -> confirmed / failed. Idempotent. */

@@ -562,11 +562,21 @@ export async function quoteOnchainTicket(id: string, params: URLSearchParams): P
   const boostBps = BigInt(Math.round(boost * 10_000));
   const outcomeId = outcome === "YES" ? 1 : 2;
 
+  // Pass `account` so msg.sender in quoteTicket matches the user for EXPOSURE_CAP.
+  const userParam = (params.get("user") || params.get("address") || "").trim();
+  let account: `0x${string}` | undefined;
+  try {
+    if (userParam) account = getAddress(userParam) as `0x${string}`;
+  } catch {
+    account = undefined;
+  }
+
   const quote = await publicClient.readContract({
     address: addr(deployment.microBoostEngine),
     abi: engineAbi,
     functionName: "quoteTicket",
-    args: [addr(item.market), outcomeId, risk, boostBps]
+    args: [addr(item.market), outcomeId, risk, boostBps],
+    ...(account ? { account } : {})
   });
 
   return {

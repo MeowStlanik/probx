@@ -5,6 +5,7 @@
  *   (not while the prior round is still LOCKED / OBSERVATION — avoids UI jumps)
  * - Finished markets leave the main Markets UI; Portfolio can still claim by address
  */
+import { randomBytes } from "node:crypto";
 import { runtimeFile } from "../runtimePaths.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -17,6 +18,7 @@ import {
   saveAggregateStatsFromMarkets,
   settleMarketTicketsOnchain
 } from "./onchainService.js";
+import { acquireLock, releaseLock } from "./persistentStore.js";
 
 /** Nominal entry window (seconds). createMarketOnchain adds tx slack + lower sniper buffer. */
 const LOCK_SECONDS = 75;
@@ -53,6 +55,20 @@ export async function runMarketCycleOnce(): Promise<{
   const hidden: string[] = [];
   const created: string[] = [];
   const errors: string[] = [];
+  const lockToken = randomBytes(8).toString("hex");
+  const gotLock = await acquireLock("market-cycle", 90_000, lockToken);
+  if (!gotLock) {
+    running = false;
+    return {
+      ok: true,
+      skipped: "distributed-lock",
+      resolved: [],
+      settled: [],
+      hidden: [],
+      created: [],
+      errors: []
+    };
+  }
 
   try {
     if (!onchainEnabled()) {
@@ -119,17 +135,24 @@ export async function runMarketCycleOnce(): Promise<{
 
     if (!hasActiveBtc) {
       try {
-        const result = await createMarketOnchain({
-          demoRole: "btc_price",
-          // Fair mid estimated from feed inside createMarketOnchain when omitted.
-          lockSeconds: LOCK_SECONDS,
-          observationSeconds: OBSERVATION_SECONDS
-        });
-        if ("error" in result && result.error) {
-          errors.push(`create btc: ${result.error}`);
-        } else if ("marketAddress" in result && result.marketAddress) {
-          created.push(String(result.marketAddress));
-          console.log(`[market-cycle] created BTC ${result.marketAddress}`);
+        // Re-read immediately before create (another instance may have won the race).
+        const again = await listOnchainMarkets({ forCycle: true });
+        const stillMissing = !again.some(
+          (m) =>
+            isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+        );
+        if (stillMissing) {
+          const result = await createMarketOnchain({
+            demoRole: "btc_price",
+            lockSeconds: LOCK_SECONDS,
+            observationSeconds: OBSERVATION_SECONDS
+          });
+          if ("error" in result && result.error) {
+            errors.push(`create btc: ${result.error}`);
+          } else if ("marketAddress" in result && result.marketAddress) {
+            created.push(String(result.marketAddress));
+            console.log(`[market-cycle] created BTC ${result.marketAddress}`);
+          }
         }
       } catch (error) {
         errors.push(`create btc: ${error instanceof Error ? error.message : String(error)}`);
@@ -138,16 +161,23 @@ export async function runMarketCycleOnce(): Promise<{
 
     if (!hasActiveWeather) {
       try {
-        const result = await createMarketOnchain({
-          demoRole: "london_weather",
-          lockSeconds: LOCK_SECONDS,
-          observationSeconds: OBSERVATION_SECONDS
-        });
-        if ("error" in result && result.error) {
-          errors.push(`create weather: ${result.error}`);
-        } else if ("marketAddress" in result && result.marketAddress) {
-          created.push(String(result.marketAddress));
-          console.log(`[market-cycle] created weather ${result.marketAddress}`);
+        const again = await listOnchainMarkets({ forCycle: true });
+        const stillMissing = !again.some(
+          (m) =>
+            isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+        );
+        if (stillMissing) {
+          const result = await createMarketOnchain({
+            demoRole: "london_weather",
+            lockSeconds: LOCK_SECONDS,
+            observationSeconds: OBSERVATION_SECONDS
+          });
+          if ("error" in result && result.error) {
+            errors.push(`create weather: ${result.error}`);
+          } else if ("marketAddress" in result && result.marketAddress) {
+            created.push(String(result.marketAddress));
+            console.log(`[market-cycle] created weather ${result.marketAddress}`);
+          }
         }
       } catch (error) {
         errors.push(`create weather: ${error instanceof Error ? error.message : String(error)}`);
@@ -202,6 +232,7 @@ export async function runMarketCycleOnce(): Promise<{
     return { ok: errors.length === 0, resolved, settled, hidden, created, errors };
   } finally {
     running = false;
+    await releaseLock("market-cycle", lockToken).catch(() => undefined);
   }
 }
 

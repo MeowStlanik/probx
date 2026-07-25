@@ -160,7 +160,10 @@ const marketFactory = await deploy("MicroMarketFactory", [microBoostEngine, orac
 await send(liquidityPool, liquidityPoolArtifact.abi, "setEngine", [microBoostEngine]);
 await send(liquidityPool, liquidityPoolArtifact.abi, "setFeeRouter", [feeRouter]);
 await send(insuranceFund, insuranceArtifact.abi, "setEngine", [microBoostEngine]);
+await send(insuranceFund, insuranceArtifact.abi, "setFeeRouter", [feeRouter]);
 await send(positionTicket, ticketArtifact.abi, "setEngine", [microBoostEngine]);
+// Critical: only factory-created markets can trade against the LP.
+await send(microBoostEngine, engineArtifact.abi, "setMarketRegistry", [marketFactory]);
 
 await send(usdcAddress, erc20Abi, "approve", [liquidityPool, requiredLp]);
 await send(liquidityPool, liquidityPoolArtifact.abi, "deposit", [requiredLp]);

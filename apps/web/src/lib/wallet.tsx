@@ -258,12 +258,19 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
   /**
    * Force injected wallet onto Arc Testnet.
-   * `wallet_addEthereumChain` alone often only *registers* the chain and leaves
-   * the user on Base/Eth — UI said “switched” but writes still went to the wrong net.
-   * Correct flow: switch → if 4902 add → switch again → verify eth_chainId.
+   * No-op for embedded (Circle / email) sessions — those already sign on Arc server-side
+   * and must not require MetaMask / window.ethereum.
+   * Correct flow for injected: switch → if 4902 add → switch again → verify eth_chainId.
    */
   const ensureArcChain = useCallback(async () => {
-    if (!window.ethereum) throw new Error("Install a browser wallet to continue.");
+    // Email/Circle session wallets never need an injected chain switch.
+    if (mode === "embedded") return;
+
+    if (!window.ethereum) {
+      throw new Error(
+        "Install a browser wallet (MetaMask) to continue, or sign in with email for a Circle wallet on Arc."
+      );
+    }
 
     const targetHex = `0x${arcDeployment.chainId.toString(16)}` as const;
 
@@ -349,7 +356,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         `Wallet is still on chain ${verified ?? "unknown"}, not Arc Testnet (${arcDeployment.chainId}). Open the wallet and switch network, then retry.`
       );
     }
-  }, [refreshChain]);
+  }, [mode, refreshChain]);
 
   const connect = useCallback(async () => {
     setError(null);
@@ -808,21 +815,32 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }) => {
       if (!address) return;
       // Fire-and-forget: server records + reconciles pending → confirmed / failed.
+      // Owner is always the Arc address (never email) — avoids PII in public tx records.
       void fetch(apiUrl("/api/wallet/tx/record"), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(embedded
+            ? {
+                "x-session-email": embedded.email,
+                "x-session-token": embedded.sessionToken
+              }
+            : {})
+        },
         body: JSON.stringify({
           hash: input.hash,
           kind: input.kind,
-          owner: email ?? address,
+          owner: address,
           from: address,
           to: input.to,
           label: input.label,
-          amountUsdc: input.amountUsdc
+          amountUsdc: input.amountUsdc,
+          sessionToken: embedded?.sessionToken,
+          email: embedded?.email
         })
       }).catch(() => undefined);
     },
-    [address, email]
+    [address, embedded]
   );
 
   const value = useMemo<WalletContextValue>(() => ({

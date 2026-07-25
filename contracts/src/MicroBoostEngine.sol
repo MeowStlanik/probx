@@ -13,6 +13,11 @@ interface IERC20LikeForEngine {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
 }
 
+/// @notice Factory registry — only markets with isMarket=true may trade against the LP.
+interface IMarketRegistry {
+    function isMarket(address market) external view returns (bool);
+}
+
 contract MicroBoostEngine {
     using QuoteMath for uint256;
 
@@ -51,11 +56,14 @@ contract MicroBoostEngine {
     PositionTicket public positionTicket;
     address public owner;
     bool public paused;
+    /// @dev Set once to MicroMarketFactory; buy/quote reject unregistered markets.
+    IMarketRegistry public marketRegistry;
 
     mapping(address => MarketExposure) public marketExposure;
     mapping(address => uint256) public userReserveUsed;
 
     event PausedSet(bool paused);
+    event MarketRegistrySet(address indexed registry);
     event TicketBought(
         uint256 indexed ticketId,
         address indexed buyer,
@@ -96,11 +104,28 @@ contract MicroBoostEngine {
         emit PausedSet(paused_);
     }
 
+    /// @notice Wire the factory registry once. Prevents fake markets from draining the LP.
+    function setMarketRegistry(address registry) external onlyOwner {
+        require(address(marketRegistry) == address(0), "REGISTRY_ALREADY_SET");
+        require(registry != address(0), "ZERO_REGISTRY");
+        marketRegistry = IMarketRegistry(registry);
+        emit MarketRegistrySet(registry);
+    }
+
+    /// @notice True when no open LP exposure remains on this market (safe to archive).
+    function marketHasNoExposure(address market) external view returns (bool) {
+        MarketExposure memory e = marketExposure[market];
+        return e.lpReserveAllocated == 0 && e.totalUserRisk == 0;
+    }
+
     function quoteTicket(address market, uint8 outcome, uint256 riskAmount, uint256 boostBps)
         public
         view
         returns (Quote memory quote)
     {
+        if (!_isRegisteredMarket(market)) {
+            return _rejectedQuote("UNREGISTERED_MARKET");
+        }
         if (riskAmount == 0) {
             return _rejectedQuote("ZERO_RISK");
         }
@@ -158,6 +183,7 @@ contract MicroBoostEngine {
         notPaused
         returns (uint256 ticketId)
     {
+        require(_isRegisteredMarket(market), "UNREGISTERED_MARKET");
         require(MicroMarket(market).canBuy(), "MARKET_NOT_OPEN");
         Quote memory quote = quoteTicket(market, outcome, riskAmount, boostBps);
         require(quote.accepted, quote.reason);
@@ -207,7 +233,10 @@ contract MicroBoostEngine {
 
         MicroMarket market = MicroMarket(ticket.market);
         MicroMarket.Status status = market.status();
-        if (status == MicroMarket.Status.Cancelled) {
+        // Cancelled, or Archived after cancel (winningOutcome unset): full risk refund.
+        if (status == MicroMarket.Status.Cancelled
+            || (status == MicroMarket.Status.Archived && market.winningOutcome() == 0))
+        {
             liquidityPool.refundRisk(ticket.owner, ticket.riskAmount, ticket.reservedAmount);
             _removeExposure(ticket);
             positionTicket.markCancelled(ticketId);
@@ -215,7 +244,11 @@ contract MicroBoostEngine {
             return;
         }
 
-        require(status == MicroMarket.Status.Resolved, "NOT_RESOLVED");
+        // Resolved, or Archived after resolve: settle against winningOutcome.
+        require(
+            status == MicroMarket.Status.Resolved || status == MicroMarket.Status.Archived,
+            "NOT_RESOLVED"
+        );
         bool won = market.winningOutcome() == ticket.outcome;
         if (won) {
             liquidityPool.payPayout(ticket.owner, ticket.payout, ticket.reservedAmount, ticket.riskAmount);
@@ -246,11 +279,19 @@ contract MicroBoostEngine {
         view
         returns (uint256)
     {
+        if (!_isRegisteredMarket(market)) return BPS;
         uint256 price = MicroMarket(market).priceForOutcome(outcome);
         uint256 rawMax = QuoteMath.maxBoostBps(riskAmount, price, liquidityPool.availableAssets());
         if (rawMax > RiskLimits.MAX_BOOST_BPS) return RiskLimits.MAX_BOOST_BPS;
         if (rawMax < BPS) return BPS;
         return rawMax;
+    }
+
+    function _isRegisteredMarket(address market) internal view returns (bool) {
+        if (market == address(0)) return false;
+        // Fail closed: no registry configured → no market is tradeable.
+        if (address(marketRegistry) == address(0)) return false;
+        return marketRegistry.isMarket(market);
     }
 
     function _rejectedQuote(string memory reason) internal pure returns (Quote memory) {

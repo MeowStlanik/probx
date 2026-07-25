@@ -14,6 +14,8 @@ contract MicroMarketFactory {
     address public engine;
     address public oracle;
     MarketInfo[] private markets;
+    /// @notice True only for markets created by this factory (anti spoof-market drain).
+    mapping(address => bool) public isMarket;
 
     event MarketCreated(
         uint256 indexed marketId,
@@ -68,6 +70,7 @@ contract MicroMarketFactory {
                 yesPrice
             )
         );
+        isMarket[market] = true;
         markets.push(MarketInfo({ market: market, metadataHash: rulesHash, createdAt: uint64(block.timestamp) }));
         emit MarketCreated(markets.length - 1, market, question, rulesHash);
     }

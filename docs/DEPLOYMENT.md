@@ -23,7 +23,8 @@ Leave `NEXT_PUBLIC_API_BASE_URL` empty to call same-origin `/api/*` (default for
 
 ```bash
 pnpm contracts:build
-pnpm contracts:test      # 21 scenario + 12 accounting invariant checks/fuzz → contracts/test/
+pnpm contracts:test      # 36 forge tests (scenario + registry + accounting) → contracts/test/
+pnpm deploy:arc          # FULL redeploy required after market-registry security fix
 pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 ```
 

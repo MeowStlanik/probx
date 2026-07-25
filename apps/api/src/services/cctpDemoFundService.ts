@@ -10,35 +10,49 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import { CCTP, quoteForwardingBurn, fetchIrisMessage } from "./cctpService.js";
+import { CCTP, quoteForwardingBurn } from "./cctpService.js";
+import { NamespaceStore } from "./persistentStore.js";
 
 const FORWARDING_HOOK =
   "0x636374702d666f72776172640000000000000000000000000000000000000000" as const;
 
-/** Per-address daily demo-fund usage, keyed by UTC day (best-effort, in-memory). */
-const demoFundDailyUsage = new Map<string, bigint>();
+type DailyUsage = { day: string; used: string };
+
+const dailyStore = new NamespaceStore<DailyUsage>("cctp-demo-fund-daily");
+const globalStore = new NamespaceStore<{ day: string; used: string }>("cctp-demo-fund-global");
 
 function dailyCapUsdc(): bigint {
   return parseUnits((process.env.CCTP_DEMO_DAILY_PER_ADDRESS || "25").trim() || "25", 6);
 }
 
-function enforceDemoFundDailyCap(address: string, amount: bigint): void {
-  const cap = dailyCapUsdc();
+function globalDailyCapUsdc(): bigint {
+  return parseUnits((process.env.CCTP_DEMO_DAILY_GLOBAL || "500").trim() || "500", 6);
+}
+
+async function enforceDemoFundCaps(address: string, amount: bigint): Promise<void> {
   const day = new Date().toISOString().slice(0, 10);
-  const key = `${day}:${address.toLowerCase()}`;
-  const used = demoFundDailyUsage.get(key) ?? 0n;
-  if (used + amount > cap) {
+  const addrKey = address.toLowerCase();
+
+  const per = (await dailyStore.get(addrKey)) ?? { day, used: "0" };
+  const perUsed = per.day === day ? BigInt(per.used || "0") : 0n;
+  const perCap = dailyCapUsdc();
+  if (perUsed + amount > perCap) {
     throw new Error(
-      `Daily demo fund limit reached for this address (${formatUnits(cap, 6)} USDC/day). Try again tomorrow.`
+      `Daily demo fund limit reached for this address (${formatUnits(perCap, 6)} USDC/day). Try again tomorrow.`
     );
   }
-  demoFundDailyUsage.set(key, used + amount);
-  // Keep the map bounded.
-  if (demoFundDailyUsage.size > 5_000) {
-    for (const staleKey of [...demoFundDailyUsage.keys()].slice(0, 1_000)) {
-      demoFundDailyUsage.delete(staleKey);
-    }
+
+  const glob = (await globalStore.get("treasury")) ?? { day, used: "0" };
+  const globUsed = glob.day === day ? BigInt(glob.used || "0") : 0n;
+  const globCap = globalDailyCapUsdc();
+  if (globUsed + amount > globCap) {
+    throw new Error(
+      `Demo treasury daily global cap reached (${formatUnits(globCap, 6)} USDC). Try again later.`
+    );
   }
+
+  await dailyStore.set(addrKey, { day, used: (perUsed + amount).toString() });
+  await globalStore.set("treasury", { day, used: (globUsed + amount).toString() });
 }
 
 export function cctpSourceConfigured(): boolean {
@@ -56,6 +70,10 @@ export function cctpSourceAddress(): `0x${string}` | null {
   }
 }
 
+/**
+ * Burn only — do not wait for mint (Vercel maxDuration ~60s).
+ * Client polls GET /api/cctp/status with burnTxHash.
+ */
 export async function demoFundViaCctp(params: {
   mintTo: string;
   amountUsdc?: string;
@@ -64,9 +82,9 @@ export async function demoFundViaCctp(params: {
   amount: string;
   totalBurn: string;
   burnTxHash: `0x${string}`;
-  forwardTxHash?: string;
   sourceAddress: `0x${string}`;
-  status: string;
+  status: "burned_pending_mint";
+  domain: number;
 }> {
   const key = process.env.CCTP_SOURCE_PRIVATE_KEY;
   if (!key) throw new Error("CCTP_SOURCE_PRIVATE_KEY not set on API.");
@@ -76,13 +94,11 @@ export async function demoFundViaCctp(params: {
   const amount = parseUnits(amountHuman, 6);
   if (amount <= 0n) throw new Error("amount must be > 0");
 
-  // Treasury protection: the demo fund is a public endpoint, so cap both the
-  // per-call size and the per-address daily total (best-effort, in-memory).
   const maxPerCall = parseUnits((process.env.CCTP_DEMO_MAX_PER_CALL || "10").trim() || "10", 6);
   if (amount > maxPerCall) {
     throw new Error(`Demo fund is limited to ${formatUnits(maxPerCall, 6)} USDC per call.`);
   }
-  enforceDemoFundDailyCap(mintTo, amount);
+  await enforceDemoFundCaps(mintTo, amount);
 
   const pk = (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
   const account = privateKeyToAccount(pk);
@@ -170,26 +186,19 @@ export async function demoFundViaCctp(params: {
     to: messenger,
     data: burnData
   });
-  await publicClient.waitForTransactionReceipt({ hash: burnTxHash });
-
-  let forwardTxHash: string | undefined;
-  const started = Date.now();
-  while (Date.now() - started < 6 * 60_000) {
-    const status = await fetchIrisMessage(CCTP.domains.baseSepolia, burnTxHash);
-    if (status.status === "forwarded" && status.forwardTxHash) {
-      forwardTxHash = status.forwardTxHash;
-      break;
-    }
-    await new Promise((r) => setTimeout(r, 5000));
+  const burnReceipt = await publicClient.waitForTransactionReceipt({ hash: burnTxHash });
+  if (burnReceipt.status !== "success") {
+    throw new Error(`CCTP burn reverted: ${burnTxHash}`);
   }
 
+  // Return immediately — client polls /api/cctp/status (avoids Vercel 60s kill mid-wait).
   return {
     mintTo,
     amount: amount.toString(),
     totalBurn: totalBurn.toString(),
     burnTxHash,
-    forwardTxHash,
     sourceAddress: account.address,
-    status: forwardTxHash ? "forwarded" : "burned_pending_mint"
+    status: "burned_pending_mint",
+    domain: CCTP.domains.baseSepolia
   };
 }

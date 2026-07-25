@@ -21,7 +21,7 @@
   <a href="https://testnet.arcscan.app"><img src="https://img.shields.io/badge/Network-Arc%20Testnet-7C5CFF?style=flat-square" alt="Arc Testnet" /></a>
   <a href="#arc-testnet"><img src="https://img.shields.io/badge/Gas-USDC%20native-2775CA?style=flat-square" alt="USDC gas" /></a>
   <a href="#circle-cctp--app-kits"><img src="https://img.shields.io/badge/Circle-Wallets%20%C2%B7%20App%20Kits%20%C2%B7%20CCTP-6B46C1?style=flat-square" alt="Circle" /></a>
-  <img src="https://img.shields.io/badge/Tests-33%20passing-22C55E?style=flat-square" alt="21 scenario + 12 accounting checks" />
+  <img src="https://img.shields.io/badge/Tests-36%20passing-22C55E?style=flat-square" alt="21 scenario + registry + accounting checks" />
   <img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT" />
 </p>
 
@@ -133,8 +133,8 @@ sticky over 60s). No free lunch on mispriced flat 50/50 tickets.
 ## Security
 
 The reserve engine holds user funds, so the invariants are covered by tests rather than
-assumed. `pnpm contracts:test` → **33 passing**: 21 scenario tests + 12 accounting
-invariant checks and fuzz tests.
+assumed. `pnpm contracts:test` → **36 passing**: 21 scenario tests + 3 registry
+guards + 12 accounting invariant checks and fuzz tests.
 
 | Area | Guarantee | Test |
 |------|-----------|------|
@@ -272,6 +272,7 @@ Testnet deployment built for a hackathon. Honest limits:
 - **Oracle is centralized today.** Owner/oracle can resolve; feeds are server-side (Coinbase / Open-Meteo). No quorum, on-chain attestation, or dispute period yet — acceptable for demo, not production infrastructure claims.
 - **Demo risk parameters.** **100000 USDC** seeded vault with loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000`). Sized so a demo can exercise full boost range.
 - **Ops dependencies.** External minute pinger for 24/7 cycles; `ADMIN_SECRET` / `OTP_HMAC_SECRET` required on shared deploys (fail closed on Vercel when unset).
+- **Contract security.** Engine only accepts markets from the factory registry (`isMarket`). **Live stack must be redeployed** after this change — frontend alone cannot patch the old engine.
 
 ---
 
@@ -283,7 +284,7 @@ Testnet deployment built for a hackathon. Honest limits:
 | [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md) | Address bump after redeploy |
 | [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) | Live contract addresses |
 | [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md) | Minute pinger setup |
-| [`contracts/test/`](./contracts/test/) | 21 scenario + 12 accounting invariant checks and fuzz tests — `pnpm contracts:test` |
+| [`contracts/test/`](./contracts/test/) | 21 scenario + 3 registry guards + 12 accounting checks/fuzz — `pnpm contracts:test` |
 | [`.env.example`](.env.example) | Full env template |
 | [`LICENSE`](./LICENSE) | MIT |
 

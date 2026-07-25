@@ -126,7 +126,8 @@ export function PortfolioShell() {
           args: [ticketId]
         });
         trackTx({ hash, kind: "claim", label: `Claim ticket ${id}` });
-        await publicClient.waitForTransactionReceipt({ hash });
+        const { waitSuccessfulReceipt } = await import("@/lib/txReceipt");
+        await waitSuccessfulReceipt(publicClient, hash);
         setClaimMessage(`Claimed — tx ${hash.slice(0, 10)}…`);
         await load();
       } catch (error) {
