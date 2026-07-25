@@ -194,7 +194,6 @@ pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
 | InsuranceFund | [`0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C`](https://testnet.arcscan.app/address/0xe2AE3c0bcFc03Bb4bb10B66e6b21f1288957dd6C) |
 | FeeRouter | [`0x53480237eb52429400fEF5e0fDB23A73d9983a2C`](https://testnet.arcscan.app/address/0x53480237eb52429400fEF5e0fDB23A73d9983a2C) |
 
-LP seed on deploy: **15 USDC**. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) (mirrors `apps/web/src/lib/deployment.json`).
 
 ---
 
