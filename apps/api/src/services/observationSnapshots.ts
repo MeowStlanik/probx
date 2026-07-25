@@ -1,7 +1,7 @@
 /**
  * Immutable observation snapshots for BTC/weather markets.
- * Resolve must use startValue @ observationStart and endValue @ observationEnd —
- * never "current feed price when the worker happened to run".
+ * Resolve uses start/end prints near observationStart/End — never live worker price.
+ * After resolve, records are frozen and never overwritten.
  */
 import { NamespaceStore } from "./persistentStore.js";
 
@@ -14,6 +14,11 @@ export type ObservationSnapshot = {
   endTimestamp?: number;
   source: string;
   updatedAt: string;
+  /** Once true, never mutate start/end (auditable evidence). */
+  frozen?: boolean;
+  frozenAt?: string;
+  resolutionTxHash?: string;
+  outcome?: "YES" | "NO";
 };
 
 const store = new NamespaceStore<ObservationSnapshot>("observation-snapshots");
@@ -31,14 +36,12 @@ export async function recordObservationSample(input: {
   role: "btc" | "weather";
   value: number;
   atMs: number;
-  /** observationStart / observationEnd unix ms */
   obsStartMs: number;
   obsEndMs: number;
   source: string;
-  /** Max distance from target boundary to accept sample (default 10s for BTC). */
   maxDistanceMs?: number;
 }): Promise<ObservationSnapshot> {
-  const maxDist = input.maxDistanceMs ?? 10_000;
+  const maxDist = input.maxDistanceMs ?? 35_000;
   const k = key(input.market);
   const existing =
     (await store.get(k)) ??
@@ -49,6 +52,9 @@ export async function recordObservationSample(input: {
       updatedAt: new Date().toISOString()
     } satisfies ObservationSnapshot);
 
+  // Never mutate frozen resolution evidence.
+  if (existing.frozen) return existing;
+
   const next: ObservationSnapshot = {
     ...existing,
     role: input.role,
@@ -56,7 +62,6 @@ export async function recordObservationSample(input: {
     updatedAt: new Date().toISOString()
   };
 
-  // Capture start if we don't have one and sample is near obsStart.
   if (
     next.startValue === undefined &&
     Number.isFinite(input.obsStartMs) &&
@@ -67,22 +72,93 @@ export async function recordObservationSample(input: {
     next.startTimestamp = input.atMs;
   }
 
-  // Capture / refresh end once we're at or past obsEnd (nearest sample within window).
-  if (Number.isFinite(input.obsEndMs) && input.obsEndMs > 0 && input.atMs >= input.obsEndMs - maxDist) {
-    const dist = Math.abs(input.atMs - input.obsEndMs);
-    const prevDist =
-      next.endTimestamp !== undefined ? Math.abs(next.endTimestamp - input.obsEndMs) : Number.POSITIVE_INFINITY;
-    if (dist <= maxDist && dist <= prevDist) {
-      next.endValue = input.value;
-      next.endTimestamp = input.atMs;
-    }
+  // Set end only once (first acceptable sample after end − window). Do not replace
+  // with "closer" samples after resolve — that breaks audit trail.
+  if (
+    next.endValue === undefined &&
+    Number.isFinite(input.obsEndMs) &&
+    input.obsEndMs > 0 &&
+    input.atMs >= input.obsEndMs - maxDist &&
+    Math.abs(input.atMs - input.obsEndMs) <= maxDist
+  ) {
+    next.endValue = input.value;
+    next.endTimestamp = input.atMs;
   }
 
   await store.set(k, next);
   return next;
 }
 
-/** Closest sample within maxDistanceMs of target time; undefined if none close enough. */
+/** Force start/end from raw ticks (idempotent; no-op if frozen). */
+export async function applyBoundaryFromRawTicks(input: {
+  market: string;
+  role: "btc" | "weather";
+  obsStartMs: number;
+  obsEndMs: number;
+  open?: { value: number; at: number };
+  close?: { value: number; at: number };
+  source: string;
+}): Promise<ObservationSnapshot> {
+  const k = key(input.market);
+  const existing =
+    (await store.get(k)) ??
+    ({
+      market: k,
+      role: input.role,
+      source: input.source,
+      updatedAt: new Date().toISOString()
+    } satisfies ObservationSnapshot);
+
+  if (existing.frozen) return existing;
+
+  const next: ObservationSnapshot = {
+    ...existing,
+    role: input.role,
+    source: input.source || existing.source,
+    updatedAt: new Date().toISOString()
+  };
+  if (input.open && next.startValue === undefined) {
+    next.startValue = input.open.value;
+    next.startTimestamp = input.open.at;
+  }
+  if (input.close && next.endValue === undefined) {
+    next.endValue = input.close.value;
+    next.endTimestamp = input.close.at;
+  }
+  await store.set(k, next);
+  return next;
+}
+
+export async function freezeObservationSnapshot(input: {
+  market: string;
+  outcome: "YES" | "NO";
+  resolutionTxHash?: string;
+  startValue: number;
+  startTimestamp: number;
+  endValue: number;
+  endTimestamp: number;
+  source: string;
+  role: "btc" | "weather";
+}): Promise<ObservationSnapshot> {
+  const k = key(input.market);
+  const frozen: ObservationSnapshot = {
+    market: k,
+    role: input.role,
+    startValue: input.startValue,
+    startTimestamp: input.startTimestamp,
+    endValue: input.endValue,
+    endTimestamp: input.endTimestamp,
+    source: input.source,
+    updatedAt: new Date().toISOString(),
+    frozen: true,
+    frozenAt: new Date().toISOString(),
+    resolutionTxHash: input.resolutionTxHash,
+    outcome: input.outcome
+  };
+  await store.set(k, frozen);
+  return frozen;
+}
+
 export function valueNearTimeWithin(
   history: Array<{ value: number; at: number }> | undefined,
   t: number,
@@ -103,8 +179,8 @@ export function snapshotReadyForResolve(
   snap: ObservationSnapshot | null | undefined,
   obsStartMs: number,
   obsEndMs: number,
-  maxDistanceMs = 10_000
-): { ok: true; start: number; end: number } | { ok: false; reason: string } {
+  maxDistanceMs = 35_000
+): { ok: true; start: number; end: number; startAt: number; endAt: number } | { ok: false; reason: string } {
   if (!snap) return { ok: false, reason: "No observation snapshot stored for market" };
   if (!Number.isFinite(snap.startValue) || snap.startTimestamp === undefined) {
     return { ok: false, reason: "Missing observation start snapshot" };
@@ -118,5 +194,14 @@ export function snapshotReadyForResolve(
   if (Math.abs(snap.endTimestamp - obsEndMs) > maxDistanceMs) {
     return { ok: false, reason: "End snapshot too far from observationEnd" };
   }
-  return { ok: true, start: snap.startValue as number, end: snap.endValue as number };
+  return {
+    ok: true,
+    start: snap.startValue as number,
+    end: snap.endValue as number,
+    startAt: snap.startTimestamp,
+    endAt: snap.endTimestamp
+  };
 }
+
+/** Grace after observationEnd before canceling for missing snapshots (ms). */
+export const SNAPSHOT_GRACE_MS = 45_000;

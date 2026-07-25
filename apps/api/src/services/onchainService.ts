@@ -977,31 +977,43 @@ export async function resolveMarketOnchain(id: string, outcome: Outcome) {
 }
 
 /**
- * Capture feed samples for observation windows on every cycle tick.
- * Must run before resolve so start/end are fixed near observationStart/End.
+ * Capture feed samples for active observation windows.
+ * Uses high-res raw ticks (not minute-bucketed chart history).
  */
 export async function captureObservationSnapshots(): Promise<{ updated: number }> {
   assertDeployment();
-  const {
-    recordObservationSample,
-    valueNearTimeWithin
-  } = await import("./observationSnapshots.js");
+  const { applyBoundaryFromRawTicks, recordObservationSample } = await import(
+    "./observationSnapshots.js"
+  );
+  const { getRawTicks, nearestRawTick, pushRawTick } = await import("./rawTicks.js");
   const markets = await listOnchainMarkets({ forCycle: true });
   const data = await getDemoReferenceData();
   const now = Date.now();
   let updated = 0;
 
+  // Always append current feed print to raw ticks (works even with 1/min pinger).
+  if (Number.isFinite(data.btcUsd?.price)) {
+    await pushRawTick("btc", data.btcUsd!.price as number, now);
+  }
+  if (Number.isFinite(data.londonWeather?.temperatureC)) {
+    await pushRawTick("weather", data.londonWeather!.temperatureC as number, now);
+  }
+
+  // ~35s covers minute pinger misalignment (~22s past boundary on :00 ticks).
+  const btcMaxDist = 35_000;
+  const weatherMaxDist = 5 * 60_000;
+
   for (const market of markets) {
     const status = String(market.status || "").toUpperCase();
-    // Only care about markets that have locked / are observing / ready to resolve
-    if (!["LOCKED", "OBSERVE", "OBSERVATION", "OPEN"].includes(status) && status !== "RESOLVED") {
-      // Still try for LOCKED after lockTime
+    // Never touch snapshots for terminal markets (preserves payout evidence).
+    if (!["OPEN", "LOCKED", "OBSERVATION", "OBSERVE"].includes(status)) {
+      continue;
     }
+
     const obsStartMs = Date.parse(market.observationStart || "") || 0;
     const obsEndMs = Date.parse(market.observationEnd || "") || 0;
     if (!obsStartMs || !obsEndMs) continue;
-    // Too early for any sample near obs start
-    if (now < obsStartMs - 15_000) continue;
+    if (now < obsStartMs - 40_000) continue;
 
     const q = (market.question || "").toLowerCase();
     const isBtc =
@@ -1020,88 +1032,60 @@ export async function captureObservationSnapshots(): Promise<{ updated: number }
     if (!mkt) continue;
 
     if (isBtc) {
-      const hist = data.btcUsd?.history ?? [];
-      const price = data.btcUsd?.price;
       const source = data.btcUsd?.source ?? "Coinbase spot";
-      // Prefer live tick at now if we're near a boundary; also use history samples.
-      const candidates: Array<{ value: number; at: number }> = [...hist];
-      if (Number.isFinite(price)) candidates.push({ value: price as number, at: now });
-      for (const c of candidates) {
+      const ticks = await getRawTicks("btc");
+      const open = nearestRawTick(ticks, obsStartMs, btcMaxDist);
+      const close = nearestRawTick(ticks, obsEndMs, btcMaxDist);
+      await applyBoundaryFromRawTicks({
+        market: mkt,
+        role: "btc",
+        obsStartMs,
+        obsEndMs,
+        open: open ? { value: open.value, at: open.at } : undefined,
+        close: close ? { value: close.value, at: close.at } : undefined,
+        source
+      });
+      // Also record live tick if near a boundary
+      if (Number.isFinite(data.btcUsd?.price)) {
         await recordObservationSample({
           market: mkt,
           role: "btc",
-          value: c.value,
-          atMs: c.at,
+          value: data.btcUsd!.price as number,
+          atMs: now,
           obsStartMs,
           obsEndMs,
           source,
-          maxDistanceMs: 10_000
-        });
-        updated += 1;
-      }
-      // Explicit boundary pulls from history with hard distance cap
-      const open = valueNearTimeWithin(candidates, obsStartMs, 10_000);
-      if (open) {
-        await recordObservationSample({
-          market: mkt,
-          role: "btc",
-          value: open.value,
-          atMs: open.at,
-          obsStartMs,
-          obsEndMs,
-          source,
-          maxDistanceMs: 10_000
+          maxDistanceMs: btcMaxDist
         });
       }
-      const close = valueNearTimeWithin(candidates, obsEndMs, 10_000);
-      if (close) {
-        await recordObservationSample({
-          market: mkt,
-          role: "btc",
-          value: close.value,
-          atMs: close.at,
-          obsStartMs,
-          obsEndMs,
-          source,
-          maxDistanceMs: 10_000
-        });
-      }
+      updated += 1;
     } else if (isWeather) {
-      // Weather sources are coarser — allow 5 min distance.
-      const maxDist = 5 * 60_000;
-      const hist = data.londonWeather?.history ?? [];
-      const temp = data.londonWeather?.temperatureC;
       const source = data.londonWeather?.source ?? "Open-Meteo";
-      const candidates: Array<{ value: number; at: number }> = [...hist];
-      if (Number.isFinite(temp)) candidates.push({ value: temp as number, at: now });
-      const open = valueNearTimeWithin(candidates, obsStartMs, maxDist);
-      const close = valueNearTimeWithin(candidates, obsEndMs, maxDist);
-      if (open) {
+      const ticks = await getRawTicks("weather");
+      const open = nearestRawTick(ticks, obsStartMs, weatherMaxDist);
+      const close = nearestRawTick(ticks, obsEndMs, weatherMaxDist);
+      await applyBoundaryFromRawTicks({
+        market: mkt,
+        role: "weather",
+        obsStartMs,
+        obsEndMs,
+        open: open ? { value: open.value, at: open.at } : undefined,
+        close: close ? { value: close.value, at: close.at } : undefined,
+        source
+      });
+      if (Number.isFinite(data.londonWeather?.temperatureC)) {
         await recordObservationSample({
           market: mkt,
           role: "weather",
-          value: open.value,
-          atMs: open.at,
+          value: data.londonWeather!.temperatureC as number,
+          atMs: now,
           obsStartMs,
           obsEndMs,
           source,
-          maxDistanceMs: maxDist
+          maxDistanceMs: weatherMaxDist
         });
-        updated += 1;
       }
-      if (close) {
-        await recordObservationSample({
-          market: mkt,
-          role: "weather",
-          value: close.value,
-          atMs: close.at,
-          obsStartMs,
-          obsEndMs,
-          source,
-          maxDistanceMs: maxDist
-        });
-        updated += 1;
-      }
+      updated += 1;
     }
   }
   return { updated };
@@ -1118,7 +1102,6 @@ export async function resolveReferenceMarketOnchain(id: string) {
     return { error: "Market missing observationStart/observationEnd.", market };
   }
 
-  // Permanent market rule: YES if end-of-observation print is higher than start-of-observation.
   const q = (market.question || "").toLowerCase();
   const isBtc =
     market.demoRole === "btc_price" ||
@@ -1136,83 +1119,65 @@ export async function resolveReferenceMarketOnchain(id: string) {
     return { error: "Selected market is not a BTC/weather reference market.", market };
   }
 
-  // Refresh snapshots from feed (idempotent) then require both bounds.
   await captureObservationSnapshots();
 
   const {
     getObservationSnapshot,
     snapshotReadyForResolve,
-    valueNearTimeWithin
+    freezeObservationSnapshot,
+    SNAPSHOT_GRACE_MS,
+    applyBoundaryFromRawTicks
   } = await import("./observationSnapshots.js");
+  const { getRawTicks, nearestRawTick } = await import("./rawTicks.js");
   const data = await getDemoReferenceData();
   const mkt = market.contractAddress || market.id;
-  const maxDist = isBtc ? 10_000 : 5 * 60_000;
+  // Wider than 10s: minute pinger can land ~22s after :00-aligned boundaries.
+  const maxDist = isBtc ? 35_000 : 5 * 60_000;
+  const role = isBtc ? ("btc" as const) : ("weather" as const);
+  const source = isBtc
+    ? data.btcUsd?.source ?? "Coinbase spot"
+    : data.londonWeather?.source ?? "Open-Meteo";
 
-  // One more attempt: pull boundary samples from history into snapshot store.
-  if (isBtc) {
-    const hist = data.btcUsd?.history ?? [];
-    const open = valueNearTimeWithin(hist, obsStartMs, maxDist);
-    const close = valueNearTimeWithin(hist, obsEndMs, maxDist);
-    const { recordObservationSample } = await import("./observationSnapshots.js");
-    if (open) {
-      await recordObservationSample({
-        market: mkt,
-        role: "btc",
-        value: open.value,
-        atMs: open.at,
-        obsStartMs,
-        obsEndMs,
-        source: data.btcUsd?.source ?? "Coinbase spot",
-        maxDistanceMs: maxDist
-      });
-    }
-    if (close) {
-      await recordObservationSample({
-        market: mkt,
-        role: "btc",
-        value: close.value,
-        atMs: close.at,
-        obsStartMs,
-        obsEndMs,
-        source: data.btcUsd?.source ?? "Coinbase spot",
-        maxDistanceMs: maxDist
-      });
-    }
-  } else {
-    const hist = data.londonWeather?.history ?? [];
-    const open = valueNearTimeWithin(hist, obsStartMs, maxDist);
-    const close = valueNearTimeWithin(hist, obsEndMs, maxDist);
-    const { recordObservationSample } = await import("./observationSnapshots.js");
-    if (open) {
-      await recordObservationSample({
-        market: mkt,
-        role: "weather",
-        value: open.value,
-        atMs: open.at,
-        obsStartMs,
-        obsEndMs,
-        source: data.londonWeather?.source ?? "Open-Meteo",
-        maxDistanceMs: maxDist
-      });
-    }
-    if (close) {
-      await recordObservationSample({
-        market: mkt,
-        role: "weather",
-        value: close.value,
-        atMs: close.at,
-        obsStartMs,
-        obsEndMs,
-        source: data.londonWeather?.source ?? "Open-Meteo",
-        maxDistanceMs: maxDist
-      });
-    }
-  }
+  // Pull boundaries from high-res raw ticks (not merged minute chart history).
+  const ticks = await getRawTicks(role);
+  const open = nearestRawTick(ticks, obsStartMs, maxDist);
+  const close = nearestRawTick(ticks, obsEndMs, maxDist);
+  await applyBoundaryFromRawTicks({
+    market: mkt,
+    role,
+    obsStartMs,
+    obsEndMs,
+    open: open ? { value: open.value, at: open.at } : undefined,
+    close: close ? { value: close.value, at: close.at } : undefined,
+    source
+  });
 
   const snap = await getObservationSnapshot(mkt);
+  // Already frozen from a prior successful resolve — return evidence only.
+  if (snap?.frozen && snap.outcome && Number.isFinite(snap.startValue) && Number.isFinite(snap.endValue)) {
+    return {
+      market,
+      outcome: snap.outcome,
+      observedValue: snap.endValue,
+      openValue: snap.startValue,
+      threshold: snap.startValue,
+      referenceSource: snap.source,
+      frozen: true,
+      resolutionTxHash: snap.resolutionTxHash
+    };
+  }
+
   const ready = snapshotReadyForResolve(snap, obsStartMs, obsEndMs, maxDist);
   if (!ready.ok) {
-    // Fail closed: cancel instead of resolving on live/current price.
+    const now = Date.now();
+    // Grace: wait for more feed samples after obsEnd before canceling.
+    if (now < obsEndMs + SNAPSHOT_GRACE_MS) {
+      return {
+        error: `${ready.reason} (waiting for snapshot grace until ${new Date(obsEndMs + SNAPSHOT_GRACE_MS).toISOString()})`,
+        deferred: true,
+        market
+      };
+    }
     const cancel = await cancelMarketOnchain(
       id,
       `Reliable observation snapshot unavailable: ${ready.reason}`
@@ -1229,15 +1194,32 @@ export async function resolveReferenceMarketOnchain(id: string) {
   const observedValue = ready.end;
   const outcome: Outcome = observedValue > openValue ? "YES" : "NO";
   const result = await resolveMarketOnchain(id, outcome);
+  const txHash =
+    result && typeof result === "object" && "hash" in result
+      ? String((result as { hash?: string }).hash ?? "")
+      : undefined;
+
+  // Freeze immutable evidence used for the payout (never rewrite later).
+  await freezeObservationSnapshot({
+    market: mkt,
+    role,
+    outcome,
+    startValue: openValue,
+    startTimestamp: ready.startAt,
+    endValue: observedValue,
+    endTimestamp: ready.endAt,
+    source,
+    resolutionTxHash: txHash || undefined
+  });
+
   return {
     ...result,
     outcome,
     observedValue,
     threshold: openValue,
     openValue,
-    referenceSource:
-      snap?.source ??
-      (isBtc ? data.btcUsd?.source ?? "Coinbase spot" : data.londonWeather?.source ?? "Open-Meteo")
+    referenceSource: source,
+    frozen: true
   };
 }
 
@@ -1545,15 +1527,19 @@ export async function getDemoReferenceData() {
   ]);
   const btcData = btc.status === "fulfilled" ? btc.value : undefined;
   if (btcData && Number.isFinite(btcData.price)) {
-    pushTick(btcTickHistory, btcData.price, Date.parse(btcData.updatedAt) || Date.now(), 800);
+    const at = Date.parse(btcData.updatedAt) || Date.now();
+    pushTick(btcTickHistory, btcData.price, at, 800);
+    // High-res raw ticks for observation boundaries (not minute-bucketed).
+    void import("./rawTicks.js").then(({ pushRawTick }) =>
+      pushRawTick("btc", btcData.price as number, at)
+    );
   }
   const weatherData = weather.status === "fulfilled" ? weather.value : undefined;
   if (weatherData && Number.isFinite(weatherData.temperatureC)) {
-    pushTick(
-      weatherTickHistory,
-      weatherData.temperatureC,
-      Date.parse(weatherData.updatedAt) || Date.now(),
-      2_500
+    const at = Date.parse(weatherData.updatedAt) || Date.now();
+    pushTick(weatherTickHistory, weatherData.temperatureC, at, 2_500);
+    void import("./rawTicks.js").then(({ pushRawTick }) =>
+      pushRawTick("weather", weatherData.temperatureC as number, at)
     );
   }
 
@@ -2317,8 +2303,21 @@ export async function recordTicketOpening(body: {
     functionName: "getTicket",
     args: [ticketIdBn]
   });
-  const chainMarket = getAddress(String(onchain.market));
-  const chainOwner = getAddress(String(onchain.owner));
+  const zero = "0x0000000000000000000000000000000000000000";
+  const chainMarketRaw = String(onchain.market || zero);
+  const chainOwnerRaw = String(onchain.owner || zero);
+  // getTicket returns zero struct for non-existent ids — reject those.
+  if (
+    !chainMarketRaw ||
+    chainMarketRaw.toLowerCase() === zero ||
+    !chainOwnerRaw ||
+    chainOwnerRaw.toLowerCase() === zero ||
+    Number(onchain.status) === 0
+  ) {
+    return { error: "ticket does not exist" };
+  }
+  const chainMarket = getAddress(chainMarketRaw);
+  const chainOwner = getAddress(chainOwnerRaw);
   const chainOutcome = Number(onchain.outcome) === 2 ? "NO" : Number(onchain.outcome) === 1 ? "YES" : undefined;
 
   const clientMarket =
@@ -2360,7 +2359,7 @@ export async function recordTicketOpening(body: {
 
   const meta = upsertTicketOpening({
     ticketId,
-    marketId: typeof body.marketId === "string" ? body.marketId : chainMarket,
+    marketId: chainMarket,
     marketAddress: chainMarket,
     outcome: chainOutcome,
     referencePrice,

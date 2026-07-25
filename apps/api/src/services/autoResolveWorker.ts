@@ -160,11 +160,23 @@ function hasParseableThreshold(
   category: string | undefined,
   question: string
 ): boolean {
+  // New start/end observation markets (no $ / °C threshold in title).
+  if (/finish observation higher|higher than it started/i.test(question)) {
+    return true;
+  }
   if (role === "btc_price" || category === "crypto-candle") {
-    return /above\s+\$?[\d,]+(?:\.\d+)?/i.test(question);
+    return (
+      /above\s+\$?[\d,]+(?:\.\d+)?/i.test(question) ||
+      /\bbtc\b/i.test(question) ||
+      /bitcoin/i.test(question)
+    );
   }
   if (role === "london_weather" || category === "weather") {
-    return /at least\s+-?[\d.]+\s*C/i.test(question);
+    return (
+      /at least\s+-?[\d.]+\s*C/i.test(question) ||
+      /london/i.test(question) ||
+      /temp/i.test(question)
+    );
   }
   return false;
 }

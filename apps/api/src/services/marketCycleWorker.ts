@@ -24,7 +24,10 @@ import { withMarketCreateLock } from "./marketCreateLock.js";
 
 /** Nominal entry window (seconds). createMarketOnchain adds tx slack + lower sniper buffer. */
 const LOCK_SECONDS = 75;
-const OBSERVATION_SECONDS = 60;
+/** BTC short loop for demo UX. */
+const OBSERVATION_SECONDS_BTC = 60;
+/** Weather feeds are coarser — longer window for independent start/end samples. */
+const OBSERVATION_SECONDS_WEATHER = 900;
 /** Extra pause after lock before observationStart (set in createMarketOnchain defaults). */
 const STATE_PATH = () => runtimeFile("market-cycle-state.json");
 
@@ -110,6 +113,10 @@ export async function runMarketCycleOnce(): Promise<{
       try {
         console.log(`[market-cycle] resolving ${market.demoRole ?? market.category} ${market.id}`);
         const result = await resolveReferenceMarketOnchain(market.id);
+        if (result && "deferred" in result && result.deferred) {
+          // Snapshot grace — try again next cycle; do not cancel yet.
+          continue;
+        }
         if (result && "error" in result && result.error) {
           errors.push(`${market.id}: ${result.error}`);
           continue;
@@ -157,7 +164,7 @@ export async function runMarketCycleOnce(): Promise<{
           const result = await createMarketOnchain({
             demoRole: "btc_price",
             lockSeconds: LOCK_SECONDS,
-            observationSeconds: OBSERVATION_SECONDS
+            observationSeconds: OBSERVATION_SECONDS_BTC
           });
           if ("error" in result && result.error) {
             errors.push(`create btc: ${result.error}`);
@@ -186,7 +193,7 @@ export async function runMarketCycleOnce(): Promise<{
           const result = await createMarketOnchain({
             demoRole: "london_weather",
             lockSeconds: LOCK_SECONDS,
-            observationSeconds: OBSERVATION_SECONDS
+            observationSeconds: OBSERVATION_SECONDS_WEATHER
           });
           if ("error" in result && result.error) {
             errors.push(`create weather: ${result.error}`);
@@ -259,7 +266,8 @@ export function getMarketCycleStatus() {
   return {
     ...readCycleState(),
     lockSeconds: LOCK_SECONDS,
-    observationSeconds: OBSERVATION_SECONDS,
+    observationSecondsBtc: OBSERVATION_SECONDS_BTC,
+    observationSecondsWeather: OBSERVATION_SECONDS_WEATHER,
     hasResolverKey: hasResolverKey(),
     onchain: onchainEnabled(),
     note: "New OPEN BTC/weather only after previous fully RESOLVED. Markets UI shows 1 BTC + 1 weather; claim via Portfolio."
@@ -352,7 +360,7 @@ function isReadyToResolve(
   const readyAt = Number.isFinite(observationEnd)
     ? observationEnd
     : Number.isFinite(lockTime)
-      ? lockTime + OBSERVATION_SECONDS * 1000
+      ? lockTime + OBSERVATION_SECONDS_BTC * 1000
       : Number.NaN;
   return Number.isFinite(readyAt) && now >= readyAt;
 }

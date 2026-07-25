@@ -25,7 +25,7 @@ import {
   requireDurableKv,
   setIfAbsent
 } from "./persistentStore.js";
-import { waitSuccessfulReceipt } from "./txReceipt.js";
+import { isTransactionRevertedError, waitSuccessfulReceipt } from "./txReceipt.js";
 
 const FORWARDING_HOOK =
   "0x636374702d666f72776172640000000000000000000000000000000000000000" as const;
@@ -172,28 +172,29 @@ export function demoFundAuthMessage(params: {
   ].join("\n");
 }
 
-/** Consume a one-time nonce after signature validation (atomic SET NX, long TTL). */
-async function consumeDemoFundNonce(nonce: string): Promise<void> {
+/** Consume a one-time nonce (atomic SET NX, long TTL). Call only after op-store miss. */
+export async function consumeDemoFundNonce(nonce: string): Promise<void> {
   const n = (nonce || "").trim();
   if (!/^[a-fA-F0-9]{16,64}$/.test(n)) throw new Error("Invalid demo-fund nonce.");
-  // Keep nonces for 7 days so signatures cannot be replayed after a short TTL window.
   const ok = await setIfAbsent(`cctp-nonce:${n}`, { usedAt: new Date().toISOString() }, 7 * 24 * 3600);
   if (!ok) throw new Error("Demo-fund nonce already used.");
 }
 
+/** Verify EIP-191 without consuming nonce (safe for retries after lost HTTP response). */
 export async function verifyInjectedDemoFundAuth(params: {
   mintTo: string;
   amountUsdc: string;
   nonce: string;
   signature: string;
   expiresAt: number | string;
+  /** When false, only verify signature (default true for backward compat). */
+  consumeNonce?: boolean;
 }): Promise<`0x${string}`> {
   requireDurableKv("CCTP demo fund auth");
   const expiresAt = Number(params.expiresAt);
   if (!Number.isFinite(expiresAt) || expiresAt < Math.floor(Date.now() / 1000)) {
     throw new Error("Demo-fund signature expired. Request a new signature.");
   }
-  // Cap challenge lifetime (max 15 minutes from now)
   if (expiresAt > Math.floor(Date.now() / 1000) + 15 * 60) {
     throw new Error("Demo-fund expiresAt too far in the future.");
   }
@@ -211,8 +212,9 @@ export async function verifyInjectedDemoFundAuth(params: {
   if (getAddress(recovered) !== getAddress(params.mintTo)) {
     throw new Error("Signature does not match mintTo address.");
   }
-  // Consume nonce only after signature checks pass (avoids griefing by burning nonces).
-  await consumeDemoFundNonce(params.nonce);
+  if (params.consumeNonce !== false) {
+    await consumeDemoFundNonce(params.nonce);
+  }
   return getAddress(recovered);
 }
 
@@ -223,8 +225,10 @@ export async function verifyInjectedDemoFundAuth(params: {
 export async function demoFundViaCctp(params: {
   mintTo: string;
   amountUsdc?: string;
-  /** Client nonce/session key — retries return the same burnTxHash. */
+  /** Client UUID per user action — retries return the same burnTxHash. */
   idempotencyKey?: string;
+  /** Injected path: consume EIP-191 nonce only when starting a new burn. */
+  claimNonce?: string;
 }): Promise<{
   mintTo: `0x${string}`;
   amount: string;
@@ -248,7 +252,11 @@ export async function demoFundViaCctp(params: {
     throw new Error(`Demo fund is limited to ${formatUnits(maxPerCall, 6)} USDC per call.`);
   }
 
-  const idempotencyKey = (params as { idempotencyKey?: string }).idempotencyKey?.trim();
+  const idempotencyKey = (params.idempotencyKey || "").trim();
+  if (!idempotencyKey || idempotencyKey.length < 8) {
+    throw new Error("idempotencyKey required (client UUID per user action).");
+  }
+
   const opStore = new NamespaceStore<{
     burnTxHash: string;
     mintTo: string;
@@ -257,18 +265,63 @@ export async function demoFundViaCctp(params: {
     at: string;
   }>("cctp-demo-ops");
 
-  if (idempotencyKey) {
-    const prior = await opStore.get(idempotencyKey);
-    if (prior?.burnTxHash) {
+  const prior = await opStore.get(idempotencyKey);
+  if (prior?.burnTxHash && prior.status !== "failed") {
+    return {
+      mintTo,
+      amount: prior.amount || amount.toString(),
+      totalBurn: prior.amount || amount.toString(),
+      burnTxHash: prior.burnTxHash as `0x${string}`,
+      sourceAddress: cctpSourceAddress() ?? ("0x0000000000000000000000000000000000000000" as `0x${string}`),
+      status: "burned_pending_mint",
+      domain: CCTP.domains.baseSepolia
+    };
+  }
+
+  // Atomic operation lock — prevents double burn from concurrent POSTs.
+  const opLockToken = randomBytes(8).toString("hex");
+  const opLockKey = `cctp-op:${idempotencyKey}`;
+  if (!(await acquireLock(opLockKey, 120_000, opLockToken))) {
+    // Another worker holds the op — wait briefly and re-read.
+    await new Promise((r) => setTimeout(r, 1500));
+    const again = await opStore.get(idempotencyKey);
+    if (again?.burnTxHash && again.status !== "failed") {
       return {
         mintTo,
-        amount: prior.amount || amount.toString(),
-        totalBurn: prior.amount || amount.toString(),
-        burnTxHash: prior.burnTxHash as `0x${string}`,
+        amount: again.amount || amount.toString(),
+        totalBurn: again.amount || amount.toString(),
+        burnTxHash: again.burnTxHash as `0x${string}`,
         sourceAddress: cctpSourceAddress() ?? ("0x0000000000000000000000000000000000000000" as `0x${string}`),
         status: "burned_pending_mint",
         domain: CCTP.domains.baseSepolia
       };
+    }
+    throw new Error("Demo fund operation in progress — retry shortly.");
+  }
+
+  // Re-check under lock
+  const underLock = await opStore.get(idempotencyKey);
+  if (underLock?.burnTxHash && underLock.status !== "failed") {
+    await releaseLock(opLockKey, opLockToken);
+    return {
+      mintTo,
+      amount: underLock.amount || amount.toString(),
+      totalBurn: underLock.amount || amount.toString(),
+      burnTxHash: underLock.burnTxHash as `0x${string}`,
+      sourceAddress: cctpSourceAddress() ?? ("0x0000000000000000000000000000000000000000" as `0x${string}`),
+      status: "burned_pending_mint",
+      domain: CCTP.domains.baseSepolia
+    };
+  }
+
+  // Claim nonce for injected path only after op-store miss (safe retries).
+  const claimNonce = params.claimNonce?.trim();
+  if (claimNonce) {
+    try {
+      await consumeDemoFundNonce(claimNonce);
+    } catch (e) {
+      await releaseLock(opLockKey, opLockToken);
+      throw e;
     }
   }
 
@@ -355,22 +408,33 @@ export async function demoFundViaCctp(params: {
 
     burnTxHash = await walletClient.sendTransaction({ to: messenger, data: burnData });
 
-    // Once broadcast, never auto-release quota — a timeout must not free limit for a retry burn.
-    if (idempotencyKey) {
-      await opStore.set(idempotencyKey, {
-        burnTxHash,
-        mintTo,
-        amount: totalBurnStr,
-        status: "broadcast",
-        at: new Date().toISOString()
-      });
-    }
+    // Once broadcast, never auto-release quota on timeout — only on confirmed revert.
+    await opStore.set(idempotencyKey, {
+      burnTxHash,
+      mintTo,
+      amount: totalBurnStr,
+      status: "broadcast",
+      at: new Date().toISOString()
+    });
 
     try {
       await waitSuccessfulReceipt(publicClient, burnTxHash);
-    } catch {
-      // Receipt unknown / timeout: keep reservation, return pending so client polls.
+    } catch (receiptErr) {
+      if (isTransactionRevertedError(receiptErr)) {
+        await opStore.set(idempotencyKey, {
+          burnTxHash,
+          mintTo,
+          amount: totalBurnStr,
+          status: "failed",
+          at: new Date().toISOString()
+        });
+        await quota.release();
+        await releaseLock(opLockKey, opLockToken);
+        throw new Error(`CCTP burn reverted on-chain: ${burnTxHash}`);
+      }
+      // RPC timeout / unknown: keep reservation, return pending for client poll / retry with same key.
       await quota.finalize();
+      await releaseLock(opLockKey, opLockToken);
       return {
         mintTo,
         amount: amount.toString(),
@@ -383,15 +447,14 @@ export async function demoFundViaCctp(params: {
     }
 
     await quota.finalize();
-    if (idempotencyKey) {
-      await opStore.set(idempotencyKey, {
-        burnTxHash,
-        mintTo,
-        amount: totalBurnStr,
-        status: "confirmed",
-        at: new Date().toISOString()
-      });
-    }
+    await opStore.set(idempotencyKey, {
+      burnTxHash,
+      mintTo,
+      amount: totalBurnStr,
+      status: "confirmed",
+      at: new Date().toISOString()
+    });
+    await releaseLock(opLockKey, opLockToken);
     return {
       mintTo,
       amount: amount.toString(),
@@ -405,9 +468,9 @@ export async function demoFundViaCctp(params: {
     if (!burnTxHash) {
       await quota.release();
     } else {
-      // Burn may still confirm — keep quota spent and surface hash if we have it.
       await quota.finalize();
     }
+    await releaseLock(opLockKey, opLockToken).catch(() => undefined);
     throw e;
   }
 }

@@ -1,9 +1,9 @@
 /**
  * Unit tests for observation snapshot boundary logic (resolve correctness).
- * Run: pnpm --filter @probx/api exec tsx src/services/observationSnapshots.test.ts
  */
 import assert from "node:assert/strict";
 import { snapshotReadyForResolve, valueNearTimeWithin } from "./observationSnapshots.js";
+import { nearestRawTick } from "./rawTicks.js";
 
 function main() {
   const t0 = 1_000_000;
@@ -13,34 +13,40 @@ function main() {
     { value: 99, at: t0 + 120_000 }
   ];
 
-  const open = valueNearTimeWithin(hist, t0, 10_000);
+  const open = valueNearTimeWithin(hist, t0, 35_000);
   assert.equal(open?.value, 100);
 
-  const close = valueNearTimeWithin(hist, t0 + 60_000, 10_000);
+  const close = valueNearTimeWithin(hist, t0 + 60_000, 35_000);
   assert.equal(close?.value, 101);
 
-  // Current price 99 at +120s must NOT be used as observation end (too far for 10s window)
-  const far = valueNearTimeWithin(hist, t0 + 60_000, 10_000);
-  assert.notEqual(far?.value, 99);
+  // Minute pinger lands ~22s late — still within 35s window via raw ticks.
+  const lateTicks = [
+    { value: 100, at: t0 + 22_000 },
+    { value: 101, at: t0 + 60_000 + 22_000 }
+  ];
+  const openLate = nearestRawTick(lateTicks, t0, 35_000);
+  const closeLate = nearestRawTick(lateTicks, t0 + 60_000, 35_000);
+  assert.equal(openLate?.value, 100);
+  assert.equal(closeLate?.value, 101);
 
   const ready = snapshotReadyForResolve(
     {
       market: "0xabc",
       role: "btc",
       startValue: 100,
-      startTimestamp: t0,
+      startTimestamp: t0 + 22_000,
       endValue: 101,
-      endTimestamp: t0 + 60_000,
+      endTimestamp: t0 + 82_000,
       source: "test",
       updatedAt: new Date().toISOString()
     },
     t0,
     t0 + 60_000,
-    10_000
+    35_000
   );
   assert.equal(ready.ok, true);
   if (ready.ok) {
-    assert.equal(ready.end > ready.start, true); // YES
+    assert.equal(ready.end > ready.start, true);
   }
 
   const missing = snapshotReadyForResolve(

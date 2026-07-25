@@ -221,16 +221,33 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
       setStep("burn");
       setMessage("Server CCTP: burning Base Sepolia USDC from demo treasury → Arc…");
       const amountUsdc = amount || "2";
+      // One UUID per user click; reuse only for retry of this same operation.
+      const opKey = `probx.cctp.demoOp.${mintTo}.${amountUsdc}`;
+      let idempotencyKey = "";
+      try {
+        const saved = sessionStorage.getItem(opKey);
+        if (saved) idempotencyKey = saved;
+      } catch {
+        /* ignore */
+      }
+      if (!idempotencyKey) {
+        idempotencyKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}-${Math.random().toString(36).slice(2, 12)}`;
+        try {
+          sessionStorage.setItem(opKey, idempotencyKey);
+        } catch {
+          /* ignore */
+        }
+      }
+
       const body: Record<string, string> = {
         mintTo,
-        amountUsdc
+        amountUsdc,
+        idempotencyKey
       };
       if (sessionMode === "embedded" && sessionEmail && sessionToken) {
-        // Use WalletContext session (localStorage-backed) — not sessionStorage.
         body.email = sessionEmail;
         body.sessionToken = sessionToken;
       } else if (sessionMode === "injected" && window.ethereum) {
-        // EIP-191 prove ownership of mintTo (includes expiry so signatures cannot be replayed).
         const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
           .map((b) => b.toString(16).padStart(2, "0"))
           .join("");
@@ -297,6 +314,14 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
           ? "Demo CCTP complete — USDC minted on Arc. Keep a little for gas."
           : "Burn sent — mint may still finalize; refresh balance in a minute."
       );
+      // Clear idempotency key only after a terminal success path (mint seen or explicit done).
+      if (forwardHash) {
+        try {
+          sessionStorage.removeItem(`probx.cctp.demoOp.${mintTo}.${amount || "2"}`);
+        } catch {
+          /* ignore */
+        }
+      }
       await refreshBalance();
     } catch (error) {
       setStep("error");

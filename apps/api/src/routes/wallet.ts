@@ -352,13 +352,15 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
         }
         destination = session.address;
       } else if (signature && nonce && getAddressSafe(mintTo)) {
-        // Injected: EIP-191 signature over wallet/amount/nonce/expiresAt/domain.
+        // Verify signature only — nonce is consumed inside demoFundViaCctp after op-store miss
+        // so a lost HTTP response can retry and still recover the burnTxHash.
         destination = await verifyInjectedDemoFundAuth({
           mintTo,
           amountUsdc,
           nonce,
           signature,
-          expiresAt: body.expiresAt !== undefined ? String(body.expiresAt) : ""
+          expiresAt: body.expiresAt !== undefined ? String(body.expiresAt) : "",
+          consumeNonce: false
         });
       } else {
         return {
@@ -370,13 +372,19 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
         };
       }
 
-      const idempotencyKey =
-        String(body.idempotencyKey ?? body.nonce ?? "").trim() ||
-        `${destination}:${amountUsdc}:${String(body.expiresAt ?? "")}`;
+      const idempotencyKey = String(body.idempotencyKey ?? "").trim();
+      if (!idempotencyKey || idempotencyKey.length < 8) {
+        return {
+          status: 400,
+          body: { error: "idempotencyKey required (client UUID per user action)" }
+        };
+      }
       const result = await demoFundViaCctp({
         mintTo: destination,
         amountUsdc,
-        idempotencyKey
+        idempotencyKey,
+        // claim nonce only when starting a new burn (after op-store check inside service)
+        claimNonce: signature && nonce ? nonce : undefined
       });
       return { status: 200, body: result };
     } catch (error) {
