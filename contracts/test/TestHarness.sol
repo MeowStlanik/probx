@@ -61,6 +61,7 @@ contract TestHarness {
         engine.setMarketRegistry(address(factory));
         pool.setEngine(address(engine));
         pool.setFeeRouter(address(feeRouter));
+        feeRouter.setEngine(address(engine));
         insuranceFund.setEngine(address(engine));
         insuranceFund.setFeeRouter(address(feeRouter));
         ticket.setEngine(address(engine));

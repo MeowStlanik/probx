@@ -37,6 +37,8 @@ export function LpShell({
   const [allowance, setAllowance] = useState(0n);
   const [usdcBal, setUsdcBal] = useState(0n);
   const [reservedAssetsOnchain, setReservedAssetsOnchain] = useState(0n);
+  /** Earliest expected unlock when risk epoch is active (ISO or human label). */
+  const [unlockEta, setUnlockEta] = useState<string | null>(null);
 
   const utilization = useMemo(() => {
     if (tvl <= 0) return "—";
@@ -64,6 +66,48 @@ export function LpShell({
       setManaged(managedAssets);
       setAvailableAssets(availableOnchain);
       void totalAssets; // raw contract balance available if needed later
+
+      // Estimate unlock: earliest observationEnd among active markets (hackathon UX).
+      if (reservedAssets > 0n) {
+        try {
+          const { apiUrl } = await import("@/lib/api");
+          const res = await fetch(apiUrl("/api/markets"), { cache: "no-store" });
+          if (res.ok) {
+            const body = (await res.json()) as {
+              markets?: Array<{ status?: string; observationEnd?: string; lockTime?: string }>;
+            };
+            const now = Date.now();
+            let soonest: number | null = null;
+            for (const m of body.markets ?? []) {
+              const st = (m.status || "").toUpperCase();
+              if (!["OPEN", "LOCKED", "OBSERVATION", "RESOLVED"].includes(st)) continue;
+              const end = Date.parse(m.observationEnd || m.lockTime || "");
+              if (!Number.isFinite(end)) continue;
+              // Add small settle buffer after observation
+              const eta = end + 90_000;
+              if (soonest === null || eta < soonest) soonest = eta;
+            }
+            if (soonest !== null) {
+              const ms = soonest - now;
+              if (ms <= 0) {
+                setUnlockEta("Unlock expected soon (settlement in progress)");
+              } else if (ms < 60_000) {
+                setUnlockEta(`Unlock expected in ~${Math.ceil(ms / 1000)}s`);
+              } else if (ms < 3_600_000) {
+                setUnlockEta(`Unlock expected in ~${Math.ceil(ms / 60_000)} min`);
+              } else {
+                setUnlockEta(`Unlock expected around ${new Date(soonest).toLocaleTimeString()}`);
+              }
+            } else {
+              setUnlockEta("Unlock after open ticket markets settle");
+            }
+          }
+        } catch {
+          setUnlockEta("Unlock after open ticket markets settle");
+        }
+      } else {
+        setUnlockEta(null);
+      }
 
       if (address) {
         const [sh, bal, allw] = await Promise.all([
@@ -130,17 +174,17 @@ export function LpShell({
         const walletClient = getWalletClient();
         if (!walletClient) return "Wallet provider unavailable.";
 
-        // Live reservedAssets — deposit/withdraw blocked while risk epoch open.
-        const reservedNow = (await publicClient.readContract({
-          address: getAddress(arcDeployment.liquidityPool),
-          abi: poolAbi,
-          functionName: "reservedAssets"
-        })) as bigint;
-        if (reservedNow > 0n && (action === "deposit" || action === "withdraw" || action === "approve")) {
-          if (action === "deposit" || action === "approve") {
-            return "LP deposits are paused until the current risk epoch settles (open ticket reserves).";
+        // Open reserves only ring-fence free capital — do not freeze the vault.
+        // Withdraw is limited on-chain by availableAssets (managed - reserved).
+        if (action === "withdraw") {
+          const availableNow = (await publicClient.readContract({
+            address: getAddress(arcDeployment.liquidityPool),
+            abi: poolAbi,
+            functionName: "availableAssets"
+          })) as bigint;
+          if (assets > availableNow) {
+            return `Only ${formatUnits(availableNow, 6)} USDC free right now (open ticket reserves are ring-fenced). Withdraw a smaller amount or wait for settlement.`;
           }
-          return "LP withdrawals are paused until the current risk epoch settles (open ticket reserves).";
         }
 
         if (action === "approve") {
@@ -468,6 +512,7 @@ export function LpShell({
       onCompleteUbSpend={onCompleteUbSpend}
       onDismissUbSpend={onDismissUbSpend}
       riskEpochActive={reservedAssetsOnchain > 0n}
+      unlockEta={unlockEta}
     />
   );
 }

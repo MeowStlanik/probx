@@ -1,3 +1,5 @@
+// Aliased: a local `createHash` (a tx hash) already exists further down this file.
+import { createHash as sha256 } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -121,6 +123,14 @@ const engineAbi = [
     outputs: []
   },
   {
+    // Authoritative "nothing left to settle" check — safer than trusting our cursor.
+    type: "function",
+    name: "marketHasNoExposure",
+    stateMutability: "view",
+    inputs: [{ name: "market", type: "address" }],
+    outputs: [{ name: "", type: "bool" }]
+  },
+  {
     type: "event",
     name: "TicketBought",
     inputs: [
@@ -135,6 +145,14 @@ const engineAbi = [
     ]
   }
 ] as const;
+
+/**
+ * TicketBought event looked up by name. Indexing the ABI positionally (engineAbi[2])
+ * silently rebinds to a different entry the moment anything is inserted above it.
+ */
+const ticketBoughtEvent = engineAbi.find(
+  (entry) => entry.type === "event" && entry.name === "TicketBought"
+) as Extract<(typeof engineAbi)[number], { type: "event" }>;
 
 const poolAbi = [
   { type: "function", name: "managedAssets", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint256" }] },
@@ -661,27 +679,43 @@ type TicketBoughtLog = {
     outcome?: number;
     riskAmount?: bigint;
   };
+  /** Present on real logs — lets metadata anchor to the purchase block, not call time. */
+  blockNumber?: bigint | null;
 };
 
-async function ticketBoughtLogsForMarket(market: `0x${string}`, chunkOnFailure = true) {
+/**
+ * @param fullRange scan from the deployment block instead of the recent window.
+ *        Listing can afford to look only at recent blocks; settlement cannot — a
+ *        ticket older than ARC_RECENT_SCAN_BLOCKS would drop out of the scan while
+ *        still holding LP reserve, and would never be settled again.
+ */
+async function ticketBoughtLogsForMarket(
+  market: `0x${string}`,
+  chunkOnFailure = true,
+  fullRange = false
+) {
+  // fullRange is only used by settlement, which cannot tolerate a partial scan.
+  const strict = fullRange;
   const latestBlock = await publicClient.getBlockNumber();
-  const fromBlock = recentTicketScanFromBlock(latestBlock);
+  const fromBlock = fullRange
+    ? configuredTicketFromBlock()
+    : recentTicketScanFromBlock(latestBlock);
   if (fromBlock > latestBlock) return [];
   const args = { market };
   // Arc testnet RPC: eth_getLogs limited to 10_000 blocks — never request full range.
   if (latestBlock - fromBlock > 9_000n || chunkOnFailure) {
-    return ticketBoughtLogsChunked(args, fromBlock, latestBlock);
+    return ticketBoughtLogsChunked(args, fromBlock, latestBlock, strict);
   }
   try {
     return await publicClient.getLogs({
       address: addr(deployment.microBoostEngine),
-      event: engineAbi[2],
+      event: ticketBoughtEvent,
       args,
       fromBlock,
       toBlock: latestBlock
     }) as TicketBoughtLog[];
   } catch {
-    return ticketBoughtLogsChunked(args, fromBlock, latestBlock);
+    return ticketBoughtLogsChunked(args, fromBlock, latestBlock, strict);
   }
 }
 
@@ -690,7 +724,7 @@ async function ticketBoughtLogsForBuyer(buyer: `0x${string}`, fromBlock: bigint,
   try {
     return await publicClient.getLogs({
       address: addr(deployment.microBoostEngine),
-      event: engineAbi[2],
+      event: ticketBoughtEvent,
       args,
       fromBlock,
       toBlock
@@ -700,7 +734,17 @@ async function ticketBoughtLogsForBuyer(buyer: `0x${string}`, fromBlock: bigint,
   }
 }
 
-async function ticketBoughtLogsChunked(args: TicketBoughtLogArgs, fromBlock: bigint, toBlock: bigint) {
+/**
+ * @param strict throw if any chunk cannot be read. Settlement must be strict — a short
+ *        list there silently strands tickets. Listing stays tolerant so a flaky public
+ *        RPC degrades the view instead of breaking the page.
+ */
+async function ticketBoughtLogsChunked(
+  args: TicketBoughtLogArgs,
+  fromBlock: bigint,
+  toBlock: bigint,
+  strict = false
+) {
   // Arc public RPC: eth_getLogs max range 10_000; some gateways flake on 8k — use 4k + retries.
   const chunkSize = configuredLogChunkSize();
   const logs: TicketBoughtLog[] = [];
@@ -719,7 +763,7 @@ async function ticketBoughtLogsChunked(args: TicketBoughtLogArgs, fromBlock: big
       try {
         got = (await publicClient.getLogs({
           address: addr(deployment.microBoostEngine),
-          event: engineAbi[2],
+          event: ticketBoughtEvent,
           ...(filterArgs ? { args: filterArgs } : {}),
           fromBlock: start,
           toBlock: end
@@ -729,7 +773,19 @@ async function ticketBoughtLogsChunked(args: TicketBoughtLogArgs, fromBlock: big
         await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
       }
     }
-    if (got) logs.push(...got);
+    if (!got) {
+      // Skipping a chunk silently returns a short list that looks complete. On the
+      // settlement path that reads as "this market has fewer tickets than it does",
+      // and the cursor would march past tickets still holding LP reserve.
+      if (strict) {
+        throw new Error(
+          `eth_getLogs failed for blocks ${start}-${end} after 3 attempts — ticket scan is incomplete`
+        );
+      }
+      console.warn(`[onchain] getLogs chunk ${start}-${end} unavailable — list may be partial`);
+      continue;
+    }
+    logs.push(...got);
   }
   return logs;
 }
@@ -977,35 +1033,91 @@ export async function resolveMarketOnchain(id: string, outcome: Outcome) {
 }
 
 /**
+ * Digest of the normalized provider reading, carried into frozen resolution evidence.
+ *
+ * SHA-256, not a 32-bit rolling hash: this is the value someone re-deriving a payout
+ * compares against. An 8-hex digest collides by birthday at ~65k samples, which a
+ * 1 Hz feed reaches in under a day — far too weak to attest what the oracle read.
+ */
+function simpleSourceHash(parts: {
+  feed: string;
+  value: number;
+  observedAt: number;
+  provider: string;
+}): string {
+  const raw = `${parts.feed}|${parts.value}|${parts.observedAt}|${parts.provider}`;
+  return sha256("sha256").update(raw).digest("hex");
+}
+
+/**
  * Capture feed samples for active observation windows.
- * Uses high-res raw ticks (not minute-bucketed chart history).
+ * End samples only use ticks with observedAt >= observationEnd.
  */
 export async function captureObservationSnapshots(): Promise<{ updated: number }> {
   assertDeployment();
-  const { applyBoundaryFromRawTicks, recordObservationSample } = await import(
-    "./observationSnapshots.js"
+  const { requireOracleKv } = await import("./rawTicks.js");
+  try {
+    requireOracleKv();
+  } catch {
+    // Local dev without KV: still capture to file store.
+  }
+
+  const {
+    applyBoundaryFromRawTicks,
+    recordObservationSample,
+    WEATHER_STALE_MS,
+    snapshotMaxDistanceMs
+  } = await import("./observationSnapshots.js");
+  const { getRawTicks, nearestRawTick, firstTickAtOrAfter, pushRawTick } = await import(
+    "./rawTicks.js"
   );
-  const { getRawTicks, nearestRawTick, pushRawTick } = await import("./rawTicks.js");
   const markets = await listOnchainMarkets({ forCycle: true });
-  const data = await getDemoReferenceData();
+  // Worker-only feed ingest (not the public demo-data read path).
+  const data = await getDemoReferenceData({ ingestOracleTicks: true });
   const now = Date.now();
   let updated = 0;
 
-  // Always append current feed print to raw ticks (works even with 1/min pinger).
+  // BTC: always record fresh spot with provider time.
   if (Number.isFinite(data.btcUsd?.price)) {
-    await pushRawTick("btc", data.btcUsd!.price as number, now);
+    const observedAt = Date.parse(data.btcUsd!.updatedAt) || now;
+    const price = data.btcUsd!.price as number;
+    const src = data.btcUsd!.source ?? "coinbase";
+    await pushRawTick("btc", price, observedAt, {
+      provider: src,
+      receivedAt: now,
+      sourceHash: simpleSourceHash({ feed: "btc", value: price, observedAt, provider: src })
+    });
   }
-  if (Number.isFinite(data.londonWeather?.temperatureC)) {
-    await pushRawTick("weather", data.londonWeather!.temperatureC as number, now);
+  // Weather: never promote cached/stale readings into oracle ticks.
+  const weather = data.londonWeather as
+    | { temperatureC?: number; updatedAt?: string; observedAt?: string; source?: string; isStale?: boolean }
+    | undefined;
+  if (
+    weather &&
+    Number.isFinite(weather.temperatureC) &&
+    !weather.isStale &&
+    !String(weather.source || "").includes("(cached)")
+  ) {
+    const observedAt =
+      parseProviderUtcMs(weather.observedAt || "") ||
+      Date.parse(weather.updatedAt || "") ||
+      0;
+    if (observedAt > 0 && now - observedAt <= WEATHER_STALE_MS) {
+      const temp = weather.temperatureC as number;
+      const src = weather.source ?? "open-meteo";
+      await pushRawTick("weather", temp, observedAt, {
+        provider: src,
+        receivedAt: now,
+        sourceHash: simpleSourceHash({ feed: "weather", value: temp, observedAt, provider: src })
+      });
+    }
   }
 
-  // ~35s covers minute pinger misalignment (~22s past boundary on :00 ticks).
-  const btcMaxDist = 35_000;
-  const weatherMaxDist = 5 * 60_000;
+  const btcMaxDist = snapshotMaxDistanceMs("btc");
+  const weatherMaxDist = snapshotMaxDistanceMs("weather");
 
   for (const market of markets) {
     const status = String(market.status || "").toUpperCase();
-    // Never touch snapshots for terminal markets (preserves payout evidence).
     if (!["OPEN", "LOCKED", "OBSERVATION", "OBSERVE"].includes(status)) {
       continue;
     }
@@ -1035,56 +1147,84 @@ export async function captureObservationSnapshots(): Promise<{ updated: number }
       const source = data.btcUsd?.source ?? "Coinbase spot";
       const ticks = await getRawTicks("btc");
       const open = nearestRawTick(ticks, obsStartMs, btcMaxDist);
-      const close = nearestRawTick(ticks, obsEndMs, btcMaxDist);
+      // End: first tick at or after observationEnd only.
+      const close = firstTickAtOrAfter(ticks, obsEndMs, btcMaxDist);
       await applyBoundaryFromRawTicks({
         market: mkt,
         role: "btc",
         obsStartMs,
         obsEndMs,
-        open: open ? { value: open.value, at: open.at } : undefined,
-        close: close ? { value: close.value, at: close.at } : undefined,
+        open: open
+          ? {
+              value: open.value,
+              observedAt: open.at,
+              receivedAt: open.tick.receivedAt || undefined,
+              provider: open.tick.provider,
+              sourceId: open.tick.sourceId,
+              sourceHash: open.tick.sourceHash
+            }
+          : undefined,
+        close: close
+          ? {
+              value: close.value,
+              observedAt: close.at,
+              receivedAt: close.tick.receivedAt || undefined,
+              provider: close.tick.provider,
+              sourceId: close.tick.sourceId,
+              sourceHash: close.tick.sourceHash
+            }
+          : undefined,
         source
       });
-      // Also record live tick if near a boundary
       if (Number.isFinite(data.btcUsd?.price)) {
+        const observedAt = Date.parse(data.btcUsd!.updatedAt) || now;
         await recordObservationSample({
           market: mkt,
           role: "btc",
           value: data.btcUsd!.price as number,
-          atMs: now,
+          atMs: observedAt,
           obsStartMs,
           obsEndMs,
           source,
-          maxDistanceMs: btcMaxDist
+          maxDistanceMs: btcMaxDist,
+          provenance: {
+            observedAt,
+            receivedAt: now,
+            provider: source
+          }
         });
       }
       updated += 1;
     } else if (isWeather) {
-      const source = data.londonWeather?.source ?? "Open-Meteo";
+      const source = weather?.source ?? "Open-Meteo";
       const ticks = await getRawTicks("weather");
       const open = nearestRawTick(ticks, obsStartMs, weatherMaxDist);
-      const close = nearestRawTick(ticks, obsEndMs, weatherMaxDist);
+      const close = firstTickAtOrAfter(ticks, obsEndMs, weatherMaxDist);
       await applyBoundaryFromRawTicks({
         market: mkt,
         role: "weather",
         obsStartMs,
         obsEndMs,
-        open: open ? { value: open.value, at: open.at } : undefined,
-        close: close ? { value: close.value, at: close.at } : undefined,
+        open: open
+          ? {
+              value: open.value,
+              observedAt: open.at,
+              receivedAt: open.tick.receivedAt || undefined,
+              provider: open.tick.provider,
+              sourceHash: open.tick.sourceHash
+            }
+          : undefined,
+        close: close
+          ? {
+              value: close.value,
+              observedAt: close.at,
+              receivedAt: close.tick.receivedAt || undefined,
+              provider: close.tick.provider,
+              sourceHash: close.tick.sourceHash
+            }
+          : undefined,
         source
       });
-      if (Number.isFinite(data.londonWeather?.temperatureC)) {
-        await recordObservationSample({
-          market: mkt,
-          role: "weather",
-          value: data.londonWeather!.temperatureC as number,
-          atMs: now,
-          obsStartMs,
-          obsEndMs,
-          source,
-          maxDistanceMs: weatherMaxDist
-        });
-      }
       updated += 1;
     }
   }
@@ -1125,35 +1265,66 @@ export async function resolveReferenceMarketOnchain(id: string) {
     getObservationSnapshot,
     snapshotReadyForResolve,
     freezeObservationSnapshot,
-    SNAPSHOT_GRACE_MS,
+    snapshotGraceMs,
+    snapshotMaxDistanceMs,
+    resolveOutcomeFromPrints,
     applyBoundaryFromRawTicks
   } = await import("./observationSnapshots.js");
-  const { getRawTicks, nearestRawTick } = await import("./rawTicks.js");
-  const data = await getDemoReferenceData();
-  const mkt = market.contractAddress || market.id;
-  // Wider than 10s: minute pinger can land ~22s after :00-aligned boundaries.
-  const maxDist = isBtc ? 35_000 : 5 * 60_000;
+  const { getRawTicks, nearestRawTick, firstTickAtOrAfter, requireOracleKv } = await import(
+    "./rawTicks.js"
+  );
+  try {
+    requireOracleKv();
+  } catch (e) {
+    // Shared runtime without KV must fail closed for oracle.
+    if (process.env.VERCEL || process.env.NODE_ENV === "production") {
+      return { error: e instanceof Error ? e.message : "oracle KV required", market };
+    }
+  }
+
   const role = isBtc ? ("btc" as const) : ("weather" as const);
+  // Worker path: allow feed ingest for oracle ticks (public demo-data does not).
+  const data = await getDemoReferenceData({ ingestOracleTicks: true });
+  const mkt = market.contractAddress || market.id;
+  const maxDist = snapshotMaxDistanceMs(role);
+  const graceMs = snapshotGraceMs(role);
   const source = isBtc
     ? data.btcUsd?.source ?? "Coinbase spot"
     : data.londonWeather?.source ?? "Open-Meteo";
 
-  // Pull boundaries from high-res raw ticks (not merged minute chart history).
   const ticks = await getRawTicks(role);
   const open = nearestRawTick(ticks, obsStartMs, maxDist);
-  const close = nearestRawTick(ticks, obsEndMs, maxDist);
+  // End: first tick at or AFTER observationEnd only.
+  const close = firstTickAtOrAfter(ticks, obsEndMs, maxDist);
   await applyBoundaryFromRawTicks({
     market: mkt,
     role,
     obsStartMs,
     obsEndMs,
-    open: open ? { value: open.value, at: open.at } : undefined,
-    close: close ? { value: close.value, at: close.at } : undefined,
+    open: open
+      ? {
+          value: open.value,
+          observedAt: open.at,
+          receivedAt: open.tick.receivedAt || undefined,
+          provider: open.tick.provider,
+          sourceId: open.tick.sourceId,
+          sourceHash: open.tick.sourceHash
+        }
+      : undefined,
+    close: close
+      ? {
+          value: close.value,
+          observedAt: close.at,
+          receivedAt: close.tick.receivedAt || undefined,
+          provider: close.tick.provider,
+          sourceId: close.tick.sourceId,
+          sourceHash: close.tick.sourceHash
+        }
+      : undefined,
     source
   });
 
   const snap = await getObservationSnapshot(mkt);
-  // Already frozen from a prior successful resolve — return evidence only.
   if (snap?.frozen && snap.outcome && Number.isFinite(snap.startValue) && Number.isFinite(snap.endValue)) {
     return {
       market,
@@ -1162,6 +1333,8 @@ export async function resolveReferenceMarketOnchain(id: string) {
       openValue: snap.startValue,
       threshold: snap.startValue,
       referenceSource: snap.source,
+      startSource: snap.startSource,
+      endSource: snap.endSource,
       frozen: true,
       resolutionTxHash: snap.resolutionTxHash
     };
@@ -1170,10 +1343,9 @@ export async function resolveReferenceMarketOnchain(id: string) {
   const ready = snapshotReadyForResolve(snap, obsStartMs, obsEndMs, maxDist);
   if (!ready.ok) {
     const now = Date.now();
-    // Grace: wait for more feed samples after obsEnd before canceling.
-    if (now < obsEndMs + SNAPSHOT_GRACE_MS) {
+    if (now < obsEndMs + graceMs) {
       return {
-        error: `${ready.reason} (waiting for snapshot grace until ${new Date(obsEndMs + SNAPSHOT_GRACE_MS).toISOString()})`,
+        error: `${ready.reason} (waiting for snapshot grace until ${new Date(obsEndMs + graceMs).toISOString()})`,
         deferred: true,
         market
       };
@@ -1192,25 +1364,60 @@ export async function resolveReferenceMarketOnchain(id: string) {
 
   const openValue = ready.start;
   const observedValue = ready.end;
-  const outcome: Outcome = observedValue > openValue ? "YES" : "NO";
+  // Explicit rule: end > start → YES; end < start → NO; end === start (flat) → NO.
+  const { outcome } = resolveOutcomeFromPrints(openValue, observedValue);
   const result = await resolveMarketOnchain(id, outcome);
   const txHash =
     result && typeof result === "object" && "hash" in result
       ? String((result as { hash?: string }).hash ?? "")
-      : undefined;
+      : "";
 
-  // Freeze immutable evidence used for the payout (never rewrite later).
-  await freezeObservationSnapshot({
-    market: mkt,
-    role,
-    outcome,
-    startValue: openValue,
-    startTimestamp: ready.startAt,
-    endValue: observedValue,
-    endTimestamp: ready.endAt,
-    source,
-    resolutionTxHash: txHash || undefined
-  });
+  // Freeze only after successful receipt + on-chain Resolved + matching outcome.
+  if (!txHash || (result && "error" in result && result.error)) {
+    return { ...result, error: "resolve transaction failed — evidence not frozen", market };
+  }
+  try {
+    const item = findDemoMarket(id);
+    const marketAddr = item ? addr(item.market) : getAddress(mkt);
+    const [statusN, winning] = await Promise.all([
+      publicClient.readContract({ address: marketAddr, abi: marketAbi, functionName: "status" }),
+      publicClient.readContract({
+        address: marketAddr,
+        abi: marketAbi,
+        functionName: "winningOutcome"
+      })
+    ]);
+    const statusNum = Number(statusN);
+    const winNum = Number(winning);
+    const expectedWin = outcome === "YES" ? 1 : 2;
+    if (statusNum !== 3 || winNum !== expectedWin) {
+      return {
+        ...result,
+        error: `on-chain status/outcome mismatch after resolve (status=${statusNum}, win=${winNum})`,
+        market: await getOnchainMarket(id)
+      };
+    }
+    await freezeObservationSnapshot({
+      market: mkt,
+      role,
+      outcome,
+      startValue: openValue,
+      startTimestamp: ready.startAt,
+      endValue: observedValue,
+      endTimestamp: ready.endAt,
+      source,
+      resolutionTxHash: txHash,
+      onchainStatus: statusNum,
+      startSource: ready.startSource,
+      endSource: ready.endSource
+    });
+  } catch (freezeErr) {
+    return {
+      ...result,
+      error: `resolve ok but freeze failed: ${freezeErr instanceof Error ? freezeErr.message : freezeErr}`,
+      market: await getOnchainMarket(id)
+    };
+  }
 
   return {
     ...result,
@@ -1219,6 +1426,8 @@ export async function resolveReferenceMarketOnchain(id: string) {
     threshold: openValue,
     openValue,
     referenceSource: source,
+    startSource: ready.startSource,
+    endSource: ready.endSource,
     frozen: true
   };
 }
@@ -1241,7 +1450,39 @@ export async function cancelMarketOnchain(id: string, reason: string) {
   return { hash, status: receipt.status, market: await getOnchainMarket(id), reason };
 }
 
-export async function settleMarketTicketsOnchain(id: string) {
+/** Worth asking the chain whether anything is still open. */
+export function settleRunReachedEnd(input: {
+  reachedEnd: boolean;
+  failedCount: number;
+}): boolean {
+  return input.reachedEnd && input.failedCount === 0;
+}
+
+/**
+ * A settle run is complete only when the engine itself reports zero exposure.
+ *
+ * Walking off the end of the log list is not proof: a reverted settleTicket leaves the
+ * ticket Open and its reserve locked on the pool. Free LP capital remains withdrawable
+ * while reserved > 0, but ring-fenced reserves still need settlement to fully clear.
+ * When the exposure check cannot be made, stay not-done.
+ */
+export function settleRunIsComplete(input: {
+  reachedEnd: boolean;
+  failedCount: number;
+  engineReportsNoExposure?: boolean;
+}): boolean {
+  if (!settleRunReachedEnd(input)) return false;
+  return input.engineReportsNoExposure === true;
+}
+
+/**
+ * Settle open tickets for a market in chunks so serverless workers stay under timeout.
+ * Pass `cursor` (ticket index into bought logs) to continue; response includes nextCursor.
+ */
+export async function settleMarketTicketsOnchain(
+  id: string,
+  options?: { cursor?: number; limit?: number }
+) {
   assertDeployment();
   const item = findDemoMarket(id);
   if (!item) return undefined;
@@ -1251,12 +1492,24 @@ export async function settleMarketTicketsOnchain(id: string) {
     return { error: "Market must be resolved or cancelled before tickets can be settled." };
   }
 
-  const logs = await ticketBoughtLogsForMarket(market, true);
+  // Full range: settlement must see every ticket ever bought on this market.
+  const logs = await ticketBoughtLogsForMarket(market, true, true);
   const wallet = resolverWallet();
   const settled: Array<{ ticketId: string; hash: string; status: string }> = [];
+  /** Already-settled tickets — safe to walk past. */
   const skipped: string[] = [];
+  /** Tickets that are still Open because settlement reverted — must be retried. */
+  const failed: string[] = [];
+  let firstFailedIndex: number | undefined;
 
-  for (const log of logs) {
+  const limit = Math.max(1, Math.min(options?.limit ?? 15, 50));
+  let cursor = Math.max(0, options?.cursor ?? 0);
+  if (cursor > logs.length) cursor = logs.length;
+
+  let processed = 0;
+  let i = cursor;
+  for (; i < logs.length && processed < limit; i++) {
+    const log = logs[i]!;
     const ticketId = log.args.ticketId;
     if (ticketId === undefined) continue;
     const position = await publicClient.readContract({
@@ -1269,6 +1522,7 @@ export async function settleMarketTicketsOnchain(id: string) {
       skipped.push(ticketId.toString());
       continue;
     }
+    processed += 1;
     const hash = await wallet.writeContract({
       address: addr(deployment.microBoostEngine),
       abi: engineAbi,
@@ -1279,18 +1533,52 @@ export async function settleMarketTicketsOnchain(id: string) {
       const receipt = await waitSuccessfulReceipt(publicClient, hash);
       settled.push({ ticketId: ticketId.toString(), hash, status: receipt.status });
     } catch (err) {
-      skipped.push(
+      // A ticket that failed to settle still holds LP reserve. Remember the first
+      // such index so the caller retries from here instead of walking past it.
+      if (firstFailedIndex === undefined) firstFailedIndex = i;
+      failed.push(
         `${ticketId.toString()}: ${err instanceof Error ? err.message : "settle reverted"}`
       );
     }
   }
+
+  // Resume from the earliest unsettled ticket, not merely from where we stopped.
+  const resumeAt = firstFailedIndex ?? i;
+  const nextCursor = resumeAt < logs.length ? resumeAt : undefined;
+
+  let engineReportsNoExposure: boolean | undefined;
+  if (settleRunReachedEnd({ reachedEnd: nextCursor === undefined, failedCount: failed.length })) {
+    try {
+      engineReportsNoExposure = Boolean(
+        await publicClient.readContract({
+          address: addr(deployment.microBoostEngine),
+          abi: engineAbi,
+          functionName: "marketHasNoExposure",
+          args: [market]
+        })
+      );
+    } catch {
+      engineReportsNoExposure = undefined; // cannot confirm → not done
+    }
+  }
+  const done = settleRunIsComplete({
+    reachedEnd: nextCursor === undefined,
+    failedCount: failed.length,
+    engineReportsNoExposure
+  });
 
   return {
     market: await getOnchainMarket(id),
     settledCount: settled.length,
     skippedCount: skipped.length,
     settled,
-    skipped
+    skipped,
+    failed,
+    failedCount: failed.length,
+    cursor,
+    nextCursor,
+    totalLogs: logs.length,
+    done
   };
 }
 
@@ -1515,7 +1803,12 @@ async function maybeSaveTickHistoryToKv(): Promise<void> {
   }
 }
 
-export async function getDemoReferenceData() {
+/**
+ * Public demo/chart feed. By default does NOT write oracle raw-ticks — those
+ * are written only from the market-cycle / resolve worker path
+ * (`ingestOracleTicks: true`) so viewer traffic cannot wash the ZSET.
+ */
+export async function getDemoReferenceData(opts?: { ingestOracleTicks?: boolean }) {
   // Hydrate tick history from KV on cold start so charts show accumulated data.
   await ensureTickHistoryFromKv();
 
@@ -1529,18 +1822,45 @@ export async function getDemoReferenceData() {
   if (btcData && Number.isFinite(btcData.price)) {
     const at = Date.parse(btcData.updatedAt) || Date.now();
     pushTick(btcTickHistory, btcData.price, at, 800);
-    // High-res raw ticks for observation boundaries (not minute-bucketed).
-    void import("./rawTicks.js").then(({ pushRawTick }) =>
-      pushRawTick("btc", btcData.price as number, at)
-    );
+    // Oracle raw-ticks: worker path only (capture / resolve), never public chart polls.
+    if (opts?.ingestOracleTicks) {
+      void import("./rawTicks.js").then(({ pushRawTick }) =>
+        pushRawTick("btc", btcData.price as number, at, {
+          provider: btcData.source ?? "coinbase",
+          sourceHash: simpleSourceHash({
+            feed: "btc",
+            value: btcData.price as number,
+            observedAt: at,
+            provider: btcData.source ?? "coinbase"
+          })
+        })
+      );
+    }
   }
   const weatherData = weather.status === "fulfilled" ? weather.value : undefined;
   if (weatherData && Number.isFinite(weatherData.temperatureC)) {
-    const at = Date.parse(weatherData.updatedAt) || Date.now();
+    const at =
+      parseProviderUtcMs((weatherData as { observedAt?: string }).observedAt || "") ||
+      Date.parse(weatherData.updatedAt) ||
+      Date.now();
+    // Charts may use stale cache; oracle ticks must not.
+    const isStale =
+      Boolean((weatherData as { isStale?: boolean }).isStale) ||
+      String(weatherData.source || "").includes("(cached)");
     pushTick(weatherTickHistory, weatherData.temperatureC, at, 2_500);
-    void import("./rawTicks.js").then(({ pushRawTick }) =>
-      pushRawTick("weather", weatherData.temperatureC as number, at)
-    );
+    if (!isStale && opts?.ingestOracleTicks) {
+      void import("./rawTicks.js").then(({ pushRawTick }) =>
+        pushRawTick("weather", weatherData.temperatureC as number, at, {
+          provider: weatherData.source ?? "open-meteo",
+          sourceHash: simpleSourceHash({
+            feed: "weather",
+            value: weatherData.temperatureC as number,
+            observedAt: at,
+            provider: weatherData.source ?? "open-meteo"
+          })
+        })
+      );
+    }
   }
 
   const btcCandles = btcHistory.status === "fulfilled" ? btcHistory.value : [];
@@ -1593,11 +1913,14 @@ async function fetchCachedWeather() {
     return data;
   } catch (error) {
     if (weatherStaleCache && now - weatherStaleCache.savedAt < WEATHER_STALE_MAX_MS) {
-      // Serve last good reading so charts/resolve keep working through outages.
+      // Charts may show stale data, but oracle must not treat it as a fresh print.
       return {
         ...weatherStaleCache.data,
         source: `${weatherStaleCache.data.source} (cached)`,
-        updatedAt: new Date().toISOString()
+        isStale: true,
+        // Keep original observation timestamps — do not mask as "now".
+        updatedAt: weatherStaleCache.data.updatedAt,
+        observedAt: weatherStaleCache.data.observedAt
       };
     }
     throw error;
@@ -2069,7 +2392,11 @@ async function fetchWeatherOpenMeteoHost(
       : undefined,
     weatherCode: payload.current?.weather_code,
     source: minutely.length >= 8 ? `${sourceLabel} 15m` : `${sourceLabel} hourly`,
-    observedAt: payload.current?.time,
+    // Normalize to ISO-with-Z so downstream Date.parse is host-TZ independent.
+    observedAt: (() => {
+      const ms = parseProviderUtcMs(payload.current?.time);
+      return Number.isFinite(ms) ? new Date(ms).toISOString() : payload.current?.time;
+    })(),
     updatedAt: new Date().toISOString(),
     history
   };
@@ -2094,7 +2421,10 @@ async function fetchWeatherOpenMeteoHourlyOnly(city: string, latitude: number, l
       ? Number(payload.current?.relative_humidity_2m)
       : undefined,
     source: "Open-Meteo hourly-lite",
-    observedAt: payload.current?.time,
+    observedAt: (() => {
+      const ms = parseProviderUtcMs(payload.current?.time);
+      return Number.isFinite(ms) ? new Date(ms).toISOString() : payload.current?.time;
+    })(),
     updatedAt: new Date().toISOString(),
     history: appendCurrentPoint(hourly, currentTemp)
   };
@@ -2152,6 +2482,26 @@ function appendCurrentPoint(base: HistoryPoint[], currentTemp: number): HistoryP
   return base;
 }
 
+/**
+ * Parse Open-Meteo / provider timestamps that omit timezone.
+ * With `&timezone=UTC` the API returns `"2026-07-25T09:15"` — ECMAScript treats
+ * that as *local* time, which shifts observedAt on non-UTC hosts. Append Z when
+ * no offset is present so parse is always UTC.
+ */
+export function parseProviderUtcMs(raw: string | undefined | null): number {
+  const s = String(raw ?? "").trim();
+  if (!s) return Number.NaN;
+  // Already has Z or ±offset
+  if (/[zZ]$/.test(s) || /[+-]\d{2}:?\d{2}$/.test(s)) {
+    return Date.parse(s);
+  }
+  // "2026-07-25T09:15" or "2026-07-25T09:15:00" → force UTC
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)) {
+    return Date.parse(s.endsWith("Z") ? s : `${s}Z`);
+  }
+  return Date.parse(s);
+}
+
 function seriesFromOpenMeteo(
   times?: string[],
   values?: Array<number | null>
@@ -2162,7 +2512,7 @@ function seriesFromOpenMeteo(
   for (let i = 0; i < len; i++) {
     const value = values[i];
     if (value === null || value === undefined || !Number.isFinite(Number(value))) continue;
-    const at = Date.parse(times[i]);
+    const at = parseProviderUtcMs(times[i]);
     if (!Number.isFinite(at)) continue;
     // Skip far-future forecast points for chart clarity.
     if (at > Date.now() + 30 * 60_000) continue;
@@ -2329,6 +2679,24 @@ export async function recordTicketOpening(body: {
   }
 
   // Server-side reference snapshot (never trust client referencePrice/source).
+  //
+  // The price must come from when the ticket was BOUGHT, not from when this endpoint
+  // happens to be called. The route is public and create-only, so anyone can call it
+  // first for someone else's ticket (ids are sequential and TicketBought is public) and
+  // permanently bind a price from an unrelated moment. Anchoring to the purchase block
+  // makes the result identical no matter who calls it or when.
+  let openedAtMs: number | undefined;
+  try {
+    const boughtLogs = await ticketBoughtLogsForMarket(chainMarket, true, true);
+    const mine = boughtLogs.find((l) => String(l.args.ticketId ?? "") === ticketId);
+    if (mine?.blockNumber !== undefined && mine.blockNumber !== null) {
+      const block = await publicClient.getBlock({ blockNumber: mine.blockNumber });
+      openedAtMs = Number(block.timestamp) * 1000;
+    }
+  } catch {
+    /* fall back to live reading below */
+  }
+
   let referencePrice: number | undefined;
   let feed: "btc" | "weather" | "none" = "none";
   let source: string | undefined;
@@ -2353,6 +2721,21 @@ export async function recordTicketOpening(body: {
       referencePrice = data.londonWeather!.temperatureC;
       source = data.londonWeather!.source;
     }
+
+    // Prefer the retained tick nearest the purchase block over the live reading.
+    if (feed !== "none" && openedAtMs) {
+      const { getRawTicks, nearestRawTick } = await import("./rawTicks.js");
+      const ticks = await getRawTicks(feed);
+      const at = nearestRawTick(ticks, openedAtMs, 5 * 60_000);
+      if (at) {
+        referencePrice = at.value;
+        source = `${at.tick.provider} @ purchase block`;
+      } else if (referencePrice !== undefined) {
+        // Ticket older than tick retention — say so rather than passing a live number
+        // off as the purchase-time price.
+        source = `${source ?? "feed"} (approx — purchase-time tick expired)`;
+      }
+    }
   } catch {
     /* best-effort */
   }
@@ -2373,7 +2756,8 @@ export async function recordTicketOpening(body: {
     threshold: referencePrice,
     source,
     owner: chainOwner,
-    openedAt: new Date().toISOString()
+    // Purchase-block time when we could read it — not "whenever this was called".
+    openedAt: new Date(openedAtMs ?? Date.now()).toISOString()
   });
   return { status: "ok", opening: meta, created: true };
 }

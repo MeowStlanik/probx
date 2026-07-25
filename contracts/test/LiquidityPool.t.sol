@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import "./MiniTest.sol";
 import "./TestHarness.sol";
 
-/// @title LiquidityPool suite (tests 13–14)
-/// @notice Deposit/withdraw shares and withdraw blocked while reserved.
+/// @title LiquidityPool suite (tests 13–17)
+/// @notice Deposit/withdraw shares; free capital stays withdrawable while reserved.
 contract LiquidityPoolTest is MiniTest, TestHarness {
     /// @notice 13 — deposit mints shares; withdraw returns available assets
     function test_13_Lp_DepositMintsSharesAndWithdraw() external {
@@ -16,23 +16,39 @@ contract LiquidityPoolTest is MiniTest, TestHarness {
         assertEq(assets, 10_000 * 1e6, "bad withdraw");
     }
 
-    /// @notice 14 — no withdraw while any reserve is open (anti bank-run)
-    function test_14_Lp_WithdrawBlockedByReservedAssets() external {
+    /// @notice 14 — tiny open reserve must NOT freeze the whole vault
+    function test_14_Lp_FreeCapitalWithdrawableWhileReserved() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(500_000);
         user.buy(address(market), 1, 100 * 1e6, 20_000);
 
-        // Even a tiny partial withdraw is blocked while reservedAssets > 0.
-        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
-        pool.withdraw(1);
+        uint256 reserved = pool.reservedAssets();
+        assertTrue(reserved > 0, "need open reserve");
+        uint256 available = pool.availableAssets();
+        assertTrue(available > 0, "free capital must remain");
+
+        // Small withdraw of free capital succeeds (share NAV may include fees/risk).
+        uint256 out = pool.withdraw(1_000 * 1e6);
+        assertTrue(out > 0, "free withdraw");
+        assertTrue(out <= available, "did not pull reserved");
+        assertEq(pool.reservedAssets(), reserved, "reserve untouched");
+    }
+
+    /// @notice Full share burn that would pull reserved capital reverts.
+    function test_14b_Lp_CannotWithdrawThroughReserve() external {
+        _deploy();
+        vm.warp(10);
+        _createOpenMarket(500_000);
+        user.buy(address(market), 1, 100 * 1e6, 20_000);
 
         uint256 shares = pool.sharesOf(address(this));
-        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
+        // 100% of shares prices against managed (includes reserved) → exceeds available.
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "INSUFFICIENT_AVAILABLE"));
         pool.withdraw(shares);
     }
 
-    /// @notice After reserve is fully released, withdraw works again.
+    /// @notice After reserve is fully released, full withdraw works again.
     function test_15_Lp_WithdrawAfterReserveCleared() external {
         _deploy();
         vm.warp(10);
@@ -46,18 +62,22 @@ contract LiquidityPoolTest is MiniTest, TestHarness {
         assertTrue(out > 0, "withdraw after clear");
     }
 
-    /// @notice Late deposit cannot buy into open reserved risk (adverse selection).
-    function test_16_Lp_DepositBlockedWhileReserved() external {
+    /// @notice Late deposit allowed while reserved — capital is free liquidity.
+    function test_16_Lp_DepositAllowedWhileReserved() external {
         _deploy();
         vm.warp(10);
         _createOpenMarket(500_000);
         user.buy(address(market), 1, 100 * 1e6, 10_000);
         assertTrue(pool.reservedAssets() > 0, "need open reserve");
 
+        uint256 reservedBefore = pool.reservedAssets();
+        uint256 availableBefore = pool.availableAssets();
         usdc.mint(address(this), 1_000e6);
         usdc.approve(address(pool), type(uint256).max);
-        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
-        pool.deposit(100e6);
+        uint256 minted = pool.deposit(100e6);
+        assertTrue(minted > 0, "deposit while reserved");
+        assertEq(pool.reservedAssets(), reservedBefore, "reserve unchanged");
+        assertEq(pool.availableAssets(), availableBefore + 100e6, "free capital grew");
     }
 
     /// @notice Deposit works again after reserve is released.

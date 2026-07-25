@@ -158,10 +158,30 @@ export async function handleWalletGet(
   return null;
 }
 
-export async function handleWalletPost(path: string, body: Record<string, unknown>) {
+/** Best-effort client IP from reverse-proxy headers (Vercel / Cloudflare). */
+export function clientIpFromHeaders(headers: Record<string, string | undefined>): string | undefined {
+  const xff = (headers["x-forwarded-for"] ?? headers["x-real-ip"] ?? "").trim();
+  if (!xff) return undefined;
+  // x-forwarded-for may be a chain: client, proxy1, proxy2
+  const first = xff.split(",")[0]?.trim();
+  return first || undefined;
+}
+
+export async function handleWalletPost(
+  path: string,
+  body: Record<string, unknown>,
+  headers: Record<string, string | undefined> = {}
+) {
   if (path === "/api/wallet/session/request-otp") {
     try {
-      const result = await requestEmailOtp(String(body.email ?? ""));
+      const ip = clientIpFromHeaders(headers);
+      const fingerprint =
+        body.fingerprint !== undefined
+          ? String(body.fingerprint).slice(0, 80)
+          : headers["x-client-fingerprint"]
+            ? String(headers["x-client-fingerprint"]).slice(0, 80)
+            : undefined;
+      const result = await requestEmailOtp(String(body.email ?? ""), { ip, fingerprint });
       return {
         status: 200,
         body: {
@@ -379,10 +399,15 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
           body: { error: "idempotencyKey required (client UUID per user action)" }
         };
       }
+      // Principal must differ from mintTo when identity is an email session:
+      // addresses are free to mint; binding only to mintTo makes principal checks dead code.
+      // Session path → email identity; EIP-191 path → signer address (= mintTo).
+      const principal = email && sessionToken ? `email:${email.trim().toLowerCase()}` : destination;
       const result = await demoFundViaCctp({
         mintTo: destination,
         amountUsdc,
         idempotencyKey,
+        principal,
         // claim nonce only when starting a new burn (after op-store check inside service)
         claimNonce: signature && nonce ? nonce : undefined
       });

@@ -47,6 +47,7 @@ contract Deploy {
 
         deployment.liquidityPool.setEngine(address(deployment.microBoostEngine));
         deployment.liquidityPool.setFeeRouter(address(deployment.feeRouter));
+        deployment.feeRouter.setEngine(address(deployment.microBoostEngine));
         deployment.insuranceFund.setEngine(address(deployment.microBoostEngine));
         deployment.insuranceFund.setFeeRouter(address(deployment.feeRouter));
         deployment.positionTicket.setEngine(address(deployment.microBoostEngine));

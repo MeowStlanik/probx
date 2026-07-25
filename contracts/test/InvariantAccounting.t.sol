@@ -117,12 +117,12 @@ contract InvariantAccountingTest is MiniTest {
         uint256 avail = pool.availableAssets();
         pool.reserveForTicket(avail);
         _assertCoreInvariants();
-
+        // All capital is reserved → available == 0 → any withdraw fails.
+        assertEq(pool.availableAssets(), 0, "no free capital");
         uint256 shares = pool.sharesOf(address(this));
-        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "INSUFFICIENT_AVAILABLE"));
         pool.withdraw(shares);
-        // Partial also blocked
-        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
+        vm.expectRevert(abi.encodeWithSignature("Error(string)", "INSUFFICIENT_AVAILABLE"));
         pool.withdraw(1);
         _assertCoreInvariants();
     }
@@ -153,20 +153,41 @@ contract InvariantAccountingTest is MiniTest {
         _assertCoreInvariants();
     }
 
-    /// @notice Any open reserve blocks all LP withdrawals (bank-run guard).
-    function testFuzz_withdrawBlockedWhileReserved(uint256 reserveSeed, uint256 shareSeed) external {
+    /// @notice Free capital remains withdrawable; only pulls through reserved revert.
+    function testFuzz_withdrawRespectsAvailableWhileReserved(uint256 reserveSeed, uint256 shareSeed)
+        external
+    {
         uint256 avail = pool.availableAssets();
         if (avail < 2) return;
         uint256 reserveAmt = _mod(reserveSeed, avail / 2) + 1;
         pool.reserveForTicket(reserveAmt);
         _assertCoreInvariants();
 
+        uint256 free = pool.availableAssets();
+        uint256 managed = pool.managedAssets();
         uint256 shares = pool.sharesOf(address(this));
-        if (shares == 0) return;
-        uint256 tryShares = _mod(shareSeed, shares) + 1;
-        if (tryShares > shares) tryShares = shares;
-        vm.expectRevert(abi.encodeWithSignature("Error(string)", "ACTIVE_EXPOSURE"));
-        pool.withdraw(tryShares);
+        if (shares == 0 || managed == 0) return;
+
+        // Shares that price to at most free capital must succeed.
+        uint256 maxFreeShares = (free * shares) / managed;
+        if (maxFreeShares > 0) {
+            uint256 tryFree = _mod(shareSeed, maxFreeShares) + 1;
+            if (tryFree > maxFreeShares) tryFree = maxFreeShares;
+            uint256 out = pool.withdraw(tryFree);
+            assertTrue(out > 0, "free withdraw");
+            assertTrue(pool.reservedAssets() >= reserveAmt, "reserve ring-fenced");
+            _assertCoreInvariants();
+        }
+
+        // Full remaining shares (would claim through reserve) must revert.
+        uint256 left = pool.sharesOf(address(this));
+        if (left > 0 && pool.reservedAssets() > 0) {
+            uint256 claim = (left * pool.managedAssets()) / pool.totalShares();
+            if (claim > pool.availableAssets()) {
+                vm.expectRevert(abi.encodeWithSignature("Error(string)", "INSUFFICIENT_AVAILABLE"));
+                pool.withdraw(left);
+            }
+        }
         _assertCoreInvariants();
     }
 

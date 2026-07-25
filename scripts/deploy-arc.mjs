@@ -159,6 +159,7 @@ const marketFactory = await deploy("MicroMarketFactory", [microBoostEngine, orac
 
 await send(liquidityPool, liquidityPoolArtifact.abi, "setEngine", [microBoostEngine]);
 await send(liquidityPool, liquidityPoolArtifact.abi, "setFeeRouter", [feeRouter]);
+await send(feeRouter, feeRouterArtifact.abi, "setEngine", [microBoostEngine]);
 await send(insuranceFund, insuranceArtifact.abi, "setEngine", [microBoostEngine]);
 await send(insuranceFund, insuranceArtifact.abi, "setFeeRouter", [feeRouter]);
 await send(positionTicket, ticketArtifact.abi, "setEngine", [microBoostEngine]);
@@ -219,8 +220,12 @@ const deployment = {
 };
 
 const deploymentPath = resolve(root, "apps/web/src/lib/deployment.json");
+const apiDeploymentPath = resolve(root, "apps/api/src/config/arc-deployment.json");
 mkdirSync(dirname(deploymentPath), { recursive: true });
-writeFileSync(deploymentPath, `${JSON.stringify(deployment, null, 2)}\n`);
-writeFileSync(resolve(root, "docs/DEPLOYMENT_ARC_TESTNET.json"), `${JSON.stringify(deployment, null, 2)}\n`);
+mkdirSync(dirname(apiDeploymentPath), { recursive: true });
+const json = `${JSON.stringify(deployment, null, 2)}\n`;
+writeFileSync(deploymentPath, json);
+writeFileSync(apiDeploymentPath, json);
+writeFileSync(resolve(root, "docs/DEPLOYMENT_ARC_TESTNET.json"), json);
 
 console.log(JSON.stringify(deployment, null, 2));

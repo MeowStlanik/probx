@@ -78,6 +78,120 @@ async function kvCommand<T = unknown>(cfg: KvConfig, command: unknown[]): Promis
   return (json.result ?? null) as T | null;
 }
 
+/** Run a Redis EVAL script when KV is configured. */
+export async function kvEval<T = unknown>(
+  script: string,
+  keys: string[],
+  args: string[]
+): Promise<T | null> {
+  const cfg = kvConfig();
+  if (!cfg) throw new Error("KV not configured");
+  return kvCommand<T>(cfg, ["EVAL", script, String(keys.length), ...keys, ...args]);
+}
+
+/**
+ * Atomic CCTP quota reservation: both caps are checked, both counters are advanced,
+ * and the reservation record is written in a single Lua call. Splitting the record
+ * write out of the transaction leaks quota — counters move, then the record write
+ * fails, and nothing is left to tell release()/finalize() what to undo.
+ */
+export async function atomicIncrQuota(params: {
+  addrKey: string;
+  day: string;
+  amount: string;
+  perCap: string;
+  globCap: string;
+  reservationId: string;
+  reservationJson: string;
+}): Promise<{ ok: boolean; reason?: string; perUsed?: string; globUsed?: string }> {
+  const cfg = kvConfig();
+  if (!cfg) {
+    return { ok: false, reason: "no-kv" };
+  }
+  // KEYS: per, glob, reservations  ARGV: day, amount, perCap, globCap, ttlSec, resId, resJson
+  const result = await kvCommand<string>(cfg, [
+    "EVAL",
+    `
+    local day = ARGV[1]
+    local amount = tonumber(ARGV[2])
+    local perCap = tonumber(ARGV[3])
+    local globCap = tonumber(ARGV[4])
+    local ttlSec = tonumber(ARGV[5])
+    local resId = ARGV[6]
+    local resJson = ARGV[7]
+    local perRaw = redis.call('HGET', KEYS[1], day)
+    local globRaw = redis.call('HGET', KEYS[2], day)
+    local perUsed = tonumber(perRaw or '0')
+    local globUsed = tonumber(globRaw or '0')
+    if perUsed + amount > perCap then
+      return cjson.encode({ok=false, reason='per-cap'})
+    end
+    if globUsed + amount > globCap then
+      return cjson.encode({ok=false, reason='glob-cap'})
+    end
+    local perNew = perUsed + amount
+    local globNew = globUsed + amount
+    redis.call('HSET', KEYS[1], day, tostring(perNew))
+    redis.call('HSET', KEYS[2], day, tostring(globNew))
+    -- Reservation lands in the same transaction as the counters it accounts for.
+    redis.call('HSET', KEYS[3], resId, resJson)
+    -- Refresh TTL on every write so active days stay; idle hashes free after ~48h.
+    redis.call('EXPIRE', KEYS[1], ttlSec)
+    redis.call('EXPIRE', KEYS[2], ttlSec)
+    return cjson.encode({ok=true, perUsed=tostring(perNew), globUsed=tostring(globNew)})
+    `,
+    "3",
+    `cctp-quota-per:${params.addrKey}`,
+    "cctp-quota-glob",
+    "cctp-quota-reservations",
+    params.day,
+    params.amount,
+    params.perCap,
+    params.globCap,
+    String(48 * 3600),
+    params.reservationId,
+    params.reservationJson
+  ]);
+  try {
+    return JSON.parse(String(result ?? "{}")) as {
+      ok: boolean;
+      reason?: string;
+      perUsed?: string;
+      globUsed?: string;
+    };
+  } catch {
+    return { ok: false, reason: "parse" };
+  }
+}
+
+export async function atomicDecrQuota(params: {
+  addrKey: string;
+  day: string;
+  amount: string;
+}): Promise<void> {
+  const cfg = kvConfig();
+  if (!cfg) return;
+  await kvCommand(cfg, [
+    "EVAL",
+    `
+    local day = ARGV[1]
+    local amount = tonumber(ARGV[2])
+    local perRaw = redis.call('HGET', KEYS[1], day)
+    local globRaw = redis.call('HGET', KEYS[2], day)
+    local perUsed = math.max(0, tonumber(perRaw or '0') - amount)
+    local globUsed = math.max(0, tonumber(globRaw or '0') - amount)
+    redis.call('HSET', KEYS[1], day, tostring(perUsed))
+    redis.call('HSET', KEYS[2], day, tostring(globUsed))
+    return 1
+    `,
+    "2",
+    `cctp-quota-per:${params.addrKey}`,
+    "cctp-quota-glob",
+    params.day,
+    params.amount
+  ]);
+}
+
 /**
  * A namespaced document store. Each namespace maps to one JSON file locally,
  * and to one Redis hash (HSET/HGETALL) on KV. Values are JSON-serialised.
@@ -203,6 +317,38 @@ export async function acquireLock(
   const cur = localLocks.get(key);
   if (cur && cur.expiresAt > now) return false;
   localLocks.set(key, { token, expiresAt: now + ttlMs });
+  return true;
+}
+
+/**
+ * Extend a lock we still hold. Returns false if the lease was lost (expired and
+ * possibly taken over), so a long operation can detect it is no longer the owner
+ * instead of continuing to act as if it were.
+ */
+export async function renewLock(
+  key: string,
+  ttlMs: number,
+  token: string
+): Promise<boolean> {
+  const cfg = kvConfig();
+  if (cfg) {
+    try {
+      const res = await kvCommand<number>(cfg, [
+        "EVAL",
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end",
+        "1",
+        `lock:${key}`,
+        token,
+        String(ttlMs)
+      ]);
+      return Number(res) === 1;
+    } catch {
+      return false;
+    }
+  }
+  const cur = localLocks.get(key);
+  if (cur?.token !== token) return false;
+  localLocks.set(key, { token, expiresAt: Date.now() + ttlMs });
   return true;
 }
 

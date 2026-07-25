@@ -234,12 +234,13 @@ contract MicroBoostEngine {
         MicroMarket market = MicroMarket(ticket.market);
         MicroMarket.Status status = market.status();
         // Cancelled, or Archived after cancel (winningOutcome unset): full risk refund.
+        // Checks-effects-interactions: mark ticket + clear exposure before external pool transfer.
         if (status == MicroMarket.Status.Cancelled
             || (status == MicroMarket.Status.Archived && market.winningOutcome() == 0))
         {
-            liquidityPool.refundRisk(ticket.owner, ticket.riskAmount, ticket.reservedAmount);
             _removeExposure(ticket);
             positionTicket.markCancelled(ticketId);
+            liquidityPool.refundRisk(ticket.owner, ticket.riskAmount, ticket.reservedAmount);
             emit TicketCancelled(ticketId, ticket.riskAmount);
             return;
         }
@@ -250,6 +251,9 @@ contract MicroBoostEngine {
             "NOT_RESOLVED"
         );
         bool won = market.winningOutcome() == ticket.outcome;
+        // Effects before interactions (USDC transfer via pool).
+        _removeExposure(ticket);
+        positionTicket.markSettled(ticketId);
         if (won) {
             liquidityPool.payPayout(ticket.owner, ticket.payout, ticket.reservedAmount, ticket.riskAmount);
             emit TicketSettled(ticketId, true, ticket.payout);
@@ -257,8 +261,6 @@ contract MicroBoostEngine {
             liquidityPool.settleLoss(ticket.riskAmount, ticket.reservedAmount);
             emit TicketSettled(ticketId, false, 0);
         }
-        _removeExposure(ticket);
-        positionTicket.markSettled(ticketId);
     }
 
     function settleBatch(uint256[] calldata ticketIds) external {

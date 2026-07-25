@@ -22,60 +22,115 @@ const OTP_TTL_MS = 10 * 60_000;
 const MAX_ATTEMPTS = 5;
 
 /**
- * Best-effort in-memory rate limit for OTP requests (per email + global).
- * Prevents using our SMTP/provider as a mail-bomb relay. In-memory is fine:
- * serverless instances each enforce their own window, which still caps abuse.
+ * Distributed OTP rate limits (Redis INCR + TTL when KV is configured).
+ * Falls back to process-local counters only in local-dev without KV.
  */
-const OTP_REQUEST_WINDOW_MS = 10 * 60_000;
+const OTP_REQUEST_WINDOW_SEC = 10 * 60;
 const OTP_REQUEST_MAX_PER_EMAIL = 3;
+const OTP_REQUEST_MAX_PER_IP = 20;
 const OTP_REQUEST_MAX_GLOBAL = 30;
-const otpRequestLog: { perEmail: Map<string, number[]>; global: number[] } = {
-  perEmail: new Map(),
-  global: []
-};
+const OTP_VERIFY_WINDOW_SEC = 10 * 60;
 
-function pruneOld(timestamps: number[], now: number): number[] {
-  return timestamps.filter((at) => now - at < OTP_REQUEST_WINDOW_MS);
+const localOtpCounters = new Map<string, { count: number; resetAt: number }>();
+
+async function incrWithTtl(
+  key: string,
+  windowSec: number
+): Promise<number> {
+  const { kvEval, persistenceMode, isSharedRuntime } = await import("./persistentStore.js");
+  if (persistenceMode() === "kv") {
+    try {
+      const n = await kvEval<number>(
+        `
+        local c = redis.call('INCR', KEYS[1])
+        if c == 1 then
+          redis.call('EXPIRE', KEYS[1], ARGV[1])
+        end
+        return c
+        `,
+        [key],
+        [String(windowSec)]
+      );
+      return typeof n === "number" ? n : Number(n) || 0;
+    } catch {
+      // Shared/production: never silently fall back to process-local (no limit at all on Vercel).
+      if (isSharedRuntime()) {
+        throw new Error("Login rate limit store unavailable. Try again in a moment.");
+      }
+      /* local dev: fall through */
+    }
+  } else if (isSharedRuntime()) {
+    // Shared host without KV: fail closed rather than per-instance memory counters.
+    throw new Error(
+      "Login rate limits require durable KV (UPSTASH_REDIS_REST_URL) on shared deploys."
+    );
+  }
+  const now = Date.now();
+  const cur = localOtpCounters.get(key);
+  if (!cur || cur.resetAt <= now) {
+    localOtpCounters.set(key, { count: 1, resetAt: now + windowSec * 1000 });
+    return 1;
+  }
+  cur.count += 1;
+  return cur.count;
 }
 
-function enforceOtpRequestRateLimit(email: string): void {
-  const now = Date.now();
-  const emailLog = pruneOld(otpRequestLog.perEmail.get(email) ?? [], now);
-  otpRequestLog.global = pruneOld(otpRequestLog.global, now);
+async function clearCounter(key: string): Promise<void> {
+  try {
+    const { kvEval, persistenceMode } = await import("./persistentStore.js");
+    if (persistenceMode() === "kv") {
+      await kvEval(`return redis.call('DEL', KEYS[1])`, [key], []);
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  localOtpCounters.delete(key);
+}
 
-  if (emailLog.length >= OTP_REQUEST_MAX_PER_EMAIL) {
+async function enforceOtpRequestRateLimit(
+  email: string,
+  meta?: { ip?: string; fingerprint?: string }
+): Promise<void> {
+  const e = email.trim().toLowerCase();
+  const emailCount = await incrWithTtl(`otp-rl:req:email:${e}`, OTP_REQUEST_WINDOW_SEC);
+  if (emailCount > OTP_REQUEST_MAX_PER_EMAIL) {
     throw new Error("Too many codes requested for this email. Wait a few minutes and try again.");
   }
-  if (otpRequestLog.global.length >= OTP_REQUEST_MAX_GLOBAL) {
+  if (meta?.ip) {
+    const ipCount = await incrWithTtl(
+      `otp-rl:req:ip:${meta.ip.slice(0, 64)}`,
+      OTP_REQUEST_WINDOW_SEC
+    );
+    if (ipCount > OTP_REQUEST_MAX_PER_IP) {
+      throw new Error("Too many login codes from this network. Try again in a few minutes.");
+    }
+  }
+  if (meta?.fingerprint) {
+    const fpCount = await incrWithTtl(
+      `otp-rl:req:fp:${meta.fingerprint.slice(0, 80)}`,
+      OTP_REQUEST_WINDOW_SEC
+    );
+    if (fpCount > OTP_REQUEST_MAX_PER_EMAIL + 2) {
+      throw new Error("Too many login codes from this device. Try again in a few minutes.");
+    }
+  }
+  const globalCount = await incrWithTtl("otp-rl:req:global", OTP_REQUEST_WINDOW_SEC);
+  if (globalCount > OTP_REQUEST_MAX_GLOBAL) {
     throw new Error("Too many login codes requested right now. Try again in a few minutes.");
   }
-  emailLog.push(now);
-  otpRequestLog.perEmail.set(email, emailLog);
-  otpRequestLog.global.push(now);
 }
 
-/**
- * Best-effort in-memory limit on VERIFY attempts per email. The stateless
- * otpToken path (primary on Vercel) has no server-side record, so without this
- * an attacker holding the token could brute-force the 6-digit code with
- * unlimited tries inside the 10-minute TTL. MAX_ATTEMPTS previously only
- * protected the local file-store fallback. In-memory is per-instance
- * (best-effort on serverless) but raises the cost enormously vs. unlimited.
- */
-const otpVerifyLog: Map<string, number[]> = new Map();
-
-function enforceOtpVerifyAttemptLimit(email: string): void {
-  const now = Date.now();
-  const attempts = pruneOld(otpVerifyLog.get(email) ?? [], now);
-  if (attempts.length >= MAX_ATTEMPTS) {
+async function enforceOtpVerifyAttemptLimit(email: string): Promise<void> {
+  const e = email.trim().toLowerCase();
+  const attempts = await incrWithTtl(`otp-rl:verify:${e}`, OTP_VERIFY_WINDOW_SEC);
+  if (attempts > MAX_ATTEMPTS) {
     throw new Error("Too many incorrect codes. Request a new code and try again.");
   }
-  attempts.push(now);
-  otpVerifyLog.set(email, attempts);
 }
 
-function clearOtpVerifyAttempts(email: string): void {
-  otpVerifyLog.delete(email);
+async function clearOtpVerifyAttempts(email: string): Promise<void> {
+  await clearCounter(`otp-rl:verify:${email.trim().toLowerCase()}`);
 }
 
 function loadStore(): OtpStore {
@@ -389,7 +444,10 @@ async function sendViaSmtp(
   }
 }
 
-export async function requestEmailOtp(emailInput: string): Promise<{
+export async function requestEmailOtp(
+  emailInput: string,
+  meta?: { ip?: string; fingerprint?: string }
+): Promise<{
   email: string;
   expiresInSec: number;
   message: string;
@@ -399,7 +457,7 @@ export async function requestEmailOtp(emailInput: string): Promise<{
 }> {
   const email = normalizeEmail(emailInput);
   if (!isValidEmail(email)) throw new Error("Enter a valid email address.");
-  enforceOtpRequestRateLimit(email);
+  await enforceOtpRequestRateLimit(email, meta);
 
   const code = String(randomInt(100_000, 999_999));
   const codeHash = hashCode(email, code);
@@ -485,7 +543,7 @@ export async function consumeEmailOtp(
     if (Date.now() > parsed.expiresAt) throw new Error("Code expired. Request a new one.");
     // Count the attempt BEFORE comparing so wrong guesses burn tries (stateless
     // token path had no attempt cap at all — see enforceOtpVerifyAttemptLimit).
-    enforceOtpVerifyAttemptLimit(email);
+    await enforceOtpVerifyAttemptLimit(email);
     if (parsed.codeHash !== hashCode(email, code)) throw new Error("Invalid code. Try again.");
     // Single-use: mark jti consumed (durable when KV is configured).
     if (parsed.jti) {
@@ -494,7 +552,7 @@ export async function consumeEmailOtp(
         throw new Error("This login code was already used. Request a new code.");
       }
     }
-    clearOtpVerifyAttempts(email);
+    await clearOtpVerifyAttempts(email);
     // Clear optional local store entry
     try {
       const store = loadStore();

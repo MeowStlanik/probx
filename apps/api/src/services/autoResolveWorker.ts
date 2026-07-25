@@ -110,7 +110,20 @@ async function tick(): Promise<{ checked: number; attempted: number }> {
       try {
         console.log(`[auto-resolve] resolving ${market.demoRole ?? market.category} market ${market.id}`);
         const result = await resolveReferenceMarketOnchain(market.id);
-        if (result && "error" in result && result.error) {
+        if (result && "cancelled" in result && result.cancelled) {
+          console.warn(`[auto-resolve] ${market.id} cancelled — settling tickets for LP release`);
+          try {
+            const settled = await settleMarketTicketsOnchain(market.id, { limit: 15 });
+            if (settled && "settledCount" in settled) {
+              console.log(
+                `[auto-resolve] cancel-settled ${settled.settledCount ?? 0} ticket(s) for ${market.id}` +
+                  (settled.done ? "" : " (more pending)")
+              );
+            }
+          } catch (settleError) {
+            console.warn(`[auto-resolve] settle-after-cancel failed for ${market.id}`, settleError);
+          }
+        } else if (result && "error" in result && result.error) {
           console.warn(`[auto-resolve] ${market.id}: ${result.error}`);
         } else if (result && "outcome" in result) {
           const txHash = result && "hash" in result ? String(result.hash ?? "n/a") : "n/a";
@@ -119,9 +132,12 @@ async function tick(): Promise<{ checked: number; attempted: number }> {
           );
           // Release LP reserve / pay winners so vault liquidity returns after the market ends.
           try {
-            const settled = await settleMarketTicketsOnchain(market.id);
+            const settled = await settleMarketTicketsOnchain(market.id, { limit: 15 });
             if (settled && "settledCount" in settled) {
-              console.log(`[auto-resolve] settled ${settled.settledCount ?? 0} ticket(s) for ${market.id}`);
+              console.log(
+                `[auto-resolve] settled ${settled.settledCount ?? 0} ticket(s) for ${market.id}` +
+                  (settled.done ? "" : " (more pending)")
+              );
             }
           } catch (settleError) {
             console.warn(`[auto-resolve] settle-after-resolve failed for ${market.id}`, settleError);

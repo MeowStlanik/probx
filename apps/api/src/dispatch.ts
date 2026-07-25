@@ -252,7 +252,7 @@ export async function dispatchApiRequest(input: {
     }
 
     if (method === "POST") {
-      const walletPost = await handleWalletPost(path, body);
+      const walletPost = await handleWalletPost(path, body, headers);
       if (walletPost) return { status: walletPost.status, body: walletPost.body };
     }
 

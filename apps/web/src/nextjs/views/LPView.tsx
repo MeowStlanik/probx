@@ -38,6 +38,8 @@ interface Props {
   onDismissUbSpend?: () => void;
   /** When true, vault has open ticket reserves — deposit/withdraw blocked on-chain. */
   riskEpochActive?: boolean;
+  /** Human estimate for when deposit/withdraw unlocks (hackathon epoch UX). */
+  unlockEta?: string | null;
 }
 
 // /lp — vault stats, recent deposits, deposit/withdraw + App Kit multichain fund.
@@ -55,7 +57,8 @@ export function LPView({
   pendingUbSpend,
   onCompleteUbSpend,
   onDismissUbSpend,
-  riskEpochActive = false
+  riskEpochActive = false,
+  unlockEta = null
 }: Props) {
   const [tab, setTab] = useState<"deposit" | "withdraw" | "anychain">("deposit");
   const [amount, setAmount] = useState("1");
@@ -68,15 +71,11 @@ export function LPView({
 
   const buttonLabel = useMemo(() => {
     if (busy) return "Working…";
-    if (riskEpochActive && tab !== "anychain") {
-      return tab === "withdraw" ? "Withdraw paused" : "Deposit paused";
-    }
-    if (riskEpochActive && tab === "anychain") return "Bridge paused (risk epoch)";
     if (tab === "withdraw") return "Withdraw USDC";
     if (tab === "anychain") return "Bridge → Arc & deposit";
     if (needsApproval) return "Approve USDC";
     return "Deposit USDC";
-  }, [tab, needsApproval, busy, riskEpochActive]);
+  }, [tab, needsApproval, busy]);
 
   const stat = (label: string, value: string, color: string = theme.color.ink) => (
     <div
@@ -119,8 +118,13 @@ export function LPView({
             lineHeight: 1.45
           }}
         >
-          <strong>Risk epoch active</strong> — open ticket reserves are on the vault. Deposit and withdraw are
-          paused until markets settle (prevents bank-run / late-entry into known outcomes).
+          <strong>Open ticket reserves</strong> — {reserved} USDC is ring-fenced for live tickets. Free capital (
+          {available} USDC) stays depositable/withdrawable; only the reserved slice is locked until settlement.
+          {unlockEta ? (
+            <div style={{ marginTop: 6, color: theme.color.muted }}>
+              Full reserved unlock: <strong style={{ color: theme.color.ink }}>{unlockEta}</strong>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -329,22 +333,12 @@ export function LPView({
           ) : null}
           <Button
             fullWidth
-            disabled={
-              busy ||
-              (tab === "anychain" && !onAnyChainDeposit) ||
-              (riskEpochActive && (tab === "deposit" || tab === "withdraw" || tab === "anychain"))
-            }
+            disabled={busy || (tab === "anychain" && !onAnyChainDeposit)}
             style={{ marginTop: 16 }}
             onClick={async () => {
               setBusy(true);
               setMessage(null);
               try {
-                if (riskEpochActive) {
-                  setMessage(
-                    "LP deposits and withdrawals are paused until the current risk epoch settles."
-                  );
-                  return;
-                }
                 if (tab === "anychain") {
                   if (!onAnyChainDeposit) {
                     setMessage("Multichain deposit is not wired.");

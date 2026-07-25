@@ -21,6 +21,8 @@ contract FeeRouter {
     IInsuranceFundForFees public insuranceFund;
     address public treasury;
     address public owner;
+    /// @dev Only MicroBoostEngine may route fees (prevents arbitrary creditFee timing).
+    address public engine;
 
     uint256 public lpShareBps = 6_000;
     uint256 public insuranceShareBps = 2_000;
@@ -29,6 +31,7 @@ contract FeeRouter {
 
     event FeeSplitSet(uint256 lpShareBps, uint256 insuranceShareBps, uint256 treasuryShareBps);
     event FeeRouted(uint256 amount, uint256 lpAmount, uint256 insuranceAmount, uint256 treasuryAmount);
+    event EngineSet(address indexed engine);
 
     modifier onlyOwner() {
         require(msg.sender == owner, "ONLY_OWNER");
@@ -47,6 +50,12 @@ contract FeeRouter {
         owner = msg.sender;
     }
 
+    function setEngine(address engine_) external onlyOwner {
+        require(engine_ != address(0), "ZERO_ENGINE");
+        engine = engine_;
+        emit EngineSet(engine_);
+    }
+
     function setFeeSplit(uint256 lpBps, uint256 insuranceBps, uint256 treasuryBps)
         external
         onlyOwner
@@ -59,6 +68,7 @@ contract FeeRouter {
     }
 
     function routeFee(uint256 amount) external {
+        require(msg.sender == engine, "ONLY_ENGINE");
         if (amount == 0) return;
         uint256 lpAmount = (amount * lpShareBps) / BPS;
         uint256 insuranceAmount = (amount * insuranceShareBps) / BPS;

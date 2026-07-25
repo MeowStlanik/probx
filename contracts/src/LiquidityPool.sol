@@ -83,11 +83,10 @@ contract LiquidityPool {
         return internalAssets - lockedUserRisk - reservedAssets;
     }
 
-    /// @notice Deposit LP equity. Blocked while any reserve is open so late LPs
-    ///         cannot buy into known profitable settlements (adverse selection).
+    /// @notice Deposit LP equity. Allowed while tickets are open — new capital
+    ///         only increases free liquidity; open reserves stay ring-fenced.
     function deposit(uint256 amount) external returns (uint256 mintedShares) {
         require(amount > 0, "ZERO_AMOUNT");
-        require(reservedAssets == 0, "ACTIVE_EXPOSURE");
         uint256 assetsBefore = managedAssets();
         require(usdc.transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM");
         // Empty vault (no shares) → 1:1 mint. Insolvent vault (shares but zero equity)
@@ -105,14 +104,19 @@ contract LiquidityPool {
         emit Deposited(msg.sender, amount, mintedShares);
     }
 
-    /// @notice Withdraw LP equity. Blocked while any reserve is open so early LPs
-    ///         cannot exit free capital at full NAV and shift loss onto remaining LPs
-    ///         (bank-run / reserved-NAV mispricing). Production: queue/epochs.
+    /// @notice Withdraw LP equity against free capital only.
+    /// @dev Open ticket reserves do NOT freeze the whole vault. Share NAV uses
+    ///      managedAssets (includes reserved), but transfer is capped by
+    ///      availableAssets() = managed - reserved - so e.g. 0.85 reserved of
+    ///      100k still allows ~99_999 free withdraw. Trying to pull more than
+    ///      free liquidity reverts INSUFFICIENT_AVAILABLE (not a full lock).
     function withdraw(uint256 shares) external returns (uint256 assets) {
         require(shares > 0, "ZERO_SHARES");
         require(sharesOf[msg.sender] >= shares, "SHARES");
-        require(reservedAssets == 0, "ACTIVE_EXPOSURE");
-        assets = (shares * managedAssets()) / totalShares;
+        uint256 managed = managedAssets();
+        require(managed > 0 && totalShares > 0, "EMPTY");
+        assets = (shares * managed) / totalShares;
+        // Ring-fence open ticket reserves + locked user risk.
         require(availableAssets() >= assets, "INSUFFICIENT_AVAILABLE");
         sharesOf[msg.sender] -= shares;
         totalShares -= shares;

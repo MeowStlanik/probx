@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRightLeft, Loader2, Wallet, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   createPublicClient,
@@ -45,6 +45,62 @@ type Step =
   | "attestation"
   | "done"
   | "error";
+
+type DemoFundOpMemo = {
+  uuid: string;
+  mintTo: string;
+  amountUsdc: string;
+  /** Set once the server reports a burn — recovery must resume this, never re-burn it. */
+  burnTxHash?: string;
+  /**
+   * `pending`   — no burn yet; the UUID may be reused to retry the same request.
+   * `broadcast` — burn is on Base Sepolia, mint on Arc not observed yet.
+   * `forwarded` — Circle minted on Arc; the operation is finished and may be cleared.
+   *
+   * Clearing at `broadcast` (as this did before) is the dangerous case: the mint wait
+   * runs for minutes, and a refresh inside that window would drop the UUID and let the
+   * next click start a second burn.
+   */
+  status: "pending" | "broadcast" | "forwarded";
+};
+
+const DEMO_FUND_OP_KEY = "probx.cctp.demoFundOp.v1";
+
+/** Survives refresh so an interrupted burn is retried, not duplicated. */
+function readDemoOpMemo(): DemoFundOpMemo | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(DEMO_FUND_OP_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<DemoFundOpMemo>;
+    if (!parsed?.uuid || !parsed.mintTo || !parsed.amountUsdc) return null;
+    const status =
+      parsed.status === "broadcast" || parsed.status === "forwarded" ? parsed.status : "pending";
+    return {
+      uuid: String(parsed.uuid),
+      mintTo: String(parsed.mintTo),
+      amountUsdc: String(parsed.amountUsdc),
+      burnTxHash: parsed.burnTxHash ? String(parsed.burnTxHash) : undefined,
+      status
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeDemoOpMemo(memo: DemoFundOpMemo | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (!memo || memo.status === "forwarded") {
+      // Only a completed mint retires the record — the next click is a new funding.
+      window.localStorage.removeItem(DEMO_FUND_OP_KEY);
+      return;
+    }
+    window.localStorage.setItem(DEMO_FUND_OP_KEY, JSON.stringify(memo));
+  } catch {
+    // Private mode / quota — in-memory ref still covers the common retry path.
+  }
+}
 
 export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
   const {
@@ -209,6 +265,33 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     }
   }, [ensureSourceChain, refreshSourceBalance, sessionMode, sourceCfg]);
 
+  /**
+   * In-flight demo-fund op: reuse UUID only for retry of the *same* operation
+   * (network error before success). Every new funding-click gets a fresh UUID.
+   *
+   * Mirrored into localStorage: a refresh or tab crash mid-burn would otherwise lose the
+   * key, and the next click would start a *second* burn instead of recovering the first —
+   * the server can only deduplicate operations it is asked about by the same key.
+   */
+  const demoOpRef = useRef<DemoFundOpMemo | null>(null);
+
+  // Restore an unfinished op on mount so a refresh resumes instead of re-burning.
+  useEffect(() => {
+    if (demoOpRef.current) return;
+    const restored = readDemoOpMemo();
+    if (restored && restored.status !== "forwarded") {
+      demoOpRef.current = restored;
+      // Surface an interrupted funding so the user resumes it instead of starting over.
+      if (restored.burnTxHash) {
+        setBurnTx(restored.burnTxHash);
+        setMessage(
+          "Found an unfinished funding from a previous session — its burn is already on chain. " +
+            "Reuse the same amount to resume; starting a different one abandons it."
+        );
+      }
+    }
+  }, []);
+
   const runDemoFund = useCallback(async () => {
     if (!mintTo) {
       setMessage("Connect an Arc wallet first (email or browser wallet).");
@@ -221,22 +304,29 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
       setStep("burn");
       setMessage("Server CCTP: burning Base Sepolia USDC from demo treasury → Arc…");
       const amountUsdc = amount || "2";
-      // One UUID per user click; reuse only for retry of this same operation.
-      const opKey = `probx.cctp.demoOp.${mintTo}.${amountUsdc}`;
-      let idempotencyKey = "";
-      try {
-        const saved = sessionStorage.getItem(opKey);
-        if (saved) idempotencyKey = saved;
-      } catch {
-        /* ignore */
-      }
-      if (!idempotencyKey) {
-        idempotencyKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}-${Math.random().toString(36).slice(2, 12)}`;
-        try {
-          sessionStorage.setItem(opKey, idempotencyKey);
-        } catch {
-          /* ignore */
-        }
+      // Reuse the UUID only for the *same* unfinished funding — that is what lets the
+      // server recognise a retry instead of burning again. Anything else gets a new one.
+      let idempotencyKey: string;
+      const prev = demoOpRef.current;
+      if (
+        prev &&
+        prev.status !== "forwarded" &&
+        prev.mintTo.toLowerCase() === mintTo.toLowerCase() &&
+        prev.amountUsdc === amountUsdc
+      ) {
+        idempotencyKey = prev.uuid;
+      } else {
+        idempotencyKey =
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+        demoOpRef.current = {
+          uuid: idempotencyKey,
+          mintTo,
+          amountUsdc,
+          status: "pending"
+        };
+        writeDemoOpMemo(demoOpRef.current);
       }
 
       const body: Record<string, string> = {
@@ -287,7 +377,16 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         domain?: number;
       };
       if (!response.ok) throw new Error(payload.error || `Demo fund HTTP ${response.status}`);
-      if (payload.burnTxHash) setBurnTx(payload.burnTxHash);
+      if (payload.burnTxHash) {
+        setBurnTx(payload.burnTxHash);
+        // Burn is on chain but the Arc mint has not been seen yet. Keep the record —
+        // clearing here would lose the UUID during the multi-minute mint wait.
+        if (demoOpRef.current) {
+          demoOpRef.current.burnTxHash = payload.burnTxHash;
+          demoOpRef.current.status = "broadcast";
+          writeDemoOpMemo(demoOpRef.current);
+        }
+      }
       let forwardHash = payload.forwardTxHash ?? null;
       if (forwardHash) setMintTx(forwardHash);
 
@@ -314,18 +413,20 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
           ? "Demo CCTP complete — USDC minted on Arc. Keep a little for gas."
           : "Burn sent — mint may still finalize; refresh balance in a minute."
       );
-      // Clear idempotency key only after a terminal success path (mint seen or explicit done).
-      if (forwardHash) {
-        try {
-          sessionStorage.removeItem(`probx.cctp.demoOp.${mintTo}.${amount || "2"}`);
-        } catch {
-          /* ignore */
-        }
+      // Retire the record only once Circle actually minted on Arc. If the mint wait timed
+      // out, the funding is still in flight: keep it so a refresh resumes rather than
+      // starting a second burn.
+      if (demoOpRef.current) {
+        demoOpRef.current.status = forwardHash ? "forwarded" : "broadcast";
+        writeDemoOpMemo(demoOpRef.current);
       }
       await refreshBalance();
     } catch (error) {
       setStep("error");
       setMessage(readableWalletError(error));
+      // Leave the record in place: an immediate retry must reuse this UUID so the server
+      // recognises it. If a burn already went out, its hash and `broadcast` status were
+      // recorded above and recovery will resume from there.
     } finally {
       setBusy(false);
     }

@@ -1,21 +1,23 @@
-# Vercel — что поменять после push (2026-07-25 full redeploy)
+# Vercel — вставить после redeploy (2026-07-25 11:44 UTC)
 
-Redeploy: **Production** (и Preview, если пользуешься).
+**Production → Settings → Environment Variables → Save → Redeploy.**
 
-Security redeploy: market registry + 100000 USDC LP seed. Старые адреса **сломают** buy / LP / cycle.
+Этот деплой: **free-capital LP** (reserve 0.85 больше не блокирует 100k), market registry, seed **100000 USDC**.
+
+Старые адреса (`0xc91d…` / `0xE24ac…` / `0xd71e…`) **не использовать**.
 
 ---
 
-## Обязательно обновить
+## Обязательно обновить (copy-paste)
 
 | Name | Value |
 |------|--------|
-| `NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS` | `0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062` |
-| `NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS` | `0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572` |
-| `NEXT_PUBLIC_MARKET_FACTORY_ADDRESS` | `0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A` |
-| `ARC_FROM_BLOCK` | `53550453` |
+| `NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS` | `0x1e70aD4528bb1c2C967D20A603eE4DC243713b39` |
+| `NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS` | `0xA3FA6F33c9c0216082987D303b27799fBBE91373` |
+| `NEXT_PUBLIC_MARKET_FACTORY_ADDRESS` | `0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b` |
+| `ARC_FROM_BLOCK` | `53581996` |
 
-### Public (проверь, что так)
+### Public (проверь)
 
 | Name | Value |
 |------|--------|
@@ -23,7 +25,7 @@ Security redeploy: market registry + 100000 USDC LP seed. Старые адре�
 | `NEXT_PUBLIC_USDC_ADDRESS` | `0x3600000000000000000000000000000000000000` |
 | `NEXT_PUBLIC_ARC_RPC_URL` | `https://rpc.testnet.arc.network` |
 | `NEXT_PUBLIC_ARC_RPC_URLS` | `https://rpc.testnet.arc.network,https://arc-testnet.drpc.org` |
-| `NEXT_PUBLIC_API_BASE_URL` | **не создавай** или удали (same-origin `/api`) |
+| `NEXT_PUBLIC_API_BASE_URL` | **пусто / удали** (same-origin `/api`) |
 
 ### Server RPC
 
@@ -39,13 +41,13 @@ Security redeploy: market registry + 100000 USDC LP seed. Старые адре�
 - `PRIVATE_KEY` / `ORACLE_PRIVATE_KEY` / `DEPLOYER_PRIVATE_KEY` / `OWNER_PRIVATE_KEY`
 - `CIRCLE_API_KEY` / `CIRCLE_ENTITY_SECRET` / `CIRCLE_WALLET_SET_ID`
 - `SESSION_HMAC_SECRET` / `ADMIN_SECRET` / `CRON_SECRET` / `OTP_HMAC_SECRET` / `SESSION_WALLET_SECRET`
-- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`
-- SMTP / email OTP (`SMTP_*`, `EMAIL_OTP_*`)
-- `CCTP_SOURCE_PRIVATE_KEY`, `BASE_SEPOLIA_RPC_URL`, `SEPOLIA_RPC_URL`
+- **`UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`** (обязательно для oracle/CCTP/OTP)
+- SMTP / email OTP
+- `CCTP_SOURCE_PRIVATE_KEY`, `BASE_SEPOLIA_RPC_URL`
 - `MARKET_CYCLE_ENABLED`, `MARKET_CYCLE_INTERVAL_MS`, `CRON_THROTTLE_MS`
 - `RPC_BATCH=1`
 
-Рекомендуется для free tier (меньше CPU):
+Рекомендуется free tier:
 
 | Name | Value |
 |------|--------|
@@ -53,36 +55,38 @@ Security redeploy: market registry + 100000 USDC LP seed. Старые адре�
 
 ---
 
-## Опционально
+## Все контракты (Arc Testnet)
 
-| Name | Когда |
+| Contract | Address | Explorer |
+|----------|---------|----------|
+| **MicroBoostEngine** | `0x1e70aD4528bb1c2C967D20A603eE4DC243713b39` | [scan](https://testnet.arcscan.app/address/0x1e70aD4528bb1c2C967D20A603eE4DC243713b39) |
+| **LiquidityPool** | `0xA3FA6F33c9c0216082987D303b27799fBBE91373` | [scan](https://testnet.arcscan.app/address/0xA3FA6F33c9c0216082987D303b27799fBBE91373) |
+| **MarketFactory** | `0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b` | [scan](https://testnet.arcscan.app/address/0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b) |
+| PositionTicket | `0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2` | [scan](https://testnet.arcscan.app/address/0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2) |
+| OracleAdapter | `0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B` | [scan](https://testnet.arcscan.app/address/0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B) |
+| InsuranceFund | `0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE` | [scan](https://testnet.arcscan.app/address/0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE) |
+| FeeRouter | `0xc31129765071651E6104129AB3108A4F03add718` | [scan](https://testnet.arcscan.app/address/0xc31129765071651E6104129AB3108A4F03add718) |
+| Demo market | `0xad3599b5f3A0a88bcf61D56357ef9dADFFe03e67` | [scan](https://testnet.arcscan.app/address/0xad3599b5f3A0a88bcf61D56357ef9dADFFe03e67) |
+| USDC | `0x3600000000000000000000000000000000000000` | native testnet |
+
+| Meta | Value |
 |------|--------|
-| `CIRCLE_KIT_KEY` | kit key из Circle Console |
-| `NEXT_PUBLIC_CIRCLE_KIT_KEY` | то же для браузера |
-| `APP_KIT_STRICT` / `NEXT_PUBLIC_APP_KIT_STRICT` | `1` = без silent fallback |
+| Deployer | `0x4604a582B66431481D5320fed67C785bdb4D7Fe0` |
+| LP seed | **100000** USDC |
+| fromBlock | **53581996** |
+| deployedAt | `2026-07-25T11:44:32.308Z` |
+
+JSON: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json)
 
 ---
 
-## После сохранения
+## После Save → Redeploy
 
-1. **Deployments → Redeploy** (Production)  
-2. Hard refresh сайта  
-3. Smoke:
-   - `https://probx-web.vercel.app/api/health` → `{"ok":true}`
-   - `https://probx-web.vercel.app/api/lp/stats` → TVL ≈ **100000** USDC
-   - `https://probx-web.vercel.app/api/markets` → адреса `0x…` с нового factory
-4. Email login → Buy **без** MetaMask
+1. `https://<your-app>.vercel.app/api/health` → `{"ok":true}`
+2. `/api/lp/stats` → TVL ≈ **100000**
+3. `/api/markets` → адреса с **нового** factory `0xff5Cc…`
+4. Email login → Buy
 
-Полный JSON: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json).
-
-### Core contracts (2026-07-25)
-
-| Contract | Address |
-|----------|---------|
-| MicroBoostEngine | [`0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062`](https://testnet.arcscan.app/address/0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062) |
-| LiquidityPool | [`0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572`](https://testnet.arcscan.app/address/0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572) |
-| MarketFactory | [`0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A`](https://testnet.arcscan.app/address/0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A) |
-| PositionTicket | [`0x6632d31b7A44755D032A714A99dB9C0B923E5b8A`](https://testnet.arcscan.app/address/0x6632d31b7A44755D032A714A99dB9C0B923E5b8A) |
-| OracleAdapter | [`0x57eEc368F233c2c904c8E22F1bf74303797367b6`](https://testnet.arcscan.app/address/0x57eEc368F233c2c904c8E22F1bf74303797367b6) |
-| InsuranceFund | [`0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B`](https://testnet.arcscan.app/address/0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B) |
-| FeeRouter | [`0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181`](https://testnet.arcscan.app/address/0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181) |
+Bundled addresses also in repo:
+- `apps/web/src/lib/deployment.json`
+- `apps/api/src/config/arc-deployment.json`

@@ -19,15 +19,97 @@ import {
   saveAggregateStatsFromMarkets,
   settleMarketTicketsOnchain
 } from "./onchainService.js";
-import { acquireLock, releaseLock } from "./persistentStore.js";
+import { acquireLock, NamespaceStore, releaseLock } from "./persistentStore.js";
+import { BTC_OBSERVATION_MS, WEATHER_OBSERVATION_MS } from "./observationSnapshots.js";
 import { withMarketCreateLock } from "./marketCreateLock.js";
+
+/** Persist settlement cursor across serverless runs (100+ tickets). */
+const settleCursorStore = new NamespaceStore<{
+  cursor: number;
+  updatedAt: string;
+  /** Terminal marker — skip re-scanning fully settled markets every cycle. */
+  done?: boolean;
+}>("settle-cursors-v1");
+
+/** Pure helper for tests + continue-settle skip logic. */
+export function isSettleCursorDone(
+  state: { done?: boolean } | null | undefined
+): boolean {
+  return Boolean(state?.done);
+}
+
+const SETTLE_CHUNK = 12;
+/** Max chunks per worker invocation to stay under serverless timeout. */
+const SETTLE_MAX_CHUNKS_PER_RUN = 4;
+
+async function settleAllTicketsChunked(
+  marketId: string
+): Promise<{ settledCount: number; done: boolean; nextCursor?: number; skipped?: boolean }> {
+  const key = marketId.trim().toLowerCase();
+  const existing = await settleCursorStore.get(key);
+  // Fully settled markets keep a durable done marker so continue-settle does not
+  // re-walk every ticket via RPC on every cycle (linear cost growth).
+  if (existing?.done) {
+    return { settledCount: 0, done: true, skipped: true };
+  }
+  let cursor = existing?.cursor ?? 0;
+  let settledCount = 0;
+  let done = false;
+  let nextCursor: number | undefined = cursor;
+
+  for (let chunk = 0; chunk < SETTLE_MAX_CHUNKS_PER_RUN; chunk++) {
+    const result = await settleMarketTicketsOnchain(marketId, {
+      cursor,
+      limit: SETTLE_CHUNK
+    });
+    if (!result || "error" in result) {
+      if (result && "error" in result) throw new Error(String(result.error));
+      break;
+    }
+    settledCount += result.settledCount ?? 0;
+    // Trust only the engine-backed `done` flag. Reaching the end of the log list is
+    // not the same as having nothing left to settle: a reverted settle leaves an open
+    // ticket holding LP reserve, and writing the terminal marker here would strand it.
+    if (result.done) {
+      done = true;
+      await settleCursorStore
+        .set(key, { cursor: 0, updatedAt: new Date().toISOString(), done: true })
+        .catch(() => undefined);
+      nextCursor = undefined;
+      break;
+    }
+    if (result.nextCursor === undefined) {
+      // Walked the whole list but exposure remains (or we could not confirm).
+      // Restart from the beginning next cycle rather than declaring completion.
+      nextCursor = 0;
+      await settleCursorStore.set(key, { cursor: 0, updatedAt: new Date().toISOString() });
+      break;
+    }
+    if (result.nextCursor === cursor) {
+      // Cursor parked on a ticket that keeps failing — stop burning the run on it
+      // and let the next cycle retry, so healthy markets still get their turn.
+      nextCursor = cursor;
+      await settleCursorStore.set(key, { cursor, updatedAt: new Date().toISOString() });
+      break;
+    }
+    cursor = result.nextCursor;
+    nextCursor = cursor;
+    await settleCursorStore.set(key, { cursor, updatedAt: new Date().toISOString() });
+  }
+
+  return { settledCount, done, nextCursor };
+}
 
 /** Nominal entry window (seconds). createMarketOnchain adds tx slack + lower sniper buffer. */
 const LOCK_SECONDS = 75;
-/** BTC short loop for demo UX. */
-const OBSERVATION_SECONDS_BTC = 60;
-/** Weather feeds are coarser — longer window for independent start/end samples. */
-const OBSERVATION_SECONDS_WEATHER = 900;
+/**
+ * Windows come from observationSnapshots so raw-tick retention stays derived from
+ * the same numbers. BTC is a short loop for demo UX; weather spans two Open-Meteo
+ * 15-minute intervals so start and end land in different provider prints (a single
+ * interval often yields end === start → permanent NO).
+ */
+const OBSERVATION_SECONDS_BTC = BTC_OBSERVATION_MS / 1000;
+const OBSERVATION_SECONDS_WEATHER = WEATHER_OBSERVATION_MS / 1000;
 /** Extra pause after lock before observationStart (set in createMarketOnchain defaults). */
 const STATE_PATH = () => runtimeFile("market-cycle-state.json");
 
@@ -117,16 +199,38 @@ export async function runMarketCycleOnce(): Promise<{
           // Snapshot grace — try again next cycle; do not cancel yet.
           continue;
         }
+        // Cancelled for missing snapshots: still settle so LP reservedAssets release.
+        if (result && "cancelled" in result && result.cancelled) {
+          try {
+            const settle = await settleAllTicketsChunked(market.id);
+            if (settle.settledCount > 0 || settle.done) {
+              settled.push(market.id);
+              console.log(
+                `[market-cycle] cancelled ${market.id} → settled ${settle.settledCount} ticket(s)${settle.done ? "" : " (more pending)"}`
+              );
+            }
+          } catch (settleError) {
+            errors.push(
+              `${market.id} cancel-settle: ${settleError instanceof Error ? settleError.message : String(settleError)}`
+            );
+          }
+          if (result && "error" in result && result.error) {
+            errors.push(`${market.id}: ${result.error}`);
+          }
+          continue;
+        }
         if (result && "error" in result && result.error) {
           errors.push(`${market.id}: ${result.error}`);
           continue;
         }
         resolved.push(market.id);
         try {
-          const settle = await settleMarketTicketsOnchain(market.id);
-          if (settle && "settledCount" in settle) {
+          const settle = await settleAllTicketsChunked(market.id);
+          if (settle.settledCount > 0 || settle.done) {
             settled.push(market.id);
-            console.log(`[market-cycle] settled ${settle.settledCount ?? 0} ticket(s) on ${market.id}`);
+            console.log(
+              `[market-cycle] settled ${settle.settledCount} ticket(s) on ${market.id}${settle.done ? "" : " (more pending)"}`
+            );
           }
         } catch (settleError) {
           errors.push(
@@ -135,6 +239,30 @@ export async function runMarketCycleOnce(): Promise<{
         }
       } catch (error) {
         errors.push(`${market.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    // 1b) Continue chunked settlement for already-final markets (prior run may have timed out).
+    // Markets with settle-cursor done=true are skipped (no full ticket re-scan).
+    for (const market of markets) {
+      if (!isReferenceRole(market.demoRole, market.category, market.question)) continue;
+      const st = String(market.status || "").toUpperCase();
+      if (st !== "RESOLVED" && st !== "CANCELLED") continue;
+      try {
+        const settle = await settleAllTicketsChunked(market.id);
+        if (settle.skipped) continue;
+        if (settle.settledCount > 0 || (settle.done && settle.settledCount === 0)) {
+          if (settle.settledCount > 0) {
+            settled.push(market.id);
+            console.log(
+              `[market-cycle] continue-settle ${market.id} → ${settle.settledCount} ticket(s)${settle.done ? "" : " (more pending)"}`
+            );
+          }
+        }
+      } catch (settleError) {
+        errors.push(
+          `${market.id} continue-settle: ${settleError instanceof Error ? settleError.message : String(settleError)}`
+        );
       }
     }
 

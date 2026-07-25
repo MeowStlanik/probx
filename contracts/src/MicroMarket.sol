@@ -4,11 +4,14 @@ pragma solidity ^0.8.24;
 /// @title MicroMarket — short YES/NO market with on-chain price discovery
 /// @notice Ticket prices live in 1e6 scale (500_000 = 50¢). Each buy moves odds
 ///         toward the purchased side so the book is not stuck at 50/50.
+/// @dev Fair mid is stored in `fairMidYes` and is the single source of truth for
+///      impact math. Quoted yesPrice/noPrice are derived with overround; we never
+///      recover mid by dividing a clamp-saturated quote (that inverted the book).
 contract MicroMarket {
     uint8 public constant OUTCOME_YES = 1;
     uint8 public constant OUTCOME_NO = 2;
     uint256 public constant PRICE_SCALE = 1e6;
-    /// @dev Soft bounds so a single side cannot go to 0/100 in one demo session.
+    /// @dev Soft bounds on fair mid so a single side cannot go to 0/100 in one demo session.
     uint256 public constant MIN_PRICE = 50_000; // 5%
     uint256 public constant MAX_PRICE = 950_000; // 95%
     /// @dev Book overround (sportsbook margin). Quoted YES+NO ≈ 108% of fair scale.
@@ -35,8 +38,12 @@ contract MicroMarket {
     uint64 public lockTime;
     uint64 public observationStart;
     uint64 public observationEnd;
+    /// @notice Quoted YES (mid × overround). Used for ticket pricing.
     uint256 public yesPrice;
+    /// @notice Quoted NO ( (1−mid) × overround ). Used for ticket pricing.
     uint256 public noPrice;
+    /// @notice Fair mid for YES in PRICE_SCALE units — source of truth for impact.
+    uint256 public fairMidYes;
     /// @notice Cumulative user risk on YES (token units, 6 decimals).
     uint256 public totalYesRisk;
     /// @notice Cumulative user risk on NO (token units, 6 decimals).
@@ -104,7 +111,7 @@ contract MicroMarket {
         lockTime = lockTime_;
         observationStart = observationStart_;
         observationEnd = observationEnd_;
-        // yesPrice_ is the fair mid; store quoted prices with overround margin.
+        // yesPrice_ is the fair mid; store mid + quoted prices with overround margin.
         _setQuotedFromMid(yesPrice_);
     }
 
@@ -177,7 +184,7 @@ contract MicroMarket {
     }
 
     /// @notice Called by MicroBoostEngine after a successful buy.
-    ///         Moves YES price up on YES buys and down on NO buys.
+    ///         Moves fair mid up on YES buys and down on NO buys; re-derives quotes.
     function applyTradeImpact(uint8 outcome, uint256 riskAmount) external onlyEngine {
         require(status == Status.Open, "BAD_STATUS");
         require(outcome == OUTCOME_YES || outcome == OUTCOME_NO, "BAD_OUTCOME");
@@ -188,10 +195,10 @@ contract MicroMarket {
         uint256 impact = (riskAmount * PRICE_SCALE) / (depth * 2);
         if (impact > MAX_IMPACT) impact = MAX_IMPACT;
 
-        // Recover fair mid from quoted YES (undo overround), apply impact on mid, re-quote.
-        uint256 mid = _midFromQuotedYes(yesPrice);
+        // Impact on stored fair mid — never round-trip through clamp-saturated yesPrice.
+        uint256 mid = fairMidYes;
         if (outcome == OUTCOME_YES) {
-            mid = _clampPrice(mid + impact);
+            mid = _clampMid(mid + impact);
             totalYesRisk += riskAmount;
         } else {
             if (mid > impact + MIN_PRICE) {
@@ -199,7 +206,7 @@ contract MicroMarket {
             } else {
                 mid = MIN_PRICE;
             }
-            mid = _clampPrice(mid);
+            mid = _clampMid(mid);
             totalNoRisk += riskAmount;
         }
         _setQuotedFromMid(mid);
@@ -207,30 +214,27 @@ contract MicroMarket {
         emit PricesUpdated(yesPrice, noPrice, outcome, riskAmount, impact);
     }
 
-    function _clampPrice(uint256 price) internal pure returns (uint256) {
-        if (price < MIN_PRICE) return MIN_PRICE;
-        if (price > MAX_PRICE) return MAX_PRICE;
-        return price;
-    }
-
-    /// @dev Quoted prices sum to OVERROUND_BPS/10000 of PRICE_SCALE (e.g. 1.08e6).
-    function _setQuotedFromMid(uint256 midYes) internal {
-        midYes = _clampPrice(midYes);
-        uint256 midNo = PRICE_SCALE - midYes;
-        yesPrice = (midYes * OVERROUND_BPS) / 10_000;
-        noPrice = (midNo * OVERROUND_BPS) / 10_000;
-        // Keep each side inside soft bounds for display / pricing safety.
-        if (yesPrice < MIN_PRICE) yesPrice = MIN_PRICE;
-        if (yesPrice > MAX_PRICE) yesPrice = MAX_PRICE;
-        if (noPrice < MIN_PRICE) noPrice = MIN_PRICE;
-        if (noPrice > MAX_PRICE) noPrice = MAX_PRICE;
-    }
-
-    function _midFromQuotedYes(uint256 quotedYes) internal pure returns (uint256) {
-        // Invert overround; clamp so impact stays well-defined.
-        uint256 mid = (quotedYes * 10_000) / OVERROUND_BPS;
+    function _clampMid(uint256 mid) internal pure returns (uint256) {
         if (mid < MIN_PRICE) return MIN_PRICE;
         if (mid > MAX_PRICE) return MAX_PRICE;
         return mid;
+    }
+
+    /// @dev Store fair mid (impact source of truth), then quoted = mid × overround.
+    ///      Quotes may be clipped only for ticket math (QuoteMath requires price < PRICE_SCALE)
+    ///      and soft display floors — never fed back into fairMidYes (that was audit C).
+    function _setQuotedFromMid(uint256 midYes) internal {
+        midYes = _clampMid(midYes);
+        fairMidYes = midYes;
+        uint256 midNo = PRICE_SCALE - midYes;
+        uint256 y = (midYes * OVERROUND_BPS) / 10_000;
+        uint256 n = (midNo * OVERROUND_BPS) / 10_000;
+        // QuoteMath.payout requires 0 < price < PRICE_SCALE.
+        if (y >= PRICE_SCALE) y = PRICE_SCALE - 1;
+        if (n >= PRICE_SCALE) n = PRICE_SCALE - 1;
+        if (y < MIN_PRICE) y = MIN_PRICE;
+        if (n < MIN_PRICE) n = MIN_PRICE;
+        yesPrice = y;
+        noPrice = n;
     }
 }

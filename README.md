@@ -21,7 +21,7 @@
   <a href="https://testnet.arcscan.app"><img src="https://img.shields.io/badge/Network-Arc%20Testnet-7C5CFF?style=flat-square" alt="Arc Testnet" /></a>
   <a href="#arc-testnet"><img src="https://img.shields.io/badge/Gas-USDC%20native-2775CA?style=flat-square" alt="USDC gas" /></a>
   <a href="#circle-cctp--app-kits"><img src="https://img.shields.io/badge/Circle-Wallets%20%C2%B7%20App%20Kits%20%C2%B7%20CCTP-6B46C1?style=flat-square" alt="Circle" /></a>
-  <img src="https://img.shields.io/badge/Tests-39%20passing-22C55E?style=flat-square" alt="39 forge tests" />
+  <img src="https://img.shields.io/badge/Tests-45%20passing-22C55E?style=flat-square" alt="45 forge tests" />
   <img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT" />
 </p>
 
@@ -133,8 +133,9 @@ sticky over 60s). No free lunch on mispriced flat 50/50 tickets.
 ## Security
 
 The reserve engine holds user funds, so the invariants are covered by tests rather than
-assumed. `pnpm contracts:test` → **39 passing**: 21 scenario + 3 registry + 1 LP
-withdraw guard + 12 accounting invariant checks and fuzz tests.
+assumed. `pnpm contracts:test` → **45 passing**: 21 scenario + 3 registry + 5 LP vault
++ 12 accounting invariant checks and fuzz tests, plus 4 self-audit regressions
+(price-mid rail inversion, settle ordering, fee-router access).
 
 | Area | Guarantee | Test |
 |------|-----------|------|
@@ -208,16 +209,16 @@ Local run, Vercel env, SMTP, and cron: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.
 
 | Contract | Address |
 |----------|---------|
-| MicroBoostEngine | [`0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062`](https://testnet.arcscan.app/address/0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062) |
-| LiquidityPool | [`0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572`](https://testnet.arcscan.app/address/0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572) |
-| MarketFactory | [`0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A`](https://testnet.arcscan.app/address/0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A) |
-| PositionTicket | [`0x6632d31b7A44755D032A714A99dB9C0B923E5b8A`](https://testnet.arcscan.app/address/0x6632d31b7A44755D032A714A99dB9C0B923E5b8A) |
-| OracleAdapter | [`0x57eEc368F233c2c904c8E22F1bf74303797367b6`](https://testnet.arcscan.app/address/0x57eEc368F233c2c904c8E22F1bf74303797367b6) |
-| InsuranceFund | [`0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B`](https://testnet.arcscan.app/address/0xDb336c5c7bCaF8e6E789078BEe611Aa14eB0809B) |
-| FeeRouter | [`0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181`](https://testnet.arcscan.app/address/0x4CaAB026fF36Eb210Bbd7ae52Ed1Eab2C04a7181) |
+| MicroBoostEngine | [`0x1e70aD4528bb1c2C967D20A603eE4DC243713b39`](https://testnet.arcscan.app/address/0x1e70aD4528bb1c2C967D20A603eE4DC243713b39) |
+| LiquidityPool | [`0xA3FA6F33c9c0216082987D303b27799fBBE91373`](https://testnet.arcscan.app/address/0xA3FA6F33c9c0216082987D303b27799fBBE91373) |
+| MarketFactory | [`0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b`](https://testnet.arcscan.app/address/0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b) |
+| PositionTicket | [`0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2`](https://testnet.arcscan.app/address/0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2) |
+| OracleAdapter | [`0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B`](https://testnet.arcscan.app/address/0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B) |
+| InsuranceFund | [`0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE`](https://testnet.arcscan.app/address/0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE) |
+| FeeRouter | [`0xc31129765071651E6104129AB3108A4F03add718`](https://testnet.arcscan.app/address/0xc31129765071651E6104129AB3108A4F03add718) |
 
-Deployed **2026-07-25** (registry security redeploy). LP seed: **100000 USDC**.  
-`marketRegistry` → factory; unregistered markets rejected. Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json).
+Deployed **2026-07-25 11:44 UTC** (free-capital LP + registry). LP seed: **100000 USDC**. `fromBlock`: **53581996**.  
+Vercel paste: [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md). Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json).
 
 ---
 
