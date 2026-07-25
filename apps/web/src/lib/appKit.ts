@@ -10,6 +10,7 @@ import { createViemAdapterFromProvider } from "@circle-fin/adapter-viem-v2";
 export type AppKitSourceChain = "Base_Sepolia" | "Ethereum_Sepolia";
 
 const ARC = "Arc_Testnet" as const;
+const PENDING_UB_SPEND_KEY = "probx.pendingUbSpend";
 
 let kitSingleton: AppKit | null = null;
 
@@ -143,26 +144,124 @@ export async function appKitBridgeToArc(params: {
   }
 }
 
+/** Persisted after a successful UB deposit when spend fails — recoverable without re-bridging. */
+export type PendingUbSpend = {
+  source: AppKitSourceChain;
+  amount: string;
+  recipientAddress: string;
+  depositHash: `0x${string}` | null;
+  createdAt: number;
+  purpose?: "lp" | "fund";
+};
+
 export type UnifiedBalanceResult = {
   mode: "unified-balance" | "bridge-fallback";
   phase: "complete" | "deposit_only" | "spend_pending";
   hash: `0x${string}` | null;
   raw: unknown;
-  /** True when deposit already succeeded and spend still needs a retry (no bridge fallback). */
   depositCompleted?: boolean;
 };
+
+export class UbSpendPendingError extends Error {
+  readonly pending: PendingUbSpend;
+  readonly causeMessage: string;
+
+  constructor(pending: PendingUbSpend, causeMessage: string) {
+    super(
+      `Unified Balance deposit succeeded, but spend to ${pending.recipientAddress.slice(0, 10)}… failed (${causeMessage}). ` +
+        `Funds are in the Gateway/UB balance — use “Complete transfer from Unified Balance” (retry spend only). ` +
+        `Deposit tx: ${pending.depositHash ?? "see wallet activity"}.`
+    );
+    this.name = "UbSpendPendingError";
+    this.pending = pending;
+    this.causeMessage = causeMessage;
+  }
+}
+
+export function loadPendingUbSpend(): PendingUbSpend | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PENDING_UB_SPEND_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PendingUbSpend;
+    if (!parsed?.amount || !parsed?.recipientAddress || !parsed?.source) return null;
+    // Drop stale recoveries after 7 days
+    if (parsed.createdAt && Date.now() - parsed.createdAt > 7 * 24 * 60 * 60 * 1000) {
+      clearPendingUbSpend();
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function savePendingUbSpend(pending: PendingUbSpend): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PENDING_UB_SPEND_KEY, JSON.stringify(pending));
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+export function clearPendingUbSpend(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(PENDING_UB_SPEND_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Spend-only Unified Balance (retry after a successful deposit). Never deposits or bridges. */
+export async function appKitSpendUnifiedBalance(params: {
+  source: AppKitSourceChain;
+  amount: string;
+  recipientAddress: string;
+  onProgress?: (msg: string) => void;
+}): Promise<UnifiedBalanceResult> {
+  const recipientAddress = requireRecipientAddress(params.recipientAddress);
+  const adapter = await browserAdapter();
+  const k = kit();
+  params.onProgress?.("Completing transfer — spending Unified Balance on Arc…");
+
+  const spend = await k.unifiedBalance.spend({
+    amount: params.amount,
+    token: "USDC",
+    from: {
+      adapter,
+      allocations: [{ amount: params.amount, chain: params.source }]
+    },
+    to: {
+      adapter,
+      chain: ARC,
+      recipientAddress
+    }
+  });
+
+  clearPendingUbSpend();
+  return {
+    mode: "unified-balance",
+    phase: "complete",
+    hash: pickHash(spend),
+    raw: { spend },
+    depositCompleted: true
+  };
+}
 
 /**
  * Unified Balance: deposit on source chain, spend to an Arc recipient (e.g. user or vault).
  *
  * Deposit and spend are separate try blocks:
  * - deposit fails → safe to fall back to a single App Kit bridge (no double-move)
- * - deposit ok, spend fails → do NOT bridge again; surface deposit-complete + retryable spend
+ * - deposit ok, spend fails → persist pending spend + throw UbSpendPendingError (no bridge)
  */
 export async function appKitUnifiedBalanceToArc(params: {
   source: AppKitSourceChain;
   amount: string;
   recipientAddress: string;
+  purpose?: "lp" | "fund";
   onProgress?: (msg: string) => void;
 }): Promise<UnifiedBalanceResult> {
   const recipientAddress = requireRecipientAddress(params.recipientAddress);
@@ -210,6 +309,7 @@ export async function appKitUnifiedBalanceToArc(params: {
         recipientAddress
       }
     });
+    clearPendingUbSpend();
     return {
       mode: "unified-balance",
       phase: "complete",
@@ -220,11 +320,16 @@ export async function appKitUnifiedBalanceToArc(params: {
   } catch (spendError) {
     // Deposit already moved funds into Gateway balance — never auto-bridge the same amount again.
     const why = spendError instanceof Error ? spendError.message : String(spendError);
-    throw new Error(
-      `Unified Balance deposit succeeded, but spend to ${recipientAddress.slice(0, 10)}… failed (${why}). ` +
-        `Funds are in the Gateway/UB balance — retry spend only; do not bridge the same amount again. ` +
-        `Deposit tx: ${pickHash(deposit) ?? "see wallet activity"}.`
-    );
+    const pending: PendingUbSpend = {
+      source: params.source,
+      amount: params.amount,
+      recipientAddress,
+      depositHash: pickHash(deposit),
+      createdAt: Date.now(),
+      purpose: params.purpose
+    };
+    savePendingUbSpend(pending);
+    throw new UbSpendPendingError(pending, why);
   }
 }
 

@@ -1,4 +1,5 @@
-# Build + forge tests on every push/PR. Smoke (live Arc) stays manual.
+# Lint, unit tests, web/api build, and Forge tests on every push/PR.
+# Live Arc smoke stays manual (`pnpm smoke:arc`).
 name: CI
 
 on:
@@ -16,7 +17,7 @@ jobs:
   contracts:
     name: Contracts (forge test)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: contracts
@@ -34,10 +35,10 @@ jobs:
       - name: forge test
         run: forge test -vv
 
-  web:
-    name: Web build
+  node:
+    name: Lint · API test · build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -53,10 +54,18 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Build web
+      - name: Lint (tsc --noEmit recursive)
+        run: pnpm lint
+
+      - name: API unit tests
+        run: pnpm --filter @probx/api test
+
+      - name: API build
+        run: pnpm --filter @probx/api build
+
+      - name: Web build
         run: pnpm --filter @probx/web build
         env:
-          # Public placeholders so Next can compile without secrets
           NEXT_PUBLIC_CHAIN_ID: "5042002"
           NEXT_PUBLIC_ARC_RPC_URL: https://rpc.testnet.arc.network
           NEXT_PUBLIC_USDC_ADDRESS: "0x3600000000000000000000000000000000000000"

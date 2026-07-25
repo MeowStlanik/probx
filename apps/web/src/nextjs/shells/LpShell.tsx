@@ -195,6 +195,37 @@ export function LpShell({
     ]
   );
 
+  const [pendingUbSpend, setPendingUbSpend] = useState<{
+    source: LpAnyChainSource;
+    amount: string;
+    recipientAddress: string;
+    depositHash?: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    void import("@/lib/appKit").then(({ loadPendingUbSpend }) => {
+      const p = loadPendingUbSpend();
+      if (!p) return;
+      setPendingUbSpend({
+        source: p.source,
+        amount: p.amount,
+        recipientAddress: p.recipientAddress,
+        depositHash: p.depositHash
+      });
+    });
+  }, []);
+
+  const finishVaultAfterFund = useCallback(
+    async (amount: number, fundMode: string) => {
+      await ensureArcChain();
+      await refresh();
+      const ap = await onAction("approve", amount);
+      const dep = await onAction("deposit", amount);
+      return `⚡ via Circle App Kit (${fundMode}) → Arc → vault deposit.\n${ap}\n${dep}`;
+    },
+    [ensureArcChain, onAction, refresh]
+  );
+
   const onAnyChainDeposit = useCallback(
     async (source: LpAnyChainSource, amount: number) => {
       if (!address) return "Connect wallet in the header first (Arc mint + vault deposit target).";
@@ -205,23 +236,66 @@ export function LpShell({
           source,
           amount: String(amount),
           recipientAddress: address,
+          purpose: "lp",
           onProgress: () => {
             /* progress surfaced via final message */
           }
         });
-        // After USDC lands on Arc, deposit into the vault with the session/browser wallet.
-        await ensureArcChain();
-        await refresh();
-        // Approve then deposit into the underwriting vault (never send raw USDC as donation).
-        const ap = await onAction("approve", amount);
-        const dep = await onAction("deposit", amount);
-        return `⚡ via Circle App Kit (${fund.mode}) → Arc → vault deposit.\n${ap}\n${dep}`;
+        setPendingUbSpend(null);
+        return await finishVaultAfterFund(amount, fund.mode);
       } catch (error) {
+        const { UbSpendPendingError, loadPendingUbSpend } = await import("@/lib/appKit");
+        if (error instanceof UbSpendPendingError) {
+          setPendingUbSpend({
+            source: error.pending.source,
+            amount: error.pending.amount,
+            recipientAddress: error.pending.recipientAddress,
+            depositHash: error.pending.depositHash
+          });
+          return error.message;
+        }
+        // Re-hydrate from storage if another code path persisted it
+        const pending = loadPendingUbSpend();
+        if (pending) {
+          setPendingUbSpend({
+            source: pending.source,
+            amount: pending.amount,
+            recipientAddress: pending.recipientAddress,
+            depositHash: pending.depositHash
+          });
+        }
         return readableWalletError(error);
       }
     },
-    [address, ensureArcChain, onAction, refresh]
+    [address, finishVaultAfterFund]
   );
+
+  const onCompleteUbSpend = useCallback(async () => {
+    if (!address) return "Connect wallet in the header first.";
+    const pending = pendingUbSpend;
+    if (!pending) return "No pending Unified Balance spend to complete.";
+    try {
+      const { appKitSpendUnifiedBalance } = await import("@/lib/appKit");
+      const fund = await appKitSpendUnifiedBalance({
+        source: pending.source,
+        amount: pending.amount,
+        recipientAddress: pending.recipientAddress || address
+      });
+      setPendingUbSpend(null);
+      const amountNum = Number(pending.amount);
+      if (!(amountNum > 0)) {
+        return `⚡ Unified Balance spend complete (${fund.hash ?? "ok"}). Deposit into vault manually if needed.`;
+      }
+      return await finishVaultAfterFund(amountNum, fund.mode);
+    } catch (error) {
+      return readableWalletError(error);
+    }
+  }, [address, finishVaultAfterFund, pendingUbSpend]);
+
+  const onDismissUbSpend = useCallback(() => {
+    void import("@/lib/appKit").then(({ clearPendingUbSpend }) => clearPendingUbSpend());
+    setPendingUbSpend(null);
+  }, []);
 
   return (
     <LPView
@@ -235,6 +309,9 @@ export function LpShell({
       allowanceUsdc={allowanceUsdc}
       onAction={onAction}
       onAnyChainDeposit={onAnyChainDeposit}
+      pendingUbSpend={pendingUbSpend}
+      onCompleteUbSpend={onCompleteUbSpend}
+      onDismissUbSpend={onDismissUbSpend}
     />
   );
 }

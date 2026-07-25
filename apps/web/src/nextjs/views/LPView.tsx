@@ -10,6 +10,14 @@ import { Button } from "../components/Button";
 export type LpAction = "approve" | "deposit" | "withdraw";
 export type LpAnyChainSource = "Base_Sepolia" | "Ethereum_Sepolia";
 
+/** Pending Unified Balance spend after deposit succeeded (recovery UX). */
+export type PendingUbSpendUi = {
+  source: LpAnyChainSource;
+  amount: string;
+  recipientAddress: string;
+  depositHash?: string | null;
+};
+
 interface Props {
   tvl: string;
   reserved: string;
@@ -23,6 +31,10 @@ interface Props {
   onAction: (action: LpAction, amount: number) => Promise<string>;
   /** Multichain fund → Arc → optional vault deposit via App Kit. */
   onAnyChainDeposit?: (source: LpAnyChainSource, amount: number) => Promise<string>;
+  /** Spend-only recovery after a successful UB deposit. */
+  pendingUbSpend?: PendingUbSpendUi | null;
+  onCompleteUbSpend?: () => Promise<string>;
+  onDismissUbSpend?: () => void;
 }
 
 // /lp — vault stats, recent deposits, deposit/withdraw + App Kit multichain fund.
@@ -36,7 +48,10 @@ export function LPView({
   yourShare,
   allowanceUsdc,
   onAction,
-  onAnyChainDeposit
+  onAnyChainDeposit,
+  pendingUbSpend,
+  onCompleteUbSpend,
+  onDismissUbSpend
 }: Props) {
   const [tab, setTab] = useState<"deposit" | "withdraw" | "anychain">("deposit");
   const [amount, setAmount] = useState("1");
@@ -72,7 +87,9 @@ export function LPView({
 
   const isError =
     message &&
-    /fail|error|not enough|exceed|unavailable|reject|wrong network|switch/i.test(message);
+    /fail|error|not enough|exceed|unavailable|reject|wrong network|switch|retry spend|deposit succeeded, but spend/i.test(
+      message
+    );
 
   return (
     <main style={{ maxWidth: theme.layout.maxWidth, margin: "0 auto", padding: "40px 24px 72px", flex: 1 }}>
@@ -156,6 +173,70 @@ export function LPView({
               </button>
             ))}
           </div>
+
+          {pendingUbSpend && onCompleteUbSpend ? (
+            <div
+              style={{
+                marginTop: 14,
+                padding: "12px 12px",
+                borderRadius: 10,
+                background: theme.color.blueSoft,
+                border: `1px solid ${theme.color.border}`,
+                fontSize: 12.5,
+                color: theme.color.ink,
+                lineHeight: 1.45
+              }}
+            >
+              <strong>Unified Balance deposit succeeded</strong> — spend to Arc still needs to finish.
+              <br />
+              <span style={{ color: theme.color.muted, fontSize: 12 }}>
+                {pendingUbSpend.amount} USDC · {pendingUbSpend.source.replace("_", " ")}
+                {pendingUbSpend.depositHash
+                  ? ` · deposit ${pendingUbSpend.depositHash.slice(0, 10)}…`
+                  : ""}
+              </span>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                <Button
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    setMessage(null);
+                    setTab("anychain");
+                    try {
+                      setMessage(await onCompleteUbSpend());
+                    } catch (e) {
+                      setMessage(e instanceof Error ? e.message : String(e));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  {busy ? "Working…" : "Complete transfer from Unified Balance"}
+                </Button>
+                {onDismissUbSpend ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      onDismissUbSpend();
+                      setMessage(null);
+                    }}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: theme.color.muted,
+                      fontSize: 12,
+                      cursor: "pointer",
+                      textDecoration: "underline",
+                      fontFamily: theme.font.sans
+                    }}
+                  >
+                    Dismiss
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
 
           {tab === "anychain" ? (
             <>
