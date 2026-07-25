@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <img src="apps/web/public/assets/probx-arc-visual.png" alt="ProbX Arc" width="820" />
+  1
 </p>
 
 <p align="center">
