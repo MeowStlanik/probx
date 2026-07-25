@@ -370,7 +370,14 @@ export async function handleWalletPost(path: string, body: Record<string, unknow
         };
       }
 
-      const result = await demoFundViaCctp({ mintTo: destination, amountUsdc });
+      const idempotencyKey =
+        String(body.idempotencyKey ?? body.nonce ?? "").trim() ||
+        `${destination}:${amountUsdc}:${String(body.expiresAt ?? "")}`;
+      const result = await demoFundViaCctp({
+        mintTo: destination,
+        amountUsdc,
+        idempotencyKey
+      });
       return { status: 200, body: result };
     } catch (error) {
       return {

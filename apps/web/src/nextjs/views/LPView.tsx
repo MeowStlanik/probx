@@ -36,6 +36,8 @@ interface Props {
   pendingUbSpend?: PendingUbSpendUi | null;
   onCompleteUbSpend?: () => Promise<string>;
   onDismissUbSpend?: () => void;
+  /** When true, vault has open ticket reserves — deposit/withdraw blocked on-chain. */
+  riskEpochActive?: boolean;
 }
 
 // /lp — vault stats, recent deposits, deposit/withdraw + App Kit multichain fund.
@@ -52,7 +54,8 @@ export function LPView({
   onAnyChainDeposit,
   pendingUbSpend,
   onCompleteUbSpend,
-  onDismissUbSpend
+  onDismissUbSpend,
+  riskEpochActive = false
 }: Props) {
   const [tab, setTab] = useState<"deposit" | "withdraw" | "anychain">("deposit");
   const [amount, setAmount] = useState("1");
@@ -65,11 +68,15 @@ export function LPView({
 
   const buttonLabel = useMemo(() => {
     if (busy) return "Working…";
+    if (riskEpochActive && tab !== "anychain") {
+      return tab === "withdraw" ? "Withdraw paused" : "Deposit paused";
+    }
+    if (riskEpochActive && tab === "anychain") return "Bridge paused (risk epoch)";
     if (tab === "withdraw") return "Withdraw USDC";
     if (tab === "anychain") return "Bridge → Arc & deposit";
     if (needsApproval) return "Approve USDC";
     return "Deposit USDC";
-  }, [tab, needsApproval, busy]);
+  }, [tab, needsApproval, busy, riskEpochActive]);
 
   const stat = (label: string, value: string, color: string = theme.color.ink) => (
     <div
@@ -99,6 +106,23 @@ export function LPView({
         Liquidity underwriting every Micro Boost ticket on Arc. Deposit on Arc or fund from any CCTP chain via{" "}
         <strong>Circle App Kit</strong>.
       </p>
+      {riskEpochActive ? (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: "12px 14px",
+            borderRadius: 10,
+            background: theme.color.blueSoft,
+            border: `1px solid ${theme.color.border}`,
+            fontSize: 13,
+            color: theme.color.ink,
+            lineHeight: 1.45
+          }}
+        >
+          <strong>Risk epoch active</strong> — open ticket reserves are on the vault. Deposit and withdraw are
+          paused until markets settle (prevents bank-run / late-entry into known outcomes).
+        </div>
+      ) : null}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 16 }}>
         {stat("TVL", tvl)}
@@ -305,12 +329,22 @@ export function LPView({
           ) : null}
           <Button
             fullWidth
-            disabled={busy || (tab === "anychain" && !onAnyChainDeposit)}
+            disabled={
+              busy ||
+              (tab === "anychain" && !onAnyChainDeposit) ||
+              (riskEpochActive && (tab === "deposit" || tab === "withdraw" || tab === "anychain"))
+            }
             style={{ marginTop: 16 }}
             onClick={async () => {
               setBusy(true);
               setMessage(null);
               try {
+                if (riskEpochActive) {
+                  setMessage(
+                    "LP deposits and withdrawals are paused until the current risk epoch settles."
+                  );
+                  return;
+                }
                 if (tab === "anychain") {
                   if (!onAnyChainDeposit) {
                     setMessage("Multichain deposit is not wired.");

@@ -401,9 +401,13 @@ export async function transferUsdcViaCircle(body: {
   let amountUnits: bigint;
   try {
     const [whole, frac = ""] = sendAmount.split(".");
+    if (frac.length > 6) {
+      throw new Error("USDC supports at most 6 decimal places.");
+    }
     const frac6 = (frac + "000000").slice(0, 6);
-    amountUnits = BigInt(whole || "0") * 1_000_000n + BigInt(frac6);
-  } catch {
+    amountUnits = BigInt(whole || "0") * 1_000_000n + BigInt(frac6 || "0");
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("decimal")) throw e;
     throw new Error("Enter a valid amount greater than 0.");
   }
   if (amountUnits <= 0n) throw new Error("Enter a valid amount greater than 0.");

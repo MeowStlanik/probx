@@ -21,7 +21,7 @@
   <a href="https://testnet.arcscan.app"><img src="https://img.shields.io/badge/Network-Arc%20Testnet-7C5CFF?style=flat-square" alt="Arc Testnet" /></a>
   <a href="#arc-testnet"><img src="https://img.shields.io/badge/Gas-USDC%20native-2775CA?style=flat-square" alt="USDC gas" /></a>
   <a href="#circle-cctp--app-kits"><img src="https://img.shields.io/badge/Circle-Wallets%20%C2%B7%20App%20Kits%20%C2%B7%20CCTP-6B46C1?style=flat-square" alt="Circle" /></a>
-  <img src="https://img.shields.io/badge/Tests-39%20passing-22C55E?style=flat-square" alt="37 forge tests" />
+  <img src="https://img.shields.io/badge/Tests-39%20passing-22C55E?style=flat-square" alt="39 forge tests" />
   <img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT" />
 </p>
 

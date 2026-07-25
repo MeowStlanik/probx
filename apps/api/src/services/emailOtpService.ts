@@ -197,7 +197,8 @@ function parseOtpToken(
 
 /** Atomically mark OTP jti used (SET NX). Returns false if already consumed. */
 async function consumeOtpJti(jti: string): Promise<boolean> {
-  const { setIfAbsent } = await import("./persistentStore.js");
+  const { setIfAbsent, requireDurableKv } = await import("./persistentStore.js");
+  requireDurableKv("OTP single-use");
   return setIfAbsent(`otp-jti:${jti}`, { usedAt: new Date().toISOString() }, 24 * 3600);
 }
 

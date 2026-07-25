@@ -120,18 +120,8 @@ function allowedTargets(): Set<string> {
     }
   }
 
-  // Allow markets seen in ticket openings / UI state
-  for (const rel of [".runtime/ticket-openings.json", ".runtime/market-ui-state.json"]) {
-    try {
-      const path = join(rootDir, rel);
-      if (!existsSync(path)) continue;
-      const text = readFileSync(path, "utf8");
-      const matches = text.match(/0x[a-fA-F0-9]{40}/g) ?? [];
-      for (const m of matches) add(m);
-    } catch {
-      // ignore
-    }
-  }
+  // Intentionally NOT scanning ticket-openings.json / arbitrary runtime JSON —
+  // that allowed unauthenticated open-meta writes to expand the allowlist.
 
   return set;
 }

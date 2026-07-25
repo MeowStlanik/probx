@@ -223,6 +223,8 @@ export async function verifyInjectedDemoFundAuth(params: {
 export async function demoFundViaCctp(params: {
   mintTo: string;
   amountUsdc?: string;
+  /** Client nonce/session key — retries return the same burnTxHash. */
+  idempotencyKey?: string;
 }): Promise<{
   mintTo: `0x${string}`;
   amount: string;
@@ -246,7 +248,33 @@ export async function demoFundViaCctp(params: {
     throw new Error(`Demo fund is limited to ${formatUnits(maxPerCall, 6)} USDC per call.`);
   }
 
+  const idempotencyKey = (params as { idempotencyKey?: string }).idempotencyKey?.trim();
+  const opStore = new NamespaceStore<{
+    burnTxHash: string;
+    mintTo: string;
+    amount: string;
+    status: string;
+    at: string;
+  }>("cctp-demo-ops");
+
+  if (idempotencyKey) {
+    const prior = await opStore.get(idempotencyKey);
+    if (prior?.burnTxHash) {
+      return {
+        mintTo,
+        amount: prior.amount || amount.toString(),
+        totalBurn: prior.amount || amount.toString(),
+        burnTxHash: prior.burnTxHash as `0x${string}`,
+        sourceAddress: cctpSourceAddress() ?? ("0x0000000000000000000000000000000000000000" as `0x${string}`),
+        status: "burned_pending_mint",
+        domain: CCTP.domains.baseSepolia
+      };
+    }
+  }
+
   const quota = await reserveQuota(mintTo, amount);
+  let burnTxHash: `0x${string}` | undefined;
+  let totalBurnStr = amount.toString();
   try {
     const pk = (key.startsWith("0x") ? key : `0x${key}`) as `0x${string}`;
     const account = privateKeyToAccount(pk);
@@ -264,6 +292,7 @@ export async function demoFundViaCctp(params: {
 
     const quote = await quoteForwardingBurn(amount, CCTP.domains.baseSepolia);
     const totalBurn = BigInt(quote.totalBurn);
+    totalBurnStr = totalBurn.toString();
     const maxFee = BigInt(quote.maxFee);
 
     const usdc = CCTP.usdc.baseSepolia;
@@ -324,21 +353,61 @@ export async function demoFundViaCctp(params: {
       ]
     });
 
-    const burnTxHash = await walletClient.sendTransaction({ to: messenger, data: burnData });
-    await waitSuccessfulReceipt(publicClient, burnTxHash);
+    burnTxHash = await walletClient.sendTransaction({ to: messenger, data: burnData });
+
+    // Once broadcast, never auto-release quota — a timeout must not free limit for a retry burn.
+    if (idempotencyKey) {
+      await opStore.set(idempotencyKey, {
+        burnTxHash,
+        mintTo,
+        amount: totalBurnStr,
+        status: "broadcast",
+        at: new Date().toISOString()
+      });
+    }
+
+    try {
+      await waitSuccessfulReceipt(publicClient, burnTxHash);
+    } catch {
+      // Receipt unknown / timeout: keep reservation, return pending so client polls.
+      await quota.finalize();
+      return {
+        mintTo,
+        amount: amount.toString(),
+        totalBurn: totalBurnStr,
+        burnTxHash,
+        sourceAddress: account.address,
+        status: "burned_pending_mint",
+        domain: CCTP.domains.baseSepolia
+      };
+    }
 
     await quota.finalize();
+    if (idempotencyKey) {
+      await opStore.set(idempotencyKey, {
+        burnTxHash,
+        mintTo,
+        amount: totalBurnStr,
+        status: "confirmed",
+        at: new Date().toISOString()
+      });
+    }
     return {
       mintTo,
       amount: amount.toString(),
-      totalBurn: totalBurn.toString(),
+      totalBurn: totalBurnStr,
       burnTxHash,
       sourceAddress: account.address,
       status: "burned_pending_mint",
       domain: CCTP.domains.baseSepolia
     };
   } catch (e) {
-    await quota.release();
+    if (!burnTxHash) {
+      await quota.release();
+    } else {
+      // Burn may still confirm — keep quota spent and surface hash if we have it.
+      await quota.finalize();
+    }
     throw e;
   }
 }

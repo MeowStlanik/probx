@@ -976,16 +976,149 @@ export async function resolveMarketOnchain(id: string, outcome: Outcome) {
   return { hash, status: receipt.status, market: await getOnchainMarket(id) };
 }
 
+/**
+ * Capture feed samples for observation windows on every cycle tick.
+ * Must run before resolve so start/end are fixed near observationStart/End.
+ */
+export async function captureObservationSnapshots(): Promise<{ updated: number }> {
+  assertDeployment();
+  const {
+    recordObservationSample,
+    valueNearTimeWithin
+  } = await import("./observationSnapshots.js");
+  const markets = await listOnchainMarkets({ forCycle: true });
+  const data = await getDemoReferenceData();
+  const now = Date.now();
+  let updated = 0;
+
+  for (const market of markets) {
+    const status = String(market.status || "").toUpperCase();
+    // Only care about markets that have locked / are observing / ready to resolve
+    if (!["LOCKED", "OBSERVE", "OBSERVATION", "OPEN"].includes(status) && status !== "RESOLVED") {
+      // Still try for LOCKED after lockTime
+    }
+    const obsStartMs = Date.parse(market.observationStart || "") || 0;
+    const obsEndMs = Date.parse(market.observationEnd || "") || 0;
+    if (!obsStartMs || !obsEndMs) continue;
+    // Too early for any sample near obs start
+    if (now < obsStartMs - 15_000) continue;
+
+    const q = (market.question || "").toLowerCase();
+    const isBtc =
+      market.demoRole === "btc_price" ||
+      market.category === "crypto-candle" ||
+      /\bbtc\b/.test(q) ||
+      q.includes("bitcoin");
+    const isWeather =
+      market.demoRole === "london_weather" ||
+      market.category === "weather" ||
+      q.includes("london") ||
+      q.includes("temp") ||
+      q.includes("weather");
+
+    const mkt = market.contractAddress || market.id;
+    if (!mkt) continue;
+
+    if (isBtc) {
+      const hist = data.btcUsd?.history ?? [];
+      const price = data.btcUsd?.price;
+      const source = data.btcUsd?.source ?? "Coinbase spot";
+      // Prefer live tick at now if we're near a boundary; also use history samples.
+      const candidates: Array<{ value: number; at: number }> = [...hist];
+      if (Number.isFinite(price)) candidates.push({ value: price as number, at: now });
+      for (const c of candidates) {
+        await recordObservationSample({
+          market: mkt,
+          role: "btc",
+          value: c.value,
+          atMs: c.at,
+          obsStartMs,
+          obsEndMs,
+          source,
+          maxDistanceMs: 10_000
+        });
+        updated += 1;
+      }
+      // Explicit boundary pulls from history with hard distance cap
+      const open = valueNearTimeWithin(candidates, obsStartMs, 10_000);
+      if (open) {
+        await recordObservationSample({
+          market: mkt,
+          role: "btc",
+          value: open.value,
+          atMs: open.at,
+          obsStartMs,
+          obsEndMs,
+          source,
+          maxDistanceMs: 10_000
+        });
+      }
+      const close = valueNearTimeWithin(candidates, obsEndMs, 10_000);
+      if (close) {
+        await recordObservationSample({
+          market: mkt,
+          role: "btc",
+          value: close.value,
+          atMs: close.at,
+          obsStartMs,
+          obsEndMs,
+          source,
+          maxDistanceMs: 10_000
+        });
+      }
+    } else if (isWeather) {
+      // Weather sources are coarser — allow 5 min distance.
+      const maxDist = 5 * 60_000;
+      const hist = data.londonWeather?.history ?? [];
+      const temp = data.londonWeather?.temperatureC;
+      const source = data.londonWeather?.source ?? "Open-Meteo";
+      const candidates: Array<{ value: number; at: number }> = [...hist];
+      if (Number.isFinite(temp)) candidates.push({ value: temp as number, at: now });
+      const open = valueNearTimeWithin(candidates, obsStartMs, maxDist);
+      const close = valueNearTimeWithin(candidates, obsEndMs, maxDist);
+      if (open) {
+        await recordObservationSample({
+          market: mkt,
+          role: "weather",
+          value: open.value,
+          atMs: open.at,
+          obsStartMs,
+          obsEndMs,
+          source,
+          maxDistanceMs: maxDist
+        });
+        updated += 1;
+      }
+      if (close) {
+        await recordObservationSample({
+          market: mkt,
+          role: "weather",
+          value: close.value,
+          atMs: close.at,
+          obsStartMs,
+          obsEndMs,
+          source,
+          maxDistanceMs: maxDist
+        });
+        updated += 1;
+      }
+    }
+  }
+  return { updated };
+}
+
 export async function resolveReferenceMarketOnchain(id: string) {
   assertDeployment();
   const market = await getOnchainMarket(id);
   if (!market) return undefined;
 
-  const data = await getDemoReferenceData();
   const obsStartMs = Date.parse(market.observationStart || "") || 0;
+  const obsEndMs = Date.parse(market.observationEnd || "") || 0;
+  if (!obsStartMs || !obsEndMs) {
+    return { error: "Market missing observationStart/observationEnd.", market };
+  }
 
   // Permanent market rule: YES if end-of-observation print is higher than start-of-observation.
-  // (Not vs price at market create — that was confusing on titles.)
   const q = (market.question || "").toLowerCase();
   const isBtc =
     market.demoRole === "btc_price" ||
@@ -999,67 +1132,113 @@ export async function resolveReferenceMarketOnchain(id: string) {
     q.includes("temp") ||
     q.includes("weather");
 
+  if (!isBtc && !isWeather) {
+    return { error: "Selected market is not a BTC/weather reference market.", market };
+  }
+
+  // Refresh snapshots from feed (idempotent) then require both bounds.
+  await captureObservationSnapshots();
+
+  const {
+    getObservationSnapshot,
+    snapshotReadyForResolve,
+    valueNearTimeWithin
+  } = await import("./observationSnapshots.js");
+  const data = await getDemoReferenceData();
+  const mkt = market.contractAddress || market.id;
+  const maxDist = isBtc ? 10_000 : 5 * 60_000;
+
+  // One more attempt: pull boundary samples from history into snapshot store.
   if (isBtc) {
-    const observedValue = data.btcUsd?.price;
-    // If history has no sample near obs start, use end-ε fallback so resolve never stalls.
-    const openValue =
-      valueNearTime(data.btcUsd?.history, obsStartMs) ??
-      valueNearTime(data.btcUsd?.history, Date.now() - 60_000) ??
-      observedValue;
-    if (!Number.isFinite(openValue) || !Number.isFinite(observedValue)) {
-      return { error: "BTC reference is unavailable.", market };
+    const hist = data.btcUsd?.history ?? [];
+    const open = valueNearTimeWithin(hist, obsStartMs, maxDist);
+    const close = valueNearTimeWithin(hist, obsEndMs, maxDist);
+    const { recordObservationSample } = await import("./observationSnapshots.js");
+    if (open) {
+      await recordObservationSample({
+        market: mkt,
+        role: "btc",
+        value: open.value,
+        atMs: open.at,
+        obsStartMs,
+        obsEndMs,
+        source: data.btcUsd?.source ?? "Coinbase spot",
+        maxDistanceMs: maxDist
+      });
     }
-    const outcome: Outcome = (observedValue as number) > (openValue as number) ? "YES" : "NO";
-    const result = await resolveMarketOnchain(id, outcome);
+    if (close) {
+      await recordObservationSample({
+        market: mkt,
+        role: "btc",
+        value: close.value,
+        atMs: close.at,
+        obsStartMs,
+        obsEndMs,
+        source: data.btcUsd?.source ?? "Coinbase spot",
+        maxDistanceMs: maxDist
+      });
+    }
+  } else {
+    const hist = data.londonWeather?.history ?? [];
+    const open = valueNearTimeWithin(hist, obsStartMs, maxDist);
+    const close = valueNearTimeWithin(hist, obsEndMs, maxDist);
+    const { recordObservationSample } = await import("./observationSnapshots.js");
+    if (open) {
+      await recordObservationSample({
+        market: mkt,
+        role: "weather",
+        value: open.value,
+        atMs: open.at,
+        obsStartMs,
+        obsEndMs,
+        source: data.londonWeather?.source ?? "Open-Meteo",
+        maxDistanceMs: maxDist
+      });
+    }
+    if (close) {
+      await recordObservationSample({
+        market: mkt,
+        role: "weather",
+        value: close.value,
+        atMs: close.at,
+        obsStartMs,
+        obsEndMs,
+        source: data.londonWeather?.source ?? "Open-Meteo",
+        maxDistanceMs: maxDist
+      });
+    }
+  }
+
+  const snap = await getObservationSnapshot(mkt);
+  const ready = snapshotReadyForResolve(snap, obsStartMs, obsEndMs, maxDist);
+  if (!ready.ok) {
+    // Fail closed: cancel instead of resolving on live/current price.
+    const cancel = await cancelMarketOnchain(
+      id,
+      `Reliable observation snapshot unavailable: ${ready.reason}`
+    );
     return {
-      ...result,
-      outcome,
-      observedValue,
-      threshold: openValue,
-      openValue,
-      referenceSource: data.btcUsd?.source ?? "Coinbase spot"
+      error: ready.reason,
+      cancelled: true,
+      cancel,
+      market: await getOnchainMarket(id)
     };
   }
 
-  if (isWeather) {
-    const observedValue = data.londonWeather?.temperatureC;
-    const openValue =
-      valueNearTime(data.londonWeather?.history, obsStartMs) ??
-      valueNearTime(data.londonWeather?.history, Date.now() - 60_000) ??
-      observedValue;
-    if (!Number.isFinite(openValue) || !Number.isFinite(observedValue)) {
-      return { error: "Weather reference is unavailable.", market };
-    }
-    const outcome: Outcome = (observedValue as number) > (openValue as number) ? "YES" : "NO";
-    const result = await resolveMarketOnchain(id, outcome);
-    return {
-      ...result,
-      outcome,
-      observedValue,
-      threshold: openValue,
-      openValue,
-      referenceSource: data.londonWeather?.source ?? "Open-Meteo"
-    };
-  }
-
-  return { error: "Selected market is not a BTC/weather reference market.", market };
-}
-
-/** Closest sample at/after t, else nearest before. */
-function valueNearTime(
-  history: Array<{ value: number; at: number }> | undefined,
-  t: number
-): number | undefined {
-  if (!history?.length || !Number.isFinite(t) || t <= 0) return undefined;
-  let best: { value: number; dist: number } | undefined;
-  for (const p of history) {
-    if (!Number.isFinite(p?.value) || !Number.isFinite(p?.at)) continue;
-    const dist = Math.abs(p.at - t);
-    // Prefer samples at or after observation open when close
-    const score = p.at >= t - 2_000 ? dist : dist + 60_000;
-    if (!best || score < best.dist) best = { value: p.value, dist: score };
-  }
-  return best?.value;
+  const openValue = ready.start;
+  const observedValue = ready.end;
+  const outcome: Outcome = observedValue > openValue ? "YES" : "NO";
+  const result = await resolveMarketOnchain(id, outcome);
+  return {
+    ...result,
+    outcome,
+    observedValue,
+    threshold: openValue,
+    openValue,
+    referenceSource:
+      snap?.source ??
+      (isBtc ? data.btcUsd?.source ?? "Coinbase spot" : data.londonWeather?.source ?? "Open-Meteo")
+  };
 }
 
 export async function cancelMarketOnchain(id: string, reason: string) {
@@ -2102,6 +2281,10 @@ async function ensureTicketOpeningMeta(input: {
   return existing;
 }
 
+/**
+ * Record opening metadata for a ticket. Create-only; values for price/source
+ * are taken from server feeds + on-chain ticket, not trusted client fields.
+ */
 export async function recordTicketOpening(body: {
   ticketId?: unknown;
   marketId?: unknown;
@@ -2112,17 +2295,75 @@ export async function recordTicketOpening(body: {
   threshold?: unknown;
   source?: unknown;
 }) {
-  const { upsertTicketOpening } = await import("./ticketOpenings.js");
+  const { getTicketOpening, upsertTicketOpening } = await import("./ticketOpenings.js");
   const ticketId = String(body.ticketId ?? "").replace(/^PXLT-/i, "").trim();
-  if (!ticketId) return { error: "ticketId is required" };
-  const referencePrice = Number(body.referencePrice);
-  const feed = body.referenceFeed === "weather" ? "weather" as const : body.referenceFeed === "btc" ? "btc" as const : "none" as const;
+  if (!ticketId || !/^\d+$/.test(ticketId)) return { error: "ticketId is required (numeric)" };
+
+  const existing = getTicketOpening(ticketId);
+  if (existing) return { status: "ok", opening: existing, created: false };
+
+  assertDeployment();
+  let ticketIdBn: bigint;
+  try {
+    ticketIdBn = BigInt(ticketId);
+  } catch {
+    return { error: "invalid ticketId" };
+  }
+
+  // Verify ticket exists on-chain and bind market/owner from chain.
+  const onchain = await publicClient.readContract({
+    address: addr(deployment.positionTicket),
+    abi: ticketAbi,
+    functionName: "getTicket",
+    args: [ticketIdBn]
+  });
+  const chainMarket = getAddress(String(onchain.market));
+  const chainOwner = getAddress(String(onchain.owner));
+  const chainOutcome = Number(onchain.outcome) === 2 ? "NO" : Number(onchain.outcome) === 1 ? "YES" : undefined;
+
+  const clientMarket =
+    typeof body.marketAddress === "string" && /^0x[a-fA-F0-9]{40}$/i.test(body.marketAddress)
+      ? getAddress(body.marketAddress)
+      : undefined;
+  if (clientMarket && clientMarket !== chainMarket) {
+    return { error: "marketAddress does not match on-chain ticket" };
+  }
+
+  // Server-side reference snapshot (never trust client referencePrice/source).
+  let referencePrice: number | undefined;
+  let feed: "btc" | "weather" | "none" = "none";
+  let source: string | undefined;
+  try {
+    const data = await getDemoReferenceData();
+    const mkt = await getOnchainMarket(chainMarket).catch(() => undefined);
+    const q = (mkt?.question || "").toLowerCase();
+    const isBtc =
+      mkt?.demoRole === "btc_price" ||
+      mkt?.category === "crypto-candle" ||
+      /\bbtc\b/.test(q);
+    const isWeather =
+      mkt?.demoRole === "london_weather" ||
+      mkt?.category === "weather" ||
+      q.includes("london");
+    if (isBtc && Number.isFinite(data.btcUsd?.price)) {
+      feed = "btc";
+      referencePrice = data.btcUsd!.price;
+      source = data.btcUsd!.source;
+    } else if (isWeather && Number.isFinite(data.londonWeather?.temperatureC)) {
+      feed = "weather";
+      referencePrice = data.londonWeather!.temperatureC;
+      source = data.londonWeather!.source;
+    }
+  } catch {
+    /* best-effort */
+  }
+
   const meta = upsertTicketOpening({
     ticketId,
-    marketId: typeof body.marketId === "string" ? body.marketId : undefined,
-    marketAddress: typeof body.marketAddress === "string" ? body.marketAddress : undefined,
-    outcome: body.outcome === "NO" ? "NO" : body.outcome === "YES" ? "YES" : undefined,
-    referencePrice: Number.isFinite(referencePrice) ? referencePrice : undefined,
+    marketId: typeof body.marketId === "string" ? body.marketId : chainMarket,
+    marketAddress: chainMarket,
+    outcome: chainOutcome,
+    referencePrice,
     referenceFeed: feed,
     referenceLabel:
       feed === "btc"
@@ -2130,11 +2371,12 @@ export async function recordTicketOpening(body: {
         : feed === "weather"
           ? "London temp at ticket open (settle uses observation end)"
           : "Reference at ticket open",
-    threshold: Number.isFinite(Number(body.threshold)) ? Number(body.threshold) : undefined,
-    source: typeof body.source === "string" ? body.source : undefined,
+    threshold: referencePrice,
+    source,
+    owner: chainOwner,
     openedAt: new Date().toISOString()
   });
-  return { status: "ok", opening: meta };
+  return { status: "ok", opening: meta, created: true };
 }
 
 function uniqueDemoMarkets(markets: DemoMarketDeployment[]): DemoMarketDeployment[] {

@@ -13,6 +13,7 @@ export type TicketOpeningMeta = {
   threshold?: number;
   source?: string;
   openedAt: string;
+  owner?: string;
 };
 
 const storePath = runtimeFile("ticket-openings.json");
@@ -36,8 +37,11 @@ export function getTicketOpening(ticketId: string): TicketOpeningMeta | undefine
   return loadAll()[ticketId];
 }
 
+/** Create-only: never overwrite an existing ticket's opening meta. */
 export function upsertTicketOpening(meta: TicketOpeningMeta): TicketOpeningMeta {
   const all = loadAll();
+  const existing = all[meta.ticketId];
+  if (existing) return existing;
   all[meta.ticketId] = meta;
   saveAll(all);
   return meta;

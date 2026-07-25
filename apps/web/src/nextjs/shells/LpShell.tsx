@@ -36,6 +36,7 @@ export function LpShell({
   const [availableAssets, setAvailableAssets] = useState(0n);
   const [allowance, setAllowance] = useState(0n);
   const [usdcBal, setUsdcBal] = useState(0n);
+  const [reservedAssetsOnchain, setReservedAssetsOnchain] = useState(0n);
 
   const utilization = useMemo(() => {
     if (tvl <= 0) return "—";
@@ -57,6 +58,7 @@ export function LpShell({
       // TVL = LP equity (managedAssets), not raw token balance (includes locked user risk / donations).
       setTvl(Number(formatUnits(managedAssets, 6)));
       setReserved(Number(formatUnits(reservedAssets, 6)));
+      setReservedAssetsOnchain(reservedAssets);
       setAvailable(Number(formatUnits(availableOnchain, 6)));
       setTotalShares(totalSh);
       setManaged(managedAssets);
@@ -127,6 +129,19 @@ export function LpShell({
         await ensureArcChain();
         const walletClient = getWalletClient();
         if (!walletClient) return "Wallet provider unavailable.";
+
+        // Live reservedAssets — deposit/withdraw blocked while risk epoch open.
+        const reservedNow = (await publicClient.readContract({
+          address: getAddress(arcDeployment.liquidityPool),
+          abi: poolAbi,
+          functionName: "reservedAssets"
+        })) as bigint;
+        if (reservedNow > 0n && (action === "deposit" || action === "withdraw" || action === "approve")) {
+          if (action === "deposit" || action === "approve") {
+            return "LP deposits are paused until the current risk epoch settles (open ticket reserves).";
+          }
+          return "LP withdrawals are paused until the current risk epoch settles (open ticket reserves).";
+        }
 
         if (action === "approve") {
           if (assets > usdcBal) return "Not enough USDC on wallet. Use Deposit / Bridge in the header.";
@@ -247,6 +262,21 @@ export function LpShell({
 
       const usdc = getAddress(arcDeployment.usdc);
       const pool = getAddress(arcDeployment.liquidityPool);
+
+      // Never auto-deposit after bridge if vault still has open reserves.
+      const reservedNow = (await publicClient.readContract({
+        address: pool,
+        abi: poolAbi,
+        functionName: "reservedAssets"
+      })) as bigint;
+      if (reservedNow > 0n) {
+        return (
+          `⚡ via Circle App Kit (${fundMode}) → Arc OK, but vault deposit paused: ` +
+          `LP deposits are paused until the current risk epoch settles. ` +
+          `USDC is on Arc — use Deposit tab after markets settle.`
+        );
+      }
+
       const targetBalance = balanceBefore + assets;
 
       // Poll until bridged/spent amount lands (delta vs pre-fund balance).
@@ -356,6 +386,16 @@ export function LpShell({
       if (!address) return "Connect wallet in the header first (Arc mint + vault deposit target).";
       if (!(amount > 0)) return "Enter an amount greater than zero.";
       try {
+        // Fail before bridge if vault is mid risk epoch.
+        const reservedNow = (await publicClient.readContract({
+          address: getAddress(arcDeployment.liquidityPool),
+          abi: poolAbi,
+          functionName: "reservedAssets"
+        })) as bigint;
+        if (reservedNow > 0n) {
+          return "LP deposits are paused until the current risk epoch settles. Wait for open tickets to resolve, then bridge.";
+        }
+
         const balanceBefore = await readUsdcBalance();
         const { appKitUnifiedBalanceToArc } = await import("@/lib/appKit");
         const fund = await appKitUnifiedBalanceToArc({
@@ -380,7 +420,7 @@ export function LpShell({
         return readableWalletError(error);
       }
     },
-    [address, finishVaultAfterFund, pendingFromStorage, readUsdcBalance]
+    [address, finishVaultAfterFund, pendingFromStorage, publicClient, readUsdcBalance]
   );
 
   const onCompleteUbSpend = useCallback(async () => {
@@ -427,6 +467,7 @@ export function LpShell({
       pendingUbSpend={pendingUbSpend}
       onCompleteUbSpend={onCompleteUbSpend}
       onDismissUbSpend={onDismissUbSpend}
+      riskEpochActive={reservedAssetsOnchain > 0n}
     />
   );
 }

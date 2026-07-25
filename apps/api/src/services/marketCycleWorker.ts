@@ -10,6 +10,7 @@ import { runtimeFile } from "../runtimePaths.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  captureObservationSnapshots,
   createMarketOnchain,
   hideMarketOnchain,
   listOnchainMarkets,
@@ -89,6 +90,15 @@ export async function runMarketCycleOnce(): Promise<{
 
     const markets = await listOnchainMarkets({ forCycle: true });
     const now = Date.now();
+
+    // 0) Capture observation start/end snapshots before any resolve (immutable prints).
+    try {
+      await captureObservationSnapshots();
+    } catch (error) {
+      errors.push(
+        `observation snapshots: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
 
     // 1) Resolve + settle ready BTC / weather
     for (const market of markets) {
