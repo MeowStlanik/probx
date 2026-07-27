@@ -46,8 +46,9 @@ contract MicroBoostEngine {
 
     uint256 public constant BPS = 10_000;
     uint256 public constant BASE_FEE_BPS = 30;
-    /// @dev Per unit of boost above 1x (was 40 = 0.4%). Order-of-magnitude higher so
-    ///      boost is funded by fee income / book margin, not free LP risk.
+    /// @dev Per unit of boost above 1x. Recovers part of the cost above the
+    ///      self-funded band; the remainder is a deliberate subsidy until the
+    ///      boost curve is priced from observed flow. See README → Book Economics.
     uint256 public constant BOOST_FEE_BPS = 400;
 
     IERC20LikeForEngine public immutable usdc;
