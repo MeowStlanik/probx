@@ -31,21 +31,19 @@ Local dev without `CRON_SECRET`: endpoints stay open but throttled (gas-spam gua
 
 ---
 
-## Option A — GitHub Actions (in this repo)
+## Why not GitHub Actions
 
-Workflow: [`.github/workflows/cron-ping.yml`](../.github/workflows/cron-ping.yml)
+A `schedule: "* * * * *"` workflow used to live here and was removed. GitHub's scheduler
+does not honour minute cron on a free runner: observed runs landed roughly **3.5 hours
+apart**, and every run failed in ~5 s because the repo secrets were never set — so it
+delivered no pings and a steady stream of failure email instead. A pinger that silently
+does nothing is worse than no pinger, because the dashboard still looks configured.
 
-1. Repo → **Settings → Secrets and variables → Actions**
-2. Add:
-   - `PROBX_CRON_BASE_URL` = `https://probx-web.vercel.app`
-   - `PROBX_CRON_SECRET` = same as Vercel `CRON_SECRET`
-3. Enable Actions on the default branch (workflow runs on `schedule: * * * * *` + manual **Run workflow**).
-
-GitHub may delay minute cron under load (often 1–5 min). Still far better than daily Vercel Hobby cron.
+Use a dedicated cron service (below).
 
 ---
 
-## Option B — cron-job.org (no code)
+## cron-job.org (recommended, no code)
 
 1. Open [https://cron-job.org](https://cron-job.org) → create free account  
 2. **Create cronjob**  

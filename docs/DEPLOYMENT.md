@@ -117,8 +117,8 @@ Vercel Hobby cron fires ~once a day, so:
 
 1. **External pinger (recommended):** hit `GET /api/cron/market-cycle?secret=CRON_SECRET` every minute — free on cron-job.org. Guide: [`EXTERNAL_CRON.md`](./EXTERNAL_CRON.md).
    *Note:* `market-cycle` is intentionally callable **without** a secret (the browser heartbeat drives it); passing `CRON_SECRET` **bypasses the throttle** rather than granting access. `auto-resolve` does require the secret when one is configured.
-2. **On-traffic fallback (built-in):** while anyone has the site open, the cycle self-runs in the background (throttled 50s across instances via KV). Prefer `MARKET_CYCLE_ON_TRAFFIC=0` on free tier if you have a reliable external pinger.
-3. **GitHub Actions backup:** [`.github/workflows/cron-ping.yml`](../.github/workflows/cron-ping.yml) pings both endpoints. Set `PROBX_CRON_BASE_URL` + `PROBX_CRON_SECRET` as repo secrets. GitHub's scheduler floors at ~5 min and slips under load — treat it as a safety net, not the primary driver.
+2. **On-traffic fallback (built-in):** while anyone has the site open, the cycle self-runs in the background (throttled via KV across instances; `MARKET_CYCLE_KICK_MIN_MS`, default 12s). Prefer `MARKET_CYCLE_ON_TRAFFIC=0` on free tier if you have a reliable external pinger.
+   GitHub Actions is **not** a usable backup here: its scheduler floors well above a minute and slips badly under load — observed runs landed ~3.5 h apart, not 60 s. A workflow for this was removed rather than left as a false safety net.
 
 ---
 
