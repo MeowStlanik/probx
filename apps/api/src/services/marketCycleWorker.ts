@@ -420,7 +420,22 @@ function hasResolverKey(): boolean {
  * durable KV so concurrent requests do not stampede. Zero-traffic periods still
  * need the external pinger — serverless cannot wake itself.
  */
-const KICK_MIN_INTERVAL_MS = 50_000;
+/**
+ * Traffic-kick throttle. This is pure latency overhead: a round is resolvable the moment
+ * observationEnd passes and the end print exists, but nothing resolves it until the next
+ * cycle run. At 50s it dominated the wait a user actually feels — the entry window and the
+ * observation window are the product, this is not.
+ *
+ * Safe to lower: runMarketCycleOnce holds a 90s distributed lock ("market-cycle") plus a
+ * per-instance `running` flag, so extra kicks return skipped:"distributed-lock" instead of
+ * overlapping. The cost of a smaller value is invocation + RPC volume while someone is on
+ * the site, not correctness. Zero-traffic periods still depend on the external pinger.
+ */
+const KICK_MIN_INTERVAL_MS = (() => {
+  const parsed = Number(process.env.MARKET_CYCLE_KICK_MIN_MS ?? "12000");
+  if (!Number.isFinite(parsed)) return 12_000;
+  return Math.min(120_000, Math.max(5_000, Math.floor(parsed)));
+})();
 let localLastKickAt = 0;
 
 export async function maybeRunMarketCycleInBackground(): Promise<void> {
