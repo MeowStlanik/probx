@@ -46,9 +46,13 @@ jobs:
         with:
           version: 9.12.3
 
+      # Node 20 is EOL (April 2026) and tsx 4.x mis-links CJS named exports on it:
+      # `import { initiateDeveloperControlledWalletsClient } from "@circle-fin/..."`
+      # threw "does not provide an export named". Plain Node ESM handles it on 20 and 24
+      # alike, and production builds through Next/webpack, so this only ever broke CI.
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
           cache: pnpm
 
       - name: Install
@@ -69,6 +73,6 @@ jobs:
           NEXT_PUBLIC_CHAIN_ID: "5042002"
           NEXT_PUBLIC_ARC_RPC_URL: https://rpc.testnet.arc.network
           NEXT_PUBLIC_USDC_ADDRESS: "0x3600000000000000000000000000000000000000"
-          NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS: "0xc91d548A7E3a1ddB8f4eac302cB8F5b79a7cc062"
-          NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS: "0xE24acA031A4cd9B6a8e4E1fF806A2cae7a206572"
-          NEXT_PUBLIC_MARKET_FACTORY_ADDRESS: "0xd71eBd51Ed53C764b38E78EAe451D86BFa47d19A"
+          NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS: "0x469592aEff57eE56e910A75eA69a6538E8B59A67"
+          NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS: "0xdB25f054D2D88c38FB06f74ADaD1b06e87a06De8"
+          NEXT_PUBLIC_MARKET_FACTORY_ADDRESS: "0xf659eDf16E55307095a08fd29727316513acdF19"
