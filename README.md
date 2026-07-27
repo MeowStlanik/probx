@@ -21,7 +21,7 @@
   <a href="https://testnet.arcscan.app"><img src="https://img.shields.io/badge/Network-Arc%20Testnet-7C5CFF?style=flat-square" alt="Arc Testnet" /></a>
   <a href="#arc-testnet"><img src="https://img.shields.io/badge/Gas-USDC%20native-2775CA?style=flat-square" alt="USDC gas" /></a>
   <a href="#circle-cctp--app-kits"><img src="https://img.shields.io/badge/Circle-Wallets%20%C2%B7%20App%20Kits%20%C2%B7%20CCTP-6B46C1?style=flat-square" alt="Circle" /></a>
-  <img src="https://img.shields.io/badge/Tests-46%20passing-22C55E?style=flat-square" alt="46 forge tests" />
+  <img src="https://img.shields.io/badge/Tests-50%20passing-22C55E?style=flat-square" alt="50 forge tests" />
   <img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT" />
 </p>
 
@@ -94,6 +94,16 @@ the first layer of house edge and funds modest boost.
 - **Pricing:** raw on-chain prices (with overround) drive payout math.
 - **API:** `applyPriceMargin()` in `quoteEngine.ts` mirrors contract quoting.
 
+That margin only protects the vault while flow cannot push price *past* it, so the book
+enforces the bound directly. Fair mid may drift from its seed by at most
+`MAX_MID_DRIFT_BPS = 700` of the cheaper side — under the `741` bps at which a 108%
+overround stops covering the move (`1 − 10000/OVERROUND_BPS`). Virtual depth is sized from
+LP capital at market creation (`managedAssets / IMPACT_DEPTH_DIVISOR`, floored at 5 000
+USDC) rather than a fixed constant, so odds move against the capital underwriting them.
+
+**Invariant:** no reachable book state quotes a side below its seed fair value, under any
+sequence of legal trades. Fuzzed in `BookManipulation.t.sol`.
+
 ### 2. Boost pricing is calibrated, not assumed
 
 Boost multiplies payout, so its cost to the vault depends on one variable the protocol
@@ -142,13 +152,14 @@ sticky over 60s). No free lunch on mispriced flat 50/50 tickets.
 ## Security
 
 The reserve engine holds user funds, so the invariants are covered by tests rather than
-assumed. `pnpm contracts:test` → **46 passing**: 25 scenario + 3 registry + 6 LP vault
-+ 12 accounting invariant checks and fuzz tests (includes price-mid, settle CEI,
-fee-router access, and dust-manipulation regressions).
+assumed. `pnpm contracts:test` → **50 passing**: 25 scenario + 3 registry + 6 LP vault
++ 12 accounting invariant checks and fuzz tests, + 4 book-manipulation regressions
+(includes price-mid, settle CEI, fee-router access, and dust-manipulation regressions).
 
 | Area | Guarantee | Test |
 |------|-----------|------|
-| **Quote integrity** | Price impact is strictly proportional to stake; `MIN_USER_RISK_PER_TICKET` (0.25 USDC) blocks dust trades from moving the book | [`DustManipulation.t.sol`](./contracts/test/DustManipulation.t.sol) |
+| **Book integrity** | No reachable book state quotes a side below its seed fair value, under any sequence of legal trades — so flow can never push price past the overround that funds the book. Virtual depth scales with LP capital rather than a fixed constant | [`BookManipulation.t.sol`](./contracts/test/BookManipulation.t.sol) |
+| **Quote integrity** | Price impact is strictly proportional to stake; `MIN_USER_RISK_PER_TICKET` (0.25 USDC) rejects sub-minimum stakes outright | [`DustManipulation.t.sol`](./contracts/test/DustManipulation.t.sol) |
 | **Resolution timing** | `resolve()` reverts until the full observation window has elapsed (`observationEnd`), independent of resolver-key discipline | [`ObservationResolve.t.sol`](./contracts/test/ObservationResolve.t.sol) |
 | **Share pricing** | Vault prices shares off an internal ledger (`internalAssets`), not token balance — direct transfers cannot inflate share value | [`DonationAttack.t.sol`](./contracts/test/DonationAttack.t.sol) |
 | **Reserve accounting** | Every payout, loss and refund reconciles reserved + locked balances | [`ReserveAccounting.t.sol`](./contracts/test/ReserveAccounting.t.sol) |
@@ -218,15 +229,15 @@ Local run, Vercel env, SMTP, and cron: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.
 
 | Contract | Address |
 |----------|---------|
-| MicroBoostEngine | [`0x1e70aD4528bb1c2C967D20A603eE4DC243713b39`](https://testnet.arcscan.app/address/0x1e70aD4528bb1c2C967D20A603eE4DC243713b39) |
-| LiquidityPool | [`0xA3FA6F33c9c0216082987D303b27799fBBE91373`](https://testnet.arcscan.app/address/0xA3FA6F33c9c0216082987D303b27799fBBE91373) |
-| MarketFactory | [`0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b`](https://testnet.arcscan.app/address/0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b) |
-| PositionTicket | [`0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2`](https://testnet.arcscan.app/address/0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2) |
-| OracleAdapter | [`0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B`](https://testnet.arcscan.app/address/0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B) |
-| InsuranceFund | [`0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE`](https://testnet.arcscan.app/address/0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE) |
-| FeeRouter | [`0xc31129765071651E6104129AB3108A4F03add718`](https://testnet.arcscan.app/address/0xc31129765071651E6104129AB3108A4F03add718) |
+| MicroBoostEngine | [`0x469592aEff57eE56e910A75eA69a6538E8B59A67`](https://testnet.arcscan.app/address/0x469592aEff57eE56e910A75eA69a6538E8B59A67) |
+| LiquidityPool | [`0xdB25f054D2D88c38FB06f74ADaD1b06e87a06De8`](https://testnet.arcscan.app/address/0xdB25f054D2D88c38FB06f74ADaD1b06e87a06De8) |
+| MarketFactory | [`0xf659eDf16E55307095a08fd29727316513acdF19`](https://testnet.arcscan.app/address/0xf659eDf16E55307095a08fd29727316513acdF19) |
+| PositionTicket | [`0x48500Ce7Bc323814f9092c31bFE6957DCEeA152C`](https://testnet.arcscan.app/address/0x48500Ce7Bc323814f9092c31bFE6957DCEeA152C) |
+| OracleAdapter | [`0x6ACfEA3A4713bC723abcFE17Ee6E31FdFB9d3F16`](https://testnet.arcscan.app/address/0x6ACfEA3A4713bC723abcFE17Ee6E31FdFB9d3F16) |
+| InsuranceFund | [`0xd35766360FAC570d67cB88D0C5b94EFD0aEeb781`](https://testnet.arcscan.app/address/0xd35766360FAC570d67cB88D0C5b94EFD0aEeb781) |
+| FeeRouter | [`0xc6ABDD0D4dB15f347E0690F471098694E284AC63`](https://testnet.arcscan.app/address/0xc6ABDD0D4dB15f347E0690F471098694E284AC63) |
 
-Deployed **2026-07-25 11:44 UTC** (free-capital LP + registry). LP seed: **100000 USDC**. `fromBlock`: **53581996**.  
+Deployed **2026-07-27 14:46 UTC** (free-capital LP + registry + manipulation-resistant book). LP seed: **100000 USDC**. `fromBlock`: **53938140**.  
 Vercel paste: [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md). Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json).
 
 ---

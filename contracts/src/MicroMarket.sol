@@ -17,11 +17,40 @@ contract MicroMarket {
     /// @dev Book overround (sportsbook margin). Quoted YES+NO ≈ 108% of fair scale.
     ///      Self-funds boost up to ~1.09x; above that the vault subsidises by design.
     uint256 public constant OVERROUND_BPS = 10_800; // 108%
-    /// @dev Small virtual book so 0.1 USDC demo trades move odds by ~1–2 percentage points.
-    uint256 public constant IMPACT_LIQUIDITY = 2e6; // 2 USDC
     /// @dev Upper bound only — impact is strictly proportional to stake (no floor).
-    ///      Dust manipulation was closed via MIN_USER_RISK_PER_TICKET, not a price floor.
     uint256 public constant MAX_IMPACT = 120_000; // 12%
+
+    /// @dev Max drift of fair mid away from its seed, in bps of the *cheaper* side.
+    ///
+    ///      This bound is derived, not tuned. Quoted price is mid × OVERROUND_BPS, so a
+    ///      book pushed down by d still quotes at or above fair value exactly while
+    ///          (mid − d) × OVERROUND_BPS / 10_000  ≥  mid
+    ///      i.e. d ≤ mid × (1 − 10_000/OVERROUND_BPS). At 108% that limit is 741 bps;
+    ///      700 keeps a margin. Taking min(mid, SCALE−mid) bounds both sides at once,
+    ///      because pushing mid *up* makes NO the cheap side by the symmetric amount.
+    ///
+    ///      Consequence: no reachable book state offers a positive-EV entry at the seed
+    ///      probability. Overround is the house edge that funds the book — once flow can
+    ///      push price past that edge, the vault is underwriting a free option.
+    ///      Enforced by testFuzz_bookNeverQuotesBelowSeedFair.
+    uint256 public constant MAX_MID_DRIFT_BPS = 700;
+
+    /// @dev Virtual book depth = LP managed assets / this, floored at MIN_IMPACT_LIQUIDITY.
+    ///      Odds move against the capital underwriting them. The previous fixed 2 USDC
+    ///      constant meant one minimum ticket (0.25 USDC) moved mid by 6.25 points, so
+    ///      2.75 USDC of dust walked the book to the rail regardless of pool size.
+    uint256 public constant IMPACT_DEPTH_DIVISOR = 20;
+    /// @dev Floor for pools too small to size a book from — a thin pool must not imply
+    ///      a cheap book, it is exactly the case an attacker would seek out.
+    uint256 public constant MIN_IMPACT_LIQUIDITY = 5_000e6; // 5 000 USDC
+
+    /// @notice Virtual depth used for impact, fixed at creation from LP capital.
+    uint256 public immutable impactLiquidity;
+    /// @notice Fair mid at creation — the reference the drift band is measured from.
+    uint256 public immutable seedMidYes;
+    /// @notice Inclusive bounds on fairMidYes for this market's lifetime.
+    uint256 public immutable minMidYes;
+    uint256 public immutable maxMidYes;
 
     enum Status {
         Created,
@@ -111,8 +140,42 @@ contract MicroMarket {
         lockTime = lockTime_;
         observationStart = observationStart_;
         observationEnd = observationEnd_;
-        // yesPrice_ is the fair mid; store mid + quoted prices with overround margin.
+
+        // yesPrice_ is the fair mid. Pin the drift band to it before any quote is written.
+        seedMidYes = yesPrice_;
+        uint256 cheaperSide = yesPrice_ < PRICE_SCALE - yesPrice_ ? yesPrice_ : PRICE_SCALE - yesPrice_;
+        uint256 drift = (cheaperSide * MAX_MID_DRIFT_BPS) / 10_000;
+        uint256 lo = yesPrice_ - drift;
+        uint256 hi = yesPrice_ + drift;
+        minMidYes = lo < MIN_PRICE ? MIN_PRICE : lo;
+        maxMidYes = hi > MAX_PRICE ? MAX_PRICE : hi;
+
+        impactLiquidity = _sizeBook(engine_);
+
+        // Store mid + quoted prices with overround margin.
         _setQuotedFromMid(yesPrice_);
+    }
+
+    /// @dev Read LP capital through the engine so the factory/API call signature is unchanged.
+    ///      Same staticcall-with-fallback shape as archive(). A market constructed outside the
+    ///      factory (unit tests, a mock engine) simply gets the floor depth — a wrong answer
+    ///      here must be conservative, never a deeper-than-real book.
+    function _sizeBook(address engine_) private view returns (uint256 depth) {
+        depth = MIN_IMPACT_LIQUIDITY;
+        if (engine_ == address(0) || engine_.code.length == 0) return depth;
+
+        (bool okPool, bytes memory poolData) =
+            engine_.staticcall(abi.encodeWithSignature("liquidityPool()"));
+        if (!okPool || poolData.length < 32) return depth;
+        address pool = abi.decode(poolData, (address));
+        if (pool == address(0) || pool.code.length == 0) return depth;
+
+        (bool okTvl, bytes memory tvlData) =
+            pool.staticcall(abi.encodeWithSignature("managedAssets()"));
+        if (!okTvl || tvlData.length < 32) return depth;
+
+        uint256 sized = abi.decode(tvlData, (uint256)) / IMPACT_DEPTH_DIVISOR;
+        if (sized > depth) depth = sized;
     }
 
     function setEngine(address engine_) external onlyOwner {
@@ -190,23 +253,19 @@ contract MicroMarket {
         require(outcome == OUTCOME_YES || outcome == OUTCOME_NO, "BAD_OUTCOME");
         require(riskAmount > 0, "ZERO_RISK");
 
-        uint256 depth = IMPACT_LIQUIDITY + totalYesRisk + totalNoRisk;
+        uint256 depth = impactLiquidity + totalYesRisk + totalNoRisk;
         // risk/(2*depth) of full scale — strictly proportional (no MIN_IMPACT floor).
         uint256 impact = (riskAmount * PRICE_SCALE) / (depth * 2);
         if (impact > MAX_IMPACT) impact = MAX_IMPACT;
 
         // Impact on stored fair mid — never round-trip through clamp-saturated yesPrice.
+        // _clampMid holds the drift band, so no side needs its own rail handling here.
         uint256 mid = fairMidYes;
         if (outcome == OUTCOME_YES) {
             mid = _clampMid(mid + impact);
             totalYesRisk += riskAmount;
         } else {
-            if (mid > impact + MIN_PRICE) {
-                mid = mid - impact;
-            } else {
-                mid = MIN_PRICE;
-            }
-            mid = _clampMid(mid);
+            mid = _clampMid(mid > impact ? mid - impact : 0);
             totalNoRisk += riskAmount;
         }
         _setQuotedFromMid(mid);
@@ -214,9 +273,11 @@ contract MicroMarket {
         emit PricesUpdated(yesPrice, noPrice, outcome, riskAmount, impact);
     }
 
-    function _clampMid(uint256 mid) internal pure returns (uint256) {
-        if (mid < MIN_PRICE) return MIN_PRICE;
-        if (mid > MAX_PRICE) return MAX_PRICE;
+    /// @dev The drift band is already intersected with [MIN_PRICE, MAX_PRICE] at construction,
+    ///      so clamping to it enforces both the hard rails and the no-free-EV bound.
+    function _clampMid(uint256 mid) internal view returns (uint256) {
+        if (mid < minMidYes) return minMidYes;
+        if (mid > maxMidYes) return maxMidYes;
         return mid;
     }
 
@@ -224,6 +285,7 @@ contract MicroMarket {
     ///      Quotes may be clipped only for ticket math (QuoteMath requires price < PRICE_SCALE)
     ///      and soft display floors — never fed back into fairMidYes (that was audit C).
     function _setQuotedFromMid(uint256 midYes) internal {
+        // Reads immutables (via _clampMid) — legal during construction since solc 0.8.8.
         midYes = _clampMid(midYes);
         fairMidYes = midYes;
         uint256 midNo = PRICE_SCALE - midYes;

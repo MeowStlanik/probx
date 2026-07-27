@@ -56,7 +56,12 @@ contract MicroMarketTest is MiniTest, TestHarness {
         uint256 noAfter = market.noPrice();
         assertTrue(yesAfter > yesBefore, "YES buy must raise yesPrice");
         assertTrue(noAfter < noBefore, "YES buy must lower noPrice");
-        assertEq(yesAfter + noAfter, 1_080_000, "prices must sum to overround scale");
+        // Both sides are floor-divided by 10_000 independently, so the pair can sit up to
+        // 2 units under the overround scale. It may never sit *above* it — that would hand
+        // back more than the book's margin.
+        uint256 sum = yesAfter + noAfter;
+        assertTrue(sum <= 1_080_000, "prices exceed overround scale");
+        assertTrue(sum >= 1_080_000 - 2, "prices lose more than rounding to the book");
         assertTrue(market.totalYesRisk() > 0, "yes risk tracked");
     }
 
@@ -66,9 +71,15 @@ contract MicroMarketTest is MiniTest, TestHarness {
         vm.warp(10);
         _createOpenMarket(500_000);
 
+        // Compare each quote against its own prior value. The old assertion tested the
+        // quoted price against 500_000 — a *mid*-scale number — which only held because
+        // a 1 USDC trade used to move mid by 12 points.
+        uint256 yesBefore = market.yesPrice();
+        uint256 noBefore = market.noPrice();
+
         user.buy(address(market), 2, 1e6, 10_000);
-        assertTrue(market.yesPrice() < 500_000, "NO buy lowers yesPrice");
-        assertTrue(market.noPrice() > 500_000, "NO buy raises noPrice");
+        assertTrue(market.yesPrice() < yesBefore, "NO buy must lower yesPrice");
+        assertTrue(market.noPrice() > noBefore, "NO buy must raise noPrice");
         assertTrue(market.totalNoRisk() > 0, "no risk tracked");
     }
 }

@@ -1,10 +1,10 @@
-# Vercel — вставить после redeploy (2026-07-25 11:44 UTC)
+# Vercel — вставить после redeploy (2026-07-27 14:46 UTC)
 
 **Production → Settings → Environment Variables → Save → Redeploy.**
 
-Этот деплой: **free-capital LP** (reserve 0.85 больше не блокирует 100k), market registry, seed **100000 USDC**.
+Этот деплой: **книга, устойчивая к манипуляции** (глубина от капитала пула + жёсткая полоса дрейфа mid), free-capital LP, market registry, seed **100000 USDC**.
 
-Старые адреса (`0xc91d…` / `0xE24ac…` / `0xd71e…`) **не использовать**.
+Старые адреса **не использовать** — ни до-июльские (`0xc91d…` / `0xE24ac…` / `0xd71e…`), ни деплой 25 июля (`0x1e70aD…` / `0xA3FA6F…` / `0xff5Cc3…`): в них книга уязвима.
 
 ---
 
@@ -12,10 +12,10 @@
 
 | Name | Value |
 |------|--------|
-| `NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS` | `0x1e70aD4528bb1c2C967D20A603eE4DC243713b39` |
-| `NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS` | `0xA3FA6F33c9c0216082987D303b27799fBBE91373` |
-| `NEXT_PUBLIC_MARKET_FACTORY_ADDRESS` | `0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b` |
-| `ARC_FROM_BLOCK` | `53581996` |
+| `NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS` | `0x469592aEff57eE56e910A75eA69a6538E8B59A67` |
+| `NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS` | `0xdB25f054D2D88c38FB06f74ADaD1b06e87a06De8` |
+| `NEXT_PUBLIC_MARKET_FACTORY_ADDRESS` | `0xf659eDf16E55307095a08fd29727316513acdF19` |
+| `ARC_FROM_BLOCK` | `53938140` |
 
 ### Public (проверь)
 
@@ -59,22 +59,22 @@
 
 | Contract | Address | Explorer |
 |----------|---------|----------|
-| **MicroBoostEngine** | `0x1e70aD4528bb1c2C967D20A603eE4DC243713b39` | [scan](https://testnet.arcscan.app/address/0x1e70aD4528bb1c2C967D20A603eE4DC243713b39) |
-| **LiquidityPool** | `0xA3FA6F33c9c0216082987D303b27799fBBE91373` | [scan](https://testnet.arcscan.app/address/0xA3FA6F33c9c0216082987D303b27799fBBE91373) |
-| **MarketFactory** | `0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b` | [scan](https://testnet.arcscan.app/address/0xff5Cc346a9703C0Db70b45c18CB3e821Dc63C47b) |
-| PositionTicket | `0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2` | [scan](https://testnet.arcscan.app/address/0xB3Fe3e5EFbb25Cb449933C98968820C0802024b2) |
-| OracleAdapter | `0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B` | [scan](https://testnet.arcscan.app/address/0x28A4EF91890Ca2471aEfC3BB8080362A6B3AFd0B) |
-| InsuranceFund | `0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE` | [scan](https://testnet.arcscan.app/address/0x3413beF6f2cDd98679a1a5FdC27a3F748492C8cE) |
-| FeeRouter | `0xc31129765071651E6104129AB3108A4F03add718` | [scan](https://testnet.arcscan.app/address/0xc31129765071651E6104129AB3108A4F03add718) |
-| Demo market | `0xad3599b5f3A0a88bcf61D56357ef9dADFFe03e67` | [scan](https://testnet.arcscan.app/address/0xad3599b5f3A0a88bcf61D56357ef9dADFFe03e67) |
+| **MicroBoostEngine** | `0x469592aEff57eE56e910A75eA69a6538E8B59A67` | [scan](https://testnet.arcscan.app/address/0x469592aEff57eE56e910A75eA69a6538E8B59A67) |
+| **LiquidityPool** | `0xdB25f054D2D88c38FB06f74ADaD1b06e87a06De8` | [scan](https://testnet.arcscan.app/address/0xdB25f054D2D88c38FB06f74ADaD1b06e87a06De8) |
+| **MarketFactory** | `0xf659eDf16E55307095a08fd29727316513acdF19` | [scan](https://testnet.arcscan.app/address/0xf659eDf16E55307095a08fd29727316513acdF19) |
+| PositionTicket | `0x48500Ce7Bc323814f9092c31bFE6957DCEeA152C` | [scan](https://testnet.arcscan.app/address/0x48500Ce7Bc323814f9092c31bFE6957DCEeA152C) |
+| OracleAdapter | `0x6ACfEA3A4713bC723abcFE17Ee6E31FdFB9d3F16` | [scan](https://testnet.arcscan.app/address/0x6ACfEA3A4713bC723abcFE17Ee6E31FdFB9d3F16) |
+| InsuranceFund | `0xd35766360FAC570d67cB88D0C5b94EFD0aEeb781` | [scan](https://testnet.arcscan.app/address/0xd35766360FAC570d67cB88D0C5b94EFD0aEeb781) |
+| FeeRouter | `0xc6ABDD0D4dB15f347E0690F471098694E284AC63` | [scan](https://testnet.arcscan.app/address/0xc6ABDD0D4dB15f347E0690F471098694E284AC63) |
+| Demo market | `0x6b765D51e3f3A90dd1e1e15A86d887F8ec5b0967` | [scan](https://testnet.arcscan.app/address/0x6b765D51e3f3A90dd1e1e15A86d887F8ec5b0967) |
 | USDC | `0x3600000000000000000000000000000000000000` | native testnet |
 
 | Meta | Value |
 |------|--------|
 | Deployer | `0x4604a582B66431481D5320fed67C785bdb4D7Fe0` |
 | LP seed | **100000** USDC |
-| fromBlock | **53581996** |
-| deployedAt | `2026-07-25T11:44:32.308Z` |
+| fromBlock | **53938140** |
+| deployedAt | `2026-07-27T14:46:14.564Z` |
 
 JSON: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json)
 
@@ -84,7 +84,7 @@ JSON: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json)
 
 1. `https://<your-app>.vercel.app/api/health` → `{"ok":true}`
 2. `/api/lp/stats` → TVL ≈ **100000**
-3. `/api/markets` → адреса с **нового** factory `0xff5Cc…`
+3. `/api/markets` → адреса с **нового** factory `0xf659eD…`
 4. Email login → Buy
 
 Bundled addresses also in repo:
