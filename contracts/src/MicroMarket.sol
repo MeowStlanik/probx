@@ -15,7 +15,7 @@ contract MicroMarket {
     uint256 public constant MIN_PRICE = 50_000; // 5%
     uint256 public constant MAX_PRICE = 950_000; // 95%
     /// @dev Book overround (sportsbook margin). Quoted YES+NO ≈ 108% of fair scale.
-    ///      Higher prices ⇒ worse user odds ⇒ house edge funds small Micro Boost.
+    ///      Self-funds boost up to ~1.09x; above that the vault subsidises by design.
     uint256 public constant OVERROUND_BPS = 10_800; // 108%
     /// @dev Small virtual book so 0.1 USDC demo trades move odds by ~1–2 percentage points.
     uint256 public constant IMPACT_LIQUIDITY = 2e6; // 2 USDC
