@@ -2,7 +2,7 @@
   "name": "probx-arc-micro",
   "version": "0.1.0",
   "private": true,
-  "description": "Programmable USDC settlement infrastructure on Arc — conditional escrow, parametric payouts, LP-underwritten reserves.",
+  "description": "Short-horizon prediction markets on Arc — USDC-native settlement, LP-underwritten reserves, Circle Wallets + CCTP.",
   "scripts": {
     "dev": "pnpm --parallel dev",
     "dev:web": "pnpm --filter @probx/web dev",
@@ -21,8 +21,7 @@
   },
   "keywords": [
     "settlement",
-    "conditional-escrow",
-    "parametric-insurance",
+    "prediction-markets",
     "arc",
     "usdc",
     "circle",
