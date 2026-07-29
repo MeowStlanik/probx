@@ -1,8 +1,8 @@
 <h1 align="center">ProbX Arc</h1>
 
 <p align="center">
-  <strong>Programmable USDC settlement on Arc</strong><br/>
-  Conditional escrow · parametric payouts · LP-underwritten reserves · Circle stack
+  <strong>Short-horizon prediction markets, settled in USDC on Arc</strong><br/>
+  LP-underwritten reserves · USDC gas · Circle Wallets · CCTP
 </p>
 
 <p align="center">
@@ -29,13 +29,13 @@
 
 ## What this is
 
-ProbX is **programmable USDC settlement infrastructure** on Arc: capital is reserved up
-front against a binary condition, an oracle posts the outcome, and USDC settles
+ProbX runs **short-horizon binary markets** on Arc: capital is reserved up front
+against a YES/NO condition, an oracle posts the outcome, and USDC settles
 automatically — no ETH, no multi-asset gas path.
 
-Built for **parametric insurance, SLA compensation, and conditional escrow**. Short-horizon
-BTC / London-temp markets in the live demo are a **fast technical loop** (fund → position →
-resolve → claim in ~2 minutes), not the product thesis.
+The settlement primitive is generic — any binary condition with a resolvable feed.
+BTC direction and London temperature are the two markets built today; the same
+engine takes any oracle-backed condition without contract changes.
 
 Three primitives:
 
@@ -113,7 +113,7 @@ overround. The boost curve is therefore an empirical parameter, not a constant.
 
 | Band | Funding |
 |------|---------|
-| **≤ ~1.09×** (`1 + margin`) | Covered by book overround in expectation, independent of flow quality |
+| **≤ ~1.08×** (`1 + margin`) | Covered by book overround in expectation, independent of flow quality |
 | **Above the self-funded band** | `BOOST_FEE_BPS = 400` recovers part of the cost; the remainder is a **deliberate subsidy** |
 
 That subsidy is the point, not an oversight. The self-funded ceiling scales with realized
@@ -289,7 +289,7 @@ is set; locally it stays open with a warning.
 
 Testnet deployment built for a hackathon. Honest limits:
 
-- **Settlement engine first; markets are the demo.** The on-chain product is reserve accounting + LP underwriting + USDC settlement. Minute BTC tickets show the cycle works; they are not a production betting product.
+- **Two markets, generic engine.** Reserve accounting + LP underwriting + USDC settlement work end-to-end. Only BTC direction and London temperature are wired to live feeds; longer-horizon markets need no contract changes, only feeds and resolution policy.
 - **Custodial by design (email path).** Circle Developer-Controlled wallets (or a local session EOA fallback) mean the server can sign for email users. MetaMask users hold their own keys.
 - **Oracle is centralized today.** Owner/oracle can resolve; feeds are server-side (Coinbase / Open-Meteo). No quorum, on-chain attestation, or dispute period yet — acceptable for demo, not production infrastructure claims.
 - **Demo risk parameters.** **100000 USDC** seeded vault with loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000`). Sized so a demo can exercise full boost range.
@@ -306,7 +306,7 @@ Testnet deployment built for a hackathon. Honest limits:
 | [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md) | Address bump after redeploy |
 | [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) | Live contract addresses |
 | [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md) | Minute pinger setup |
-| [`contracts/test/`](./contracts/test/) | **46** forge tests: 25 scenario + 3 registry + 6 LP + 12 accounting/fuzz — `pnpm contracts:test` |
+| [`contracts/test/`](./contracts/test/) | **50** forge tests: 25 scenario + 3 registry + 6 LP + 12 accounting/fuzz + 4 book-manipulation — `pnpm contracts:test` |
 | [`.env.example`](.env.example) | Full env template |
 | [`LICENSE`](./LICENSE) | MIT |
 
