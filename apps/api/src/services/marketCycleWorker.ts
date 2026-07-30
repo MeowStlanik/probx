@@ -10,6 +10,7 @@ import { runtimeFile } from "../runtimePaths.js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  cancelMarketOnchain,
   captureObservationSnapshots,
   createMarketOnchain,
   hideMarketOnchain,
@@ -267,16 +268,34 @@ export async function runMarketCycleOnce(): Promise<{
     }
 
     // 2) Ensure an OPEN market for BTC and weather ONLY when no active round exists.
-    //    Active = OPEN | LOCKED | OBSERVATION. Do not spawn a new market until the
-    //    previous one is fully RESOLVED (or cancelled/hidden) — prevents list jumps.
+    //    Active = OPEN | LOCKED | OBSERVATION, plus CREATED while it can still be opened
+    //    (see isActiveRoundStatus). Do not spawn a new market until the previous one is
+    //    fully RESOLVED (or cancelled/hidden) — prevents list jumps.
     const live = await listOnchainMarkets({ forCycle: true });
+
+    // 1b) Cancel rounds stuck in CREATED (create() landed, open() did not). They can no
+    //     longer be opened or resolved, so without this they block their role forever.
+    for (const market of live) {
+      if (!isReferenceRole(market.demoRole, market.category, market.question)) continue;
+      if (!isStrandedCreated(market, now)) continue;
+      try {
+        console.log(`[market-cycle] cancelling stranded CREATED ${market.id}`);
+        await cancelMarketOnchain(market.id, "never opened: open() did not land before lockTime");
+        hidden.push(String(market.id));
+      } catch (cancelError) {
+        errors.push(
+          `${market.id} cancel-stranded: ${cancelError instanceof Error ? cancelError.message : String(cancelError)}`
+        );
+      }
+    }
+
     const hasActiveBtc = live.some(
       (m) =>
-        isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+        isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status, m, now)
     );
     const hasActiveWeather = live.some(
       (m) =>
-        isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+        isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status, m, now)
     );
 
     if (!hasActiveBtc) {
@@ -286,7 +305,8 @@ export async function runMarketCycleOnce(): Promise<{
           const again = await listOnchainMarkets({ forCycle: true });
           const stillMissing = !again.some(
             (m) =>
-              isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+              isReferenceBtc(m.demoRole, m.category, m.question) &&
+              isActiveRoundStatus(m.status, m, Date.now())
           );
           if (!stillMissing) return;
           const result = await createMarketOnchain({
@@ -315,7 +335,8 @@ export async function runMarketCycleOnce(): Promise<{
           const again = await listOnchainMarkets({ forCycle: true });
           const stillMissing = !again.some(
             (m) =>
-              isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status)
+              isReferenceWeather(m.demoRole, m.category, m.question) &&
+              isActiveRoundStatus(m.status, m, Date.now())
           );
           if (!stillMissing) return;
           const result = await createMarketOnchain({
@@ -490,8 +511,31 @@ function isResolvableStatus(status: string): boolean {
 }
 
 /** Round still in flight — blocks creating a replacement market. */
-function isActiveRoundStatus(status: string): boolean {
-  return status === "OPEN" || status === "LOCKED" || status === "OBSERVATION" || status === "CREATED";
+function isActiveRoundStatus(
+  status: string,
+  market?: { lockTime?: string },
+  now: number = Date.now()
+): boolean {
+  if (status === "OPEN" || status === "LOCKED" || status === "OBSERVATION") return true;
+  // CREATED means createMarket() landed but the follow-up open() did not. That market
+  // is only a real in-flight round while open() can still succeed — MicroMarket.open()
+  // requires block.timestamp <= lockTime. Past lockTime it can never be opened and is
+  // never picked up by isResolvableStatus either, so counting it as active would block
+  // every future round forever. Treat it as dead instead.
+  if (status !== "CREATED") return false;
+  const lockTime = Date.parse(market?.lockTime || "");
+  if (!Number.isFinite(lockTime)) return false;
+  return now <= lockTime;
+}
+
+/** CREATED past its lockTime: unopenable, unresolvable — needs cancelling to leave the list. */
+function isStrandedCreated(
+  market: { status?: string; lockTime?: string },
+  now: number = Date.now()
+): boolean {
+  if (String(market.status || "").toUpperCase() !== "CREATED") return false;
+  const lockTime = Date.parse(market.lockTime || "");
+  return Number.isFinite(lockTime) && now > lockTime;
 }
 
 function isReadyToResolve(
