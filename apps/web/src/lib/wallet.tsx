@@ -144,6 +144,8 @@ type WalletContextValue = {
   error: string | null;
   mode: WalletMode | null;
   email: string | null;
+  /** Circle (embedded) wallet address, kept even when an injected wallet is connected as a bridge source. */
+  embeddedAddress: `0x${string}` | null;
   /** Embedded session token (for authenticated API calls). */
   sessionToken: string | null;
   /** MetaMask / injected */
@@ -868,6 +870,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     error,
     mode,
     email,
+    embeddedAddress: embedded?.address ?? null,
     sessionToken: embedded?.sessionToken ?? null,
     connect,
     requestEmailOtp,
