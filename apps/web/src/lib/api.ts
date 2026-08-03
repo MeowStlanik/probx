@@ -55,9 +55,20 @@ export function apiBaseUrl(): string {
   return serverOrigin();
 }
 
+/**
+ * Paths that must be served same-origin (Vercel) regardless of NEXT_PUBLIC_API_BASE_URL.
+ * The wallet/session OTP flow sends email over SMTP; Railway's datacenter blocks
+ * outbound SMTP (ports 587/465 time out), while Vercel allows it. Everything else —
+ * market reads, the cycle, CCTP — goes to the API base (Railway) as normal.
+ */
+function forceSameOrigin(path: string): boolean {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return p.startsWith("/api/wallet/session/");
+}
+
 /** Join API base + path; works with empty base (same-origin). */
 export function apiUrl(path: string): string {
-  const base = apiBaseUrl();
+  const base = forceSameOrigin(path) ? "" : apiBaseUrl();
   let p = path.startsWith("/") ? path : `/${path}`;
   // Guard against accidental double /api when base already ends with it.
   if (base.endsWith("/api") && p.startsWith("/api/")) {
