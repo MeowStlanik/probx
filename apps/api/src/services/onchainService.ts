@@ -20,7 +20,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type { LpSnapshot, Market, MarketStatus, Outcome, PriceQuote, Ticket } from "../db/schema.js";
 import { runtimeFile } from "../runtimePaths.js";
 /** Bundled with the API so Vercel serverless always has Arc addresses (fs paths often miss). */
-import bundledArcDeployment from "../config/arc-deployment.json" with { type: "json" };
+import bundledArcDeployment from "../config/arc-deployment.json";
 import { waitSuccessfulReceipt } from "./txReceipt.js";
 
 interface DemoMarketDeployment {
@@ -299,7 +299,16 @@ export type AggregateMarketStats = {
 };
 
 let aggregateStatsCache: AggregateMarketStats | null = null;
-const AGGREGATE_STATS_FRESH_MS = 30_000;
+// Aggregate stats are a headline number (total volume / tickets / resolved), not a
+// live feed: they move on the order of minutes, while the UI polls /api/markets every
+// 1–2s. At 30s this recomputed twice a minute, and every recompute is a full chunked
+// eth_getLogs sweep over ARC_RECENT_SCAN_BLOCKS — the single largest RPC cost in the
+// app. Ten minutes keeps the number honest and cuts that sweep by ~20x.
+const AGGREGATE_STATS_FRESH_MS = (() => {
+  const parsed = Number(process.env.AGGREGATE_STATS_FRESH_MS ?? "600000");
+  if (!Number.isFinite(parsed)) return 600_000;
+  return Math.max(30_000, Math.floor(parsed));
+})();
 let aggregateStatsCacheAt = 0;
 /** Coalesce concurrent refresh calls into one so a burst of home page loads doesn't stampede RPC. */
 let refreshInflight: Promise<AggregateMarketStats> | null = null;
