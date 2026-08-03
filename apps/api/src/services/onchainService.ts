@@ -20,7 +20,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type { LpSnapshot, Market, MarketStatus, Outcome, PriceQuote, Ticket } from "../db/schema.js";
 import { runtimeFile } from "../runtimePaths.js";
 /** Bundled with the API so Vercel serverless always has Arc addresses (fs paths often miss). */
-import bundledArcDeployment from "../config/arc-deployment.json";
+import bundledArcDeployment from "../config/arc-deployment.json" with { type: "json" };
 import { waitSuccessfulReceipt } from "./txReceipt.js";
 
 interface DemoMarketDeployment {
