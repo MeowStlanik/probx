@@ -105,6 +105,7 @@ function writeDemoOpMemo(memo: DemoFundOpMemo | null): void {
 export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
   const {
     address: mintTo,
+    embeddedAddress,
     refreshBalance,
     mode: sessionMode,
     email: sessionEmail,
@@ -329,14 +330,22 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         writeDemoOpMemo(demoOpRef.current);
       }
 
+      // Mint recipient must be the Circle (embedded) wallet whenever the user signed in
+      // by email — even if MetaMask is connected as the *source* of the bridged USDC.
+      // `mintTo`/`address` from useWallet gets overwritten to the injected address when a
+      // wallet is connected as a source, which previously sent funds to MetaMask by mistake.
+      const emailSession = sessionEmail && sessionToken ? { email: sessionEmail, token: sessionToken } : null;
+      const recipient = emailSession ? (embeddedAddress ?? mintTo) : mintTo;
+
       const body: Record<string, string> = {
-        mintTo,
+        mintTo: recipient,
         amountUsdc,
         idempotencyKey
       };
-      if (sessionMode === "embedded" && sessionEmail && sessionToken) {
-        body.email = sessionEmail;
-        body.sessionToken = sessionToken;
+      if (emailSession) {
+        // Circle path: session proves control of the wallet; recipient is the Circle wallet.
+        body.email = emailSession.email;
+        body.sessionToken = emailSession.token;
       } else if (sessionMode === "injected" && window.ethereum) {
         const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
           .map((b) => b.toString(16).padStart(2, "0"))
@@ -430,7 +439,7 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [amount, mintTo, refreshBalance, sessionEmail, sessionMode, sessionToken]);
+  }, [amount, mintTo, embeddedAddress, refreshBalance, sessionEmail, sessionMode, sessionToken]);
 
   const runFund = useCallback(async () => {
     if (!mintTo) {
@@ -1028,4 +1037,3 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
 
   return createPortal(modal, document.body);
 }
-
