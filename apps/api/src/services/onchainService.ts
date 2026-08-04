@@ -502,14 +502,18 @@ function rememberOnchainMarket(market: Market): void {
   };
 }
 
+export function isMarketHiddenFromUi(id: string): boolean {
+  try {
+    return hiddenMarketAddresses.has(getAddress(id).toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function visibleCachedMarkets(all: Market[]): Market[] {
   return all.filter((market) => {
     const raw = market.contractAddress || market.id;
-    try {
-      return !hiddenMarketAddresses.has(getAddress(raw).toLowerCase());
-    } catch {
-      return true;
-    }
+    return !isMarketHiddenFromUi(raw);
   });
 }
 

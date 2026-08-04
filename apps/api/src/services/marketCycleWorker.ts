@@ -14,6 +14,7 @@ import {
   captureObservationSnapshots,
   createMarketOnchain,
   hideMarketOnchain,
+  isMarketHiddenFromUi,
   listOnchainMarkets,
   onchainEnabled,
   resolveReferenceMarketOnchain,
@@ -120,6 +121,10 @@ type CycleState = {
   lastResolved?: string[];
   lastCreated?: string[];
   lastErrors?: string[];
+  lastActiveBlockers?: {
+    btc: string[];
+    weather: string[];
+  };
 };
 
 let running = false;
@@ -292,14 +297,23 @@ export async function runMarketCycleOnce(): Promise<{
       }
     }
 
-    const hasActiveBtc = live.some(
+    // Hidden rounds must never block the public replacement round. This matters after
+    // reset/migration flows: a previously hidden BTC can remain LOCKED in the shared
+    // five-minute RPC cache even though /api/markets correctly hides it. Counting that
+    // stale hidden round here leaves the desk with weather only and prevents a new BTC.
+    const visibleLive = live.filter(
+      (m) => !isMarketHiddenFromUi(String(m.contractAddress || m.id))
+    );
+    const activeBtcBlockers = visibleLive.filter(
       (m) =>
         isReferenceBtc(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status, m, now)
     );
-    const hasActiveWeather = live.some(
+    const activeWeatherBlockers = visibleLive.filter(
       (m) =>
         isReferenceWeather(m.demoRole, m.category, m.question) && isActiveRoundStatus(m.status, m, now)
     );
+    const hasActiveBtc = activeBtcBlockers.length > 0;
+    const hasActiveWeather = activeWeatherBlockers.length > 0;
 
     if (!hasActiveBtc) {
       try {
@@ -308,6 +322,7 @@ export async function runMarketCycleOnce(): Promise<{
           const again = await listOnchainMarkets({ forCycle: true });
           const stillMissing = !again.some(
             (m) =>
+              !isMarketHiddenFromUi(String(m.contractAddress || m.id)) &&
               isReferenceBtc(m.demoRole, m.category, m.question) &&
               isActiveRoundStatus(m.status, m, Date.now())
           );
@@ -338,6 +353,7 @@ export async function runMarketCycleOnce(): Promise<{
           const again = await listOnchainMarkets({ forCycle: true });
           const stillMissing = !again.some(
             (m) =>
+              !isMarketHiddenFromUi(String(m.contractAddress || m.id)) &&
               isReferenceWeather(m.demoRole, m.category, m.question) &&
               isActiveRoundStatus(m.status, m, Date.now())
           );
@@ -394,7 +410,11 @@ export async function runMarketCycleOnce(): Promise<{
       lastCreateAt: created.length ? new Date().toISOString() : readCycleState().lastCreateAt,
       lastResolved: resolved,
       lastCreated: created,
-      lastErrors: errors.slice(0, 12)
+      lastErrors: errors.slice(0, 12),
+      lastActiveBlockers: {
+        btc: activeBtcBlockers.map((m) => String(m.contractAddress || m.id)),
+        weather: activeWeatherBlockers.map((m) => String(m.contractAddress || m.id))
+      }
     });
 
     // Update aggregate stats from markets we already fetched (no duplicate RPC).

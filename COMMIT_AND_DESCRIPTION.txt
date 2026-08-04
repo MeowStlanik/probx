@@ -1,0 +1,5 @@
+Commit title:
+Deploy fullstack ProbX on Railway with Gmail API and RPC-efficient workers
+
+GitHub repository description:
+Fullstack decentralized prediction-market demo on Arc Testnet with Next.js, Circle wallets, Gmail API OTP, Railway background workers, and RPC-efficient on-chain settlement.
