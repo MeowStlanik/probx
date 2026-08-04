@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { fetchDemoReferenceData } from "@/lib/api";
-import type { Market } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import { fetchMarketObservation } from "@/lib/api";
+import type { Market, MarketObservationEvidence, MarketObservationPoint, Outcome } from "@/lib/types";
 
 type Point = { t: number; v: number };
 
@@ -11,161 +11,46 @@ type MarketLiveChartProps = {
   feed: "btc" | "weather";
 };
 
-const POLL_MS = { btc: 5_000, weather: 30_000 } as const;
+const POLL_MS = { btc: 3_000, weather: 15_000 } as const;
 
 const UP = "#1F9D6B";
 const DOWN = "#D6544A";
 const FLAT = "#5B6A7D";
 const START = "#7C5CFF";
+const WARN = "#9A6700";
 
 /**
- * Observation-window chart.
+ * Resolver-aligned observation chart.
  *
- * The price path that decides YES/NO runs during the observation window only.
- * At observation open we lock a horizontal "start" reference line. The live path
- * is drawn above or below that line, and once the window closes we show the
- * verdict: closed above = YES, closed below = NO.
+ * This component deliberately does not infer a final result from a generic market
+ * feed or from browser-local samples. It renders the durable raw ticks selected by
+ * the same resolver that writes the on-chain winner:
+ *   - start = nearest durable tick to observationStart
+ *   - end   = first durable tick at/after observationEnd
+ *
+ * Until the contract is final, any YES/NO direction is explicitly labelled
+ * "indicative". Once resolved, the badge is driven by the on-chain winningOutcome.
  */
 export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
-  const [price, setPrice] = useState<number | null>(null);
+  const [evidence, setEvidence] = useState<MarketObservationEvidence | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const histRef = useRef<Point[]>([]);
-  const loadedFullHistoryRef = useRef(false);
-  const startRef = useRef<number | null>(null);
-  const [points, setPoints] = useState<Point[]>([]);
-  const [startValue, setStartValue] = useState<number | null>(null);
+  const [domain, setDomain] = useState<{ min: number; max: number } | null>(null);
 
+  const marketAddress = market.contractAddress || market.id;
   const obsStart = Date.parse(market.observationStart || "") || 0;
   const obsEnd = Date.parse(market.observationEnd || "") || 0;
-
-  // sessionStorage key: bind chart state to this specific observation window.
-  // Same market with a different observation window = different key = clean state.
-  const cacheKey = useMemo(
-    () => `probx:chart:${market.id}:${market.observationStart || "none"}`,
-    [market.id, market.observationStart]
-  );
-
-  const saveCache = useCallback(
-    (hist: Point[], start: number | null) => {
-      if (typeof window === "undefined") return;
-      try {
-        sessionStorage.setItem(
-          cacheKey,
-          JSON.stringify({ hist: hist.slice(-200), start, savedAt: Date.now() })
-        );
-      } catch {
-        /* quota exceeded — non-fatal */
-      }
-    },
-    [cacheKey]
-  );
-
-  const phase = useMemo(() => {
-    if (!obsStart || !obsEnd) return "unknown" as const;
-    if (now < obsStart) return "before" as const;
-    if (now >= obsEnd) return "after" as const;
-    return "live" as const;
-  }, [now, obsStart, obsEnd]);
+  const chartKey = `${marketAddress.toLowerCase()}:${market.observationStart}`;
 
   const pull = useCallback(async () => {
     try {
-      const data = (await fetchDemoReferenceData({
-        lite: loadedFullHistoryRef.current
-      })) as {
-        btcUsd?: { price: number; updatedAt: string; history?: Array<{ value: number; at: number }> };
-        londonWeather?: {
-          temperatureC: number;
-          updatedAt: string;
-          history?: Array<{ value: number; at: number }>;
-        };
-      };
-
-      loadedFullHistoryRef.current = true;
-
-      let value: number | undefined;
-      let at: number;
-      let serverHist: Point[] = [];
-
-      if (feed === "btc" && data.btcUsd && Number.isFinite(data.btcUsd.price)) {
-        value = data.btcUsd.price;
-        at = Date.parse(data.btcUsd.updatedAt) || Date.now();
-        serverHist = normalize(data.btcUsd.history);
-      } else if (
-        feed === "weather" &&
-        data.londonWeather &&
-        Number.isFinite(data.londonWeather.temperatureC)
-      ) {
-        value = data.londonWeather.temperatureC;
-        at = Date.parse(data.londonWeather.updatedAt) || Date.now();
-        serverHist = normalize(data.londonWeather.history);
-      } else {
-        throw new Error("Feed unavailable");
-      }
-
-      setPrice(value);
+      const next = await fetchMarketObservation(marketAddress);
+      setEvidence(next);
       setError(null);
-
-      const start = Date.parse(market.observationStart || "") || 0;
-      const end = Date.parse(market.observationEnd || "") || 0;
-      const tNow = Date.now();
-
-      // Nothing to plot until the observation window opens (by design).
-      // Still keep the live price above so the header is not "—".
-      if (!start || tNow < start) {
-        histRef.current = [];
-        startRef.current = null;
-        setPoints([]);
-        setStartValue(null);
-        return;
-      }
-
-      const windowEnd = end && tNow > end ? end : tNow;
-
-      // Union-merge: locally accumulated ticks are the source of truth; server
-      // samples only backfill moments we don't have. (Rebuilding from server
-      // history every poll used to discard local ticks — the "2 prints" bug.)
-      const inWindow = (p: Point) => p.t >= start && p.t <= windowEnd;
-      let merged = mergeSeries(
-        histRef.current.filter(inWindow),
-        serverHist.filter(inWindow)
-      );
-
-      // Append a live tick every poll using client time (clamped to window).
-      // The feed's updatedAt can be cached/stale, which froze the path before.
-      const tick: Point = { t: Math.min(tNow, windowEnd), v: value };
-      if (tick.t >= start) {
-        merged = append(merged, tick, feed === "weather" ? 1_500 : 700);
-      }
-      void at;
-
-      // Anchor the first plotted point exactly at observation open so the path
-      // visibly "starts" on the start line.
-      if (merged.length === 1) {
-        merged = [{ t: start, v: merged[0]!.v }, merged[0]!];
-      } else if (merged.length === 0) {
-        merged = [
-          { t: start, v: value },
-          { t: Math.max(start + 1, tick.t), v: value }
-        ];
-      } else if (merged[0]!.t > start + 2_000) {
-        merged = [{ t: start, v: merged[0]!.v }, ...merged];
-      }
-
-      // Lock the start reference once, at the value of the first sample in the window.
-      if (startRef.current == null) {
-        startRef.current = merged[0]!.v;
-        setStartValue(startRef.current);
-      }
-
-      histRef.current = merged;
-      setPoints(merged);
-      // Persist state so navigating away and back preserves the chart.
-      saveCache(merged, startRef.current);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Feed error");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Observation evidence unavailable");
     }
-  }, [feed, market.observationStart, market.observationEnd, saveCache]);
+  }, [marketAddress]);
 
   useEffect(() => {
     void pull();
@@ -179,81 +64,90 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
     };
   }, [feed, pull]);
 
-  // Reset the series when the market or observation window changes.
-  // Restore from sessionStorage first so re-entering the same market during the
-  // same observation window preserves history + start line.
+  // A different round gets a clean, stable vertical domain.
   useEffect(() => {
-    let restored = false;
-    if (typeof window !== "undefined") {
-      try {
-        const raw = sessionStorage.getItem(cacheKey);
-        if (raw) {
-          const cached = JSON.parse(raw) as { hist?: Point[]; start?: number | null };
-          const hist = Array.isArray(cached.hist)
-            ? cached.hist.filter((p) => Number.isFinite(p?.t) && Number.isFinite(p?.v))
-            : [];
-          const start =
-            typeof cached.start === "number" && Number.isFinite(cached.start) ? cached.start : null;
-          if (hist.length > 0 || start != null) {
-            histRef.current = hist;
-            startRef.current = start;
-            setPoints(hist);
-            setStartValue(start);
-            restored = true;
-          }
-        }
-      } catch {
-        /* ignore cache read errors */
-      }
-    }
-    if (!restored) {
-      histRef.current = [];
-      startRef.current = null;
-      setPoints([]);
-      setStartValue(null);
-    }
-  }, [cacheKey]);
+    setEvidence(null);
+    setDomain(null);
+    setError(null);
+  }, [chartKey]);
 
-  const isBtc = feed === "btc";
-  const fmt = isBtc ? fmtUsd : fmtTemp;
+  const phase = useMemo(() => {
+    if (!obsStart || !obsEnd) return "unknown" as const;
+    if (now < obsStart) return "before" as const;
+    if (now < obsEnd) return "live" as const;
+    return "after" as const;
+  }, [now, obsStart, obsEnd]);
 
-  const chart = useMemo(() => {
-    // Extend the path horizontally to "now" so it visibly crawls right every
-    // second, even between feed ticks.
-    let render = points;
-    if (points.length) {
-      const last = points[points.length - 1]!;
-      const drawUntil = Math.min(now, obsEnd || now);
-      if (drawUntil - last.t > 700) {
-        render = [...points, { t: drawUntil, v: last.v }];
-      }
-    }
-    return buildChart(render, startValue ?? undefined, obsStart, obsEnd || now);
-  }, [points, startValue, obsStart, obsEnd, now]);
+  const start = evidence?.start;
+  const end = evidence?.end;
+  const startValue = start?.value;
 
-  const lastValue = points.length ? points[points.length - 1]!.v : price;
-  const delta = startValue != null && lastValue != null ? lastValue - startValue : null;
-  const dir: "above" | "below" | "flat" | null =
-    delta == null ? null : delta > 0 ? "above" : delta < 0 ? "below" : "flat";
+  const points = useMemo(
+    () => buildResolverSeries(evidence?.points ?? [], start, end, obsStart, obsEnd, phase),
+    [evidence?.points, start, end, obsStart, obsEnd, phase]
+  );
 
+  const valueRange = useMemo(() => {
+    const values = points.map((point) => point.v);
+    if (Number.isFinite(startValue)) values.push(Number(startValue));
+    if (!values.length) return null;
+    return { min: Math.min(...values), max: Math.max(...values) };
+  }, [points, startValue]);
+
+  // Expand the Y domain when a new extreme arrives, but never shrink it during the
+  // same round. The previous implementation recalculated min/max every poll, which
+  // made a nearly flat BTC line jump vertically even when the price barely moved.
+  useEffect(() => {
+    if (!valueRange) return;
+    const rawSpan = valueRange.max - valueRange.min;
+    const center = (valueRange.max + valueRange.min) / 2;
+    const minPad = feed === "btc" ? Math.max(Math.abs(center) * 0.00015, 2) : 0.08;
+    const pad = Math.max(rawSpan * 0.18, minPad);
+    const next = { min: valueRange.min - pad, max: valueRange.max + pad };
+    setDomain((previous) =>
+      previous
+        ? { min: Math.min(previous.min, next.min), max: Math.max(previous.max, next.max) }
+        : next
+    );
+  }, [feed, valueRange]);
+
+  const chart = useMemo(
+    () => buildChart(points, startValue, obsStart, obsEnd || now, domain),
+    [points, startValue, obsStart, obsEnd, now, domain]
+  );
+
+  const latest = points.at(-1)?.v;
+  const indicativeOutcome: Outcome | undefined =
+    startValue != null && latest != null ? (latest > startValue ? "YES" : "NO") : evidence?.indicativeOutcome;
+  const finalOutcome = evidence?.finalOutcome ?? market.winningOutcome;
+  const isFinal =
+    evidence?.frozen ||
+    evidence?.status === "RESOLVED" ||
+    evidence?.status === "ARCHIVED" ||
+    market.status === "RESOLVED" ||
+    market.status === "ARCHIVED";
+
+  const computedFinal =
+    startValue != null && end?.value != null ? (end.value > startValue ? "YES" : "NO") : undefined;
+  const integrityError =
+    evidence?.integrityError ||
+    (isFinal && finalOutcome && computedFinal && finalOutcome !== computedFinal
+      ? `On-chain winner ${finalOutcome} does not match frozen start/end evidence ${computedFinal}`
+      : undefined);
+
+  const displayValue = phase === "after" && end ? end.value : latest ?? startValue;
+  const delta = startValue != null && displayValue != null ? displayValue - startValue : null;
   const secToObs = Math.max(0, Math.ceil((obsStart - now) / 1000));
   const secLeft = Math.max(0, Math.ceil((obsEnd - now) / 1000));
-
-  const verdict =
-    phase === "after" && dir
-      ? dir === "above"
-        ? "YES"
-        : dir === "below"
-          ? "NO"
-          : "TIE"
-      : null;
+  const isBtc = feed === "btc";
+  const fmt = isBtc ? fmtUsd : fmtTemp;
 
   return (
     <div style={{ width: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
         <div>
           <div style={{ fontSize: 12, color: FLAT, fontWeight: 600, letterSpacing: "0.02em", textTransform: "uppercase" }}>
-            {isBtc ? "BTC/USD · Coinbase" : "London temp · Open-Meteo"} · observation window
+            {isBtc ? "BTC/USD · Coinbase" : "London temp · Open-Meteo"} · resolver evidence
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginTop: 4 }}>
             <span
@@ -264,37 +158,59 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
                 color: "#0B1622"
               }}
             >
-              {lastValue != null ? fmt(lastValue) : "—"}
+              {displayValue != null ? fmt(displayValue) : "—"}
             </span>
-            {delta != null && dir && dir !== "flat" ? (
+            {delta != null && delta !== 0 ? (
               <span
                 style={{
                   fontFamily: "'IBM Plex Mono', monospace",
                   fontSize: 14,
                   fontWeight: 600,
-                  color: dir === "above" ? UP : DOWN
+                  color: delta > 0 ? UP : DOWN
                 }}
               >
                 {delta > 0 ? "▲" : "▼"} {fmtDelta(delta, isBtc)}
               </span>
             ) : null}
           </div>
-          <div style={{ marginTop: 6, fontSize: 12.5, color: FLAT, lineHeight: 1.4 }}>
-            {isBtc
-              ? "YES if BTC closes higher than the start line"
-              : "YES if London temp closes higher than the start line"}
-            {startValue != null ? (
+          <div style={{ marginTop: 6, fontSize: 12.5, color: FLAT, lineHeight: 1.5 }}>
+            YES only if the resolver&apos;s end print is strictly above its start print.
+            {start ? (
               <>
                 {" "}
-                <strong style={{ color: START }}>· start {fmt(startValue)}</strong>
+                <strong style={{ color: START }}>· start {fmt(start.value)}</strong>
               </>
             ) : phase === "before" ? (
-              <span> · start locks when observation begins</span>
+              <span> · start print not selected yet</span>
             ) : null}
           </div>
         </div>
-        <PhaseBadge phase={phase} secToObs={secToObs} secLeft={secLeft} verdict={verdict} />
+        <PhaseBadge
+          phase={phase}
+          secToObs={secToObs}
+          secLeft={secLeft}
+          indicativeOutcome={indicativeOutcome}
+          finalOutcome={isFinal ? finalOutcome : undefined}
+          frozen={Boolean(evidence?.frozen)}
+        />
       </div>
+
+      {integrityError ? (
+        <div
+          style={{
+            marginTop: 12,
+            border: "1px solid #E9AAA3",
+            background: "#FFF0EE",
+            color: "#9F2D24",
+            borderRadius: 9,
+            padding: "10px 12px",
+            fontSize: 12.5,
+            fontWeight: 600
+          }}
+        >
+          Oracle integrity warning: {integrityError}
+        </div>
+      ) : null}
 
       <div
         style={{
@@ -311,11 +227,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
         {phase === "before" ? (
           <WaitingPanel
             title="Chart starts at observation"
-            body={
-              isBtc
-                ? `Locks a start line and tracks BTC above or below it — begins in ${fmtClock(secToObs)}.`
-                : `Locks a start line and tracks London temp above or below it — begins in ${fmtClock(secToObs)}.`
-            }
+            body={`The resolver will select the durable start print in ${fmtClock(secToObs)}.`}
           />
         ) : chart ? (
           <svg
@@ -324,17 +236,17 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             viewBox={`0 0 ${chart.W} ${chart.H}`}
             preserveAspectRatio="none"
             role="img"
-            aria-label={isBtc ? "Observation window BTC chart" : "Observation window London temperature chart"}
+            aria-label={isBtc ? "Resolver-aligned BTC observation chart" : "Resolver-aligned weather observation chart"}
             style={{ display: "block" }}
           >
             <defs>
               <linearGradient id={`fillAbove-${feed}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={UP} stopOpacity="0.22" />
+                <stop offset="0%" stopColor={UP} stopOpacity="0.20" />
                 <stop offset="100%" stopColor={UP} stopOpacity="0.02" />
               </linearGradient>
               <linearGradient id={`fillBelow-${feed}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={DOWN} stopOpacity="0.02" />
-                <stop offset="100%" stopColor={DOWN} stopOpacity="0.22" />
+                <stop offset="100%" stopColor={DOWN} stopOpacity="0.20" />
               </linearGradient>
               {chart.startY != null ? (
                 <>
@@ -348,19 +260,18 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
               ) : null}
             </defs>
 
-            {[0.25, 0.5, 0.75].map((p) => (
+            {[0.25, 0.5, 0.75].map((portion) => (
               <line
-                key={p}
+                key={portion}
                 x1={chart.padL}
                 x2={chart.W - chart.padR}
-                y1={chart.padT + p * chart.innerH}
-                y2={chart.padT + p * chart.innerH}
+                y1={chart.padT + portion * chart.innerH}
+                y2={chart.padT + portion * chart.innerH}
                 stroke="#E4E9F0"
                 strokeWidth={1}
               />
             ))}
 
-            {/* Area, split at the start line so the fill shows which side the path is on. */}
             {chart.startY != null ? (
               <>
                 <path d={chart.area} fill={`url(#fillAbove-${feed})`} clipPath={`url(#clipAbove-${feed})`} />
@@ -370,7 +281,6 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
               <path d={chart.area} fill={`url(#fillAbove-${feed})`} />
             )}
 
-            {/* Start reference line — locked at observation open. */}
             {chart.startY != null ? (
               <line
                 x1={chart.padL}
@@ -383,7 +293,20 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
               />
             ) : null}
 
-            {/* Live path, colored by whether it is currently above or below start. */}
+            {/* Moving time cursor is separate from the price path, so the path does not
+                stretch and re-render every second between real provider prints. */}
+            {phase === "live" ? (
+              <line
+                x1={chart.nowX}
+                x2={chart.nowX}
+                y1={chart.padT}
+                y2={chart.H - chart.padB}
+                stroke="#9BA8B7"
+                strokeWidth={1}
+                strokeDasharray="3 4"
+              />
+            ) : null}
+
             <path
               d={chart.line}
               fill="none"
@@ -395,44 +318,25 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             />
 
             {chart.last ? (
-              <circle
-                cx={chart.last.x}
-                cy={chart.last.y}
-                r={4.5}
-                fill={chart.lineColor}
-                stroke="#fff"
-                strokeWidth={2}
-              />
+              <circle cx={chart.last.x} cy={chart.last.y} r={4.5} fill={chart.lineColor} stroke="#fff" strokeWidth={2} />
             ) : null}
           </svg>
         ) : (
           <WaitingPanel
-            title={
-              error
-                ? `Feed: ${error}`
-                : phase === "live"
-                  ? "Waiting for first observation print…"
-                  : phase === "after"
-                    ? "No samples recorded in this window"
-                    : "Chart starts at observation"
-            }
+            title={error ? `Evidence: ${error}` : "Waiting for durable oracle print…"}
             body={
               error
-                ? "Live feed could not load. Leave NEXT_PUBLIC_API_BASE_URL empty on Railway, redeploy, and hard-refresh."
-                : phase === "live"
-                  ? "Recording BTC / temp samples during the observation window only."
-                  : phase === "after"
-                    ? "This round closed before any feed tick landed in the window."
-                    : "Path is drawn only during observation — not while betting is still open."
+                ? "The chart will retry automatically. Final Portfolio results still come directly from the contract."
+                : "No resolver tick has landed inside this observation window yet."
             }
           />
         )}
 
-        {chart && phase !== "before" ? (
+        {chart ? (
           <>
             <span style={yLabelStyle(8)}>{fmt(chart.max)}</span>
             <span style={yLabelStyle(undefined, 8)}>{fmt(chart.min)}</span>
-            {startValue != null && chart.startY != null ? (
+            {start && chart.startY != null ? (
               <span
                 style={{
                   position: "absolute",
@@ -441,38 +345,35 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
                   fontSize: 10.5,
                   fontWeight: 600,
                   color: START,
-                  background: "rgba(255,255,255,.92)",
+                  background: "rgba(255,255,255,.94)",
                   border: "1px solid #E0D8FF",
                   borderRadius: 6,
                   padding: "2px 6px",
                   fontFamily: "'IBM Plex Mono', monospace"
                 }}
               >
-                start {fmt(startValue)}
+                start {fmt(start.value)}
               </span>
             ) : null}
 
-            {verdict ? (
+            {isFinal && finalOutcome ? (
               <div
                 style={{
                   position: "absolute",
                   left: "50%",
                   top: 12,
                   transform: "translateX(-50%)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
                   padding: "6px 12px",
                   borderRadius: 999,
                   fontSize: 12.5,
                   fontWeight: 700,
                   fontFamily: "'IBM Plex Mono', monospace",
                   color: "#fff",
-                  background: verdict === "YES" ? UP : verdict === "NO" ? DOWN : FLAT,
+                  background: finalOutcome === "YES" ? UP : DOWN,
                   boxShadow: "0 4px 12px rgba(11,22,34,.14)"
                 }}
               >
-                {verdict === "TIE" ? "CLOSED FLAT" : `CLOSED ${dir?.toUpperCase()} → ${verdict}`}
+                ON-CHAIN WINNER · {finalOutcome}
               </div>
             ) : null}
           </>
@@ -491,47 +392,107 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
         }}
       >
         <span>
-          {phase === "before"
-            ? "No observation samples yet"
-            : phase === "live"
-              ? `${points.length} prints · live`
-              : `${points.length} prints · window closed`}
+          {evidence?.frozen
+            ? `${points.length} durable prints · evidence frozen`
+            : phase === "after"
+              ? `${points.length} durable prints · awaiting final on-chain confirmation`
+              : `${points.length} durable prints · indicative only`}
         </span>
         <span style={{ fontFamily: "'IBM Plex Mono', monospace" }}>
-          {obsStart
-            ? `${new Date(obsStart).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} → ${
-                obsEnd
-                  ? new Date(obsEnd).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-                  : "…"
-              }`
-            : "—"}
+          {start ? `start ${formatTickTime(start.at)}` : "start —"}
+          {end ? ` · end ${formatTickTime(end.at)}` : " · end —"}
         </span>
       </div>
+
+      {start || end ? (
+        <div style={{ marginTop: 7, fontSize: 11.5, color: FLAT, lineHeight: 1.45 }}>
+          Resolver inputs: {start ? `${fmt(start.value)} @ ${formatTickTime(start.at)}` : "start pending"}
+          {" → "}
+          {end ? `${fmt(end.value)} @ ${formatTickTime(end.at)}` : "end pending"}
+          {evidence?.resolutionTxHash ? (
+            <>
+              {" · "}
+              <a
+                href={`https://testnet.arcscan.app/tx/${evidence.resolutionTxHash}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: "#2775CA", textDecoration: "none" }}
+              >
+                resolve tx ↗
+              </a>
+            </>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function buildResolverSeries(
+  raw: MarketObservationPoint[],
+  start: MarketObservationPoint | undefined,
+  end: MarketObservationPoint | undefined,
+  obsStart: number,
+  obsEnd: number,
+  phase: "before" | "live" | "after" | "unknown"
+): Point[] {
+  if (!obsStart || !obsEnd || !start) return [];
+  const points = raw
+    .filter((point) => Number.isFinite(point.value) && Number.isFinite(point.at))
+    .filter((point) => point.at >= obsStart && point.at <= obsEnd)
+    .map((point) => ({ t: point.at, v: point.value }));
+
+  // Always anchor the drawn start line at observationStart, while the footer shows
+  // the provider's real selected timestamp.
+  const anchored: Point[] = [{ t: obsStart, v: start.value }, ...points];
+  if (phase === "after" && end) anchored.push({ t: obsEnd, v: end.value });
+
+  const dedup = new Map<number, Point>();
+  for (const point of anchored) {
+    const bucket = Math.round(point.t / 250);
+    dedup.set(bucket, point);
+  }
+  const sorted = [...dedup.values()].sort((a, b) => a.t - b.t);
+  if (sorted.length === 1) {
+    sorted.push({ t: Math.min(obsEnd, obsStart + 1), v: sorted[0]!.v });
+  }
+  return sorted;
 }
 
 function PhaseBadge({
   phase,
   secToObs,
   secLeft,
-  verdict
+  indicativeOutcome,
+  finalOutcome,
+  frozen
 }: {
   phase: "before" | "live" | "after" | "unknown";
   secToObs: number;
   secLeft: number;
-  verdict: string | null;
+  indicativeOutcome?: Outcome;
+  finalOutcome?: Outcome;
+  frozen: boolean;
 }) {
+  if (finalOutcome) {
+    return (
+      <span style={badgeStyle(finalOutcome === "YES" ? "#E7F5EF" : "#FBEAE8", finalOutcome === "YES" ? UP : DOWN)}>
+        Final · {finalOutcome}{frozen ? " · frozen" : ""}
+      </span>
+    );
+  }
   if (phase === "before") {
     return <span style={badgeStyle("#EAF2FB", "#2775CA")}>Observation in {fmtClock(secToObs)}</span>;
   }
   if (phase === "live") {
-    return <span style={badgeStyle("#E7F5EF", UP)}>Observing · {fmtClock(secLeft)} left</span>;
+    return (
+      <span style={badgeStyle("#FFF8E8", WARN)}>
+        Indicative {indicativeOutcome ?? "—"} · {fmtClock(secLeft)} left
+      </span>
+    );
   }
   if (phase === "after") {
-    if (verdict === "YES") return <span style={badgeStyle("#E7F5EF", UP)}>Closed above · YES</span>;
-    if (verdict === "NO") return <span style={badgeStyle("#FBEAE8", DOWN)}>Closed below · NO</span>;
-    return <span style={badgeStyle("#F6F8FA", FLAT)}>Observation ended</span>;
+    return <span style={badgeStyle("#FFF8E8", WARN)}>Awaiting oracle + on-chain confirmation</span>;
   }
   return null;
 }
@@ -551,7 +512,7 @@ function WaitingPanel({ title, body }: { title: string; body: string }) {
       }}
     >
       <div style={{ fontSize: 14, fontWeight: 600, color: "#0B1622" }}>{title}</div>
-      <div style={{ fontSize: 13, color: FLAT, maxWidth: 360, lineHeight: 1.45 }}>{body}</div>
+      <div style={{ fontSize: 13, color: FLAT, maxWidth: 400, lineHeight: 1.45 }}>{body}</div>
     </div>
   );
 }
@@ -581,8 +542,14 @@ function yLabelStyle(top?: number, bottom?: number): CSSProperties {
   };
 }
 
-function buildChart(points: Point[], startValue: number | undefined, t0: number, t1: number) {
-  if (points.length < 2 || !t0) return null;
+function buildChart(
+  points: Point[],
+  startValue: number | undefined,
+  t0: number,
+  t1: number,
+  domain: { min: number; max: number } | null
+) {
+  if (points.length < 2 || !t0 || !domain) return null;
   const W = 640;
   const H = 220;
   const padL = 8;
@@ -591,78 +558,57 @@ function buildChart(points: Point[], startValue: number | undefined, t0: number,
   const padB = 16;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
-
-  const vals = points.map((p) => p.v);
-  if (startValue != null && Number.isFinite(startValue)) vals.push(startValue);
-  let min = Math.min(...vals);
-  let max = Math.max(...vals);
-  const span = max - min;
-  const pad = span < 1e-9 ? Math.max(Math.abs(max) * 0.002, max > 50 ? 8 : 0.3) : Math.max(span * 0.14, 0.01);
-  min -= pad;
-  max += pad;
+  const min = domain.min;
+  const max = domain.max;
   const range = max - min || 1;
   const tSpan = Math.max(t1 - t0, 1);
 
-  const coords = points.map((p) => ({
-    x: padL + ((p.t - t0) / tSpan) * innerW,
-    y: padT + (1 - (p.v - min) / range) * innerH
+  const coords = points.map((point) => ({
+    x: padL + clamp01((point.t - t0) / tSpan) * innerW,
+    y: padT + (1 - (point.v - min) / range) * innerH
   }));
-
-  const lastPt = points[points.length - 1]!;
-  const base = startValue ?? points[0]!.v;
-  const up = lastPt.v >= base;
-  const lineColor = up ? UP : DOWN;
-
-  const line = coords.map((c, i) => `${i === 0 ? "M" : "L"}${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(" ");
+  const line = linearPath(coords);
   const last = coords[coords.length - 1]!;
-  const area = `${line} L${last.x.toFixed(1)} ${(H - padB).toFixed(1)} L${coords[0]!.x.toFixed(1)} ${(H - padB).toFixed(1)} Z`;
+  const first = coords[0]!;
+  const area = `${line} L${last.x.toFixed(1)} ${(H - padB).toFixed(1)} L${first.x.toFixed(1)} ${(H - padB).toFixed(1)} Z`;
+  const latestValue = points.at(-1)!.v;
+  const base = startValue ?? points[0]!.v;
+  const lineColor = latestValue >= base ? UP : DOWN;
+  const startY =
+    startValue != null && Number.isFinite(startValue)
+      ? padT + (1 - (startValue - min) / range) * innerH
+      : null;
+  const nowX = padL + clamp01((Date.now() - t0) / tSpan) * innerW;
 
-  let startY: number | null = null;
-  if (startValue != null && Number.isFinite(startValue)) {
-    startY = padT + (1 - (startValue - min) / range) * innerH;
-  }
-
-  return { W, H, padL, padR, padT, padB, innerW, innerH, line, area, last, min, max, startY, lineColor };
+  return { W, H, padL, padR, padT, padB, innerW, innerH, line, area, last, min, max, startY, lineColor, nowX };
 }
 
-function normalize(raw?: Array<{ value: number; at: number }>): Point[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((p) => Number.isFinite(p?.value) && Number.isFinite(p?.at))
-    .map((p) => ({ t: p.at, v: p.value }))
-    .sort((a, b) => a.t - b.t);
+/** Straight segments preserve the exact side of the start line between oracle
+ * prints. Stable Y bounds and a separate time cursor remove the old visual jitter
+ * without inventing curved values the provider never published. */
+function linearPath(points: Array<{ x: number; y: number }>): string {
+  return points
+    .map((point, index) =>
+      `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`
+    )
+    .join(" ");
 }
 
-/** Union two series; primary (local) wins on near-duplicate timestamps. */
-function mergeSeries(primary: Point[], backfill: Point[]): Point[] {
-  const out = new Map<number, Point>();
-  const bucket = (t: number) => Math.round(t / 500);
-  for (const p of backfill) out.set(bucket(p.t), p);
-  for (const p of primary) out.set(bucket(p.t), p);
-  return [...out.values()].sort((a, b) => a.t - b.t);
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
 }
 
-function append(hist: Point[], tick: Point, minGap: number): Point[] {
-  if (!hist.length) return [tick];
-  const last = hist[hist.length - 1]!;
-  if (tick.t < last.t - 2_000) return hist;
-  if (tick.t - last.t < minGap) {
-    return [...hist.slice(0, -1), { t: Math.max(last.t, tick.t), v: tick.v }];
-  }
-  return [...hist, tick];
-}
-
-function fmtUsd(v: number) {
+function fmtUsd(value: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
-  }).format(v);
+  }).format(value);
 }
 
-function fmtTemp(v: number) {
-  return `${v.toFixed(2)}°C`;
+function fmtTemp(value: number) {
+  return `${value.toFixed(2)}°C`;
 }
 
 function fmtDelta(delta: number, isBtc: boolean) {
@@ -673,9 +619,13 @@ function fmtDelta(delta: number, isBtc: boolean) {
     : `${sign}${abs.toFixed(2)}°C`;
 }
 
-function fmtClock(sec: number) {
-  const s = Math.max(0, Math.floor(sec));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
+function fmtClock(seconds: number) {
+  const safe = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function formatTickTime(at: number) {
+  return new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }

@@ -28,6 +28,38 @@ export interface Market {
   demoRole?: "open" | "btc_price" | "london_weather" | "near_lock" | "resolved" | "legacy";
 }
 
+
+export interface MarketObservationPoint {
+  value: number;
+  at: number;
+  provider?: string;
+  sourceId?: string;
+  sourceHash?: string;
+}
+
+export interface MarketObservationEvidence {
+  marketId: string;
+  marketAddress: string;
+  role: "btc" | "weather";
+  observationStart: string;
+  observationEnd: string;
+  status: MarketStatus;
+  /** Raw durable oracle prints for this exact round, sorted by provider time. */
+  points: MarketObservationPoint[];
+  /** The exact start print selected by the resolver (nearest to observationStart). */
+  start?: MarketObservationPoint;
+  /** The exact end print selected by the resolver (first print at/after observationEnd). */
+  end?: MarketObservationPoint;
+  /** Preview from start to latest durable print; never presented as final. */
+  indicativeOutcome?: Outcome;
+  /** On-chain winner. Present only after the market is final. */
+  finalOutcome?: Outcome;
+  frozen: boolean;
+  resolutionTxHash?: string;
+  integrityError?: string;
+  updatedAt: string;
+}
+
 export interface Ticket {
   id: string;
   owner: string;
@@ -54,6 +86,14 @@ export interface Ticket {
   openReferenceLabel?: string;
   openThreshold?: number;
   openReferenceSource?: string;
+  /** Frozen oracle evidence used for the final on-chain winner. */
+  resolutionStartValue?: number;
+  resolutionEndValue?: number;
+  resolutionStartAt?: number;
+  resolutionEndAt?: number;
+  resolutionSource?: string;
+  resolutionTxHash?: string;
+  resolutionFrozen?: boolean;
 }
 
 export interface OracleEvent {

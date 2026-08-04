@@ -1,4 +1,4 @@
-import type { LpStats, Market, Ticket } from "./types";
+import type { LpStats, Market, MarketObservationEvidence, Ticket } from "./types";
 import { emptyLpStats } from "./sampleData";
 
 /**
@@ -102,6 +102,20 @@ export async function fetchMarket(id: string): Promise<Market | undefined> {
   } catch {
     return undefined;
   }
+}
+
+export async function fetchMarketObservation(id: string): Promise<MarketObservationEvidence> {
+  if (!isOnchainMarketId(id)) throw new Error("Invalid on-chain market id");
+  const response = await fetch(
+    apiUrl(`/api/markets/${encodeURIComponent(id)}/observation`),
+    { cache: "no-store" }
+  );
+  if (!response.ok) throw new Error(`Observation endpoint returned HTTP ${response.status}`);
+  const body = (await response.json()) as MarketObservationEvidence;
+  if (!body || !Array.isArray(body.points)) {
+    throw new Error("Observation endpoint returned an invalid payload");
+  }
+  return body;
 }
 
 export async function fetchTickets(): Promise<Ticket[]> {

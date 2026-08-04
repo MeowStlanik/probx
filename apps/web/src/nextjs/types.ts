@@ -71,6 +71,10 @@ export interface Position {
   canClaim: boolean;
   claimAction?: "Claim payout" | "Claim refund";
   txHref?: string;
+  winner?: Side;
+  resultDetail?: string;
+  roundLabel?: string;
+  resolutionTxHref?: string;
 }
 
 export interface CctpStep {

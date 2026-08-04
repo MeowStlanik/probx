@@ -5,6 +5,7 @@ import { refreshMarket } from "../services/marketScheduler.js";
 import {
   createMarketOnchain,
   getDemoReferenceData,
+  getMarketObservationEvidence,
   getOnchainMarket,
   hideMarketOnchain,
   listOnchainMarkets,
@@ -60,6 +61,11 @@ export async function listMarkets(): Promise<Market[]> {
     }
     return db.markets.map(refreshMarket);
   }
+}
+
+export async function getMarketObservation(id: string) {
+  if (!onchainEnabled()) return undefined;
+  return getMarketObservationEvidence(id);
 }
 
 export async function getMarket(id: string): Promise<Market | undefined> {

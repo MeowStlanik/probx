@@ -12,6 +12,7 @@ import {
   demoReferenceData,
   ensureTourBtcMarket,
   getMarket,
+  getMarketObservation,
   getMarketQuote,
   hideDemoMarket,
   listMarkets,
@@ -144,6 +145,14 @@ export async function dispatchApiRequest(input: {
       if (resolved) {
         return { status: resolved.status, body: resolved.body };
       }
+    }
+
+    const observationMatch = path.match(/^\/api\/markets\/([^/]+)\/observation$/);
+    if (method === "GET" && observationMatch) {
+      const evidence = await getMarketObservation(observationMatch[1]);
+      return evidence
+        ? { status: 200, body: evidence }
+        : { status: 404, body: { error: "observation evidence not found" } };
     }
 
     const marketMatch = path.match(/^\/api\/markets\/([^/]+)$/);

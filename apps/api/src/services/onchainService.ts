@@ -17,7 +17,16 @@ import {
   stringToHex
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import type { LpSnapshot, Market, MarketStatus, Outcome, PriceQuote, Ticket } from "../db/schema.js";
+import type {
+  LpSnapshot,
+  Market,
+  MarketObservationEvidence,
+  MarketObservationPoint,
+  MarketStatus,
+  Outcome,
+  PriceQuote,
+  Ticket
+} from "../db/schema.js";
 import { runtimeFile } from "../runtimePaths.js";
 /** Bundled with the API so deployment paths cannot hide the Arc addresses. */
 import bundledArcDeployment from "../config/arc-deployment.json" with { type: "json" };
@@ -780,6 +789,171 @@ export async function getOnchainMarket(
   return market;
 }
 
+
+/**
+ * Durable, market-scoped oracle evidence for the chart and Portfolio.
+ *
+ * The old chart fetched a generic Coinbase/Open-Meteo history and then invented its
+ * own start line from the first browser sample. The resolver, however, selects the
+ * nearest durable raw tick at observationStart and the first durable tick at/after
+ * observationEnd. Those two paths could legitimately disagree, making the UI say
+ * YES while the contract resolved NO. This endpoint exposes the exact resolver
+ * inputs for this round and never labels a browser-side preview as final.
+ */
+export async function getMarketObservationEvidence(
+  id: string
+): Promise<MarketObservationEvidence | undefined> {
+  assertDeployment();
+
+  const key = String(id || "").trim().toLowerCase();
+  let market = onchainMarketListCache?.all.find((item) => {
+    const address = String(item.contractAddress || item.id).trim().toLowerCase();
+    return item.id.toLowerCase() === key || address === key;
+  });
+  if (!market) {
+    market = await getOnchainMarket(id, { includeTradeStats: false });
+  }
+  if (!market) return undefined;
+
+  const question = (market.question || "").toLowerCase();
+  const role: "btc" | "weather" | undefined =
+    market.demoRole === "btc_price" ||
+    market.category === "crypto-candle" ||
+    /\bbtc\b/.test(question) ||
+    question.includes("bitcoin")
+      ? "btc"
+      : market.demoRole === "london_weather" ||
+          market.category === "weather" ||
+          question.includes("london") ||
+          question.includes("temp") ||
+          question.includes("weather")
+        ? "weather"
+        : undefined;
+  if (!role) return undefined;
+
+  const marketAddress = getAddress(market.contractAddress || market.id);
+  const observationStartMs = Date.parse(market.observationStart || "") || 0;
+  const observationEndMs = Date.parse(market.observationEnd || "") || 0;
+  if (!observationStartMs || !observationEndMs) return undefined;
+
+  const [rawModule, snapshotModule] = await Promise.all([
+    import("./rawTicks.js"),
+    import("./observationSnapshots.js")
+  ]);
+  const [ticks, snapshot] = await Promise.all([
+    rawModule.getRawTicks(role),
+    snapshotModule.getObservationSnapshot(marketAddress)
+  ]);
+  const maxDistanceMs = snapshotModule.snapshotMaxDistanceMs(role);
+
+  const startFromTicks = rawModule.nearestRawTick(ticks, observationStartMs, maxDistanceMs);
+  const endFromTicks = rawModule.firstTickAtOrAfter(ticks, observationEndMs, maxDistanceMs);
+
+  const pointFromTick = (tick: {
+    value: number;
+    at: number;
+    tick: { provider: string; sourceId?: string; sourceHash?: string };
+  }): MarketObservationPoint => ({
+    value: tick.value,
+    at: tick.at,
+    provider: tick.tick.provider,
+    sourceId: tick.tick.sourceId,
+    sourceHash: tick.tick.sourceHash
+  });
+  const pointFromSnapshot = (
+    value: number | undefined,
+    at: number | undefined,
+    source:
+      | { provider?: string; sourceId?: string; sourceHash?: string }
+      | undefined
+  ): MarketObservationPoint | undefined =>
+    Number.isFinite(value) && Number.isFinite(at)
+      ? {
+          value: Number(value),
+          at: Number(at),
+          provider: source?.provider,
+          sourceId: source?.sourceId,
+          sourceHash: source?.sourceHash
+        }
+      : undefined;
+
+  // Snapshot values are preferred because once frozen they are the immutable payout
+  // evidence. Before freeze they are still the resolver's current selected boundaries.
+  const start =
+    pointFromSnapshot(snapshot?.startValue, snapshot?.startTimestamp, snapshot?.startSource) ??
+    (startFromTicks ? pointFromTick(startFromTicks) : undefined);
+  const end =
+    pointFromSnapshot(snapshot?.endValue, snapshot?.endTimestamp, snapshot?.endSource) ??
+    (endFromTicks ? pointFromTick(endFromTicks) : undefined);
+
+  const visibleEnd = Math.min(Date.now(), observationEndMs);
+  const relevant = ticks
+    .filter(
+      (tick) =>
+        Number.isFinite(tick.value) &&
+        Number.isFinite(tick.observedAt) &&
+        tick.observedAt >= observationStartMs &&
+        tick.observedAt <= visibleEnd
+    )
+    .map<MarketObservationPoint>((tick) => ({
+      value: tick.value,
+      at: tick.observedAt,
+      provider: tick.provider,
+      sourceId: tick.sourceId,
+      sourceHash: tick.sourceHash
+    }));
+
+  // Include the authoritative boundary prints even when their provider timestamp sits
+  // just outside the visual window (the start selector is nearest, not at-or-after).
+  const byIdentity = new Map<string, MarketObservationPoint>();
+  const addPoint = (point: MarketObservationPoint | undefined) => {
+    if (!point || !Number.isFinite(point.value) || !Number.isFinite(point.at)) return;
+    const identity = `${point.at}:${point.value.toFixed(8)}:${point.provider ?? ""}:${point.sourceHash ?? ""}`;
+    byIdentity.set(identity, point);
+  };
+  for (const point of relevant) addPoint(point);
+  addPoint(start);
+  if (Date.now() >= observationEndMs || snapshot?.frozen) addPoint(end);
+  const points = [...byIdentity.values()].sort((a, b) => a.at - b.at);
+
+  const latest = points
+    .filter((point) => point.at >= observationStartMs && point.at <= Math.max(visibleEnd, observationStartMs))
+    .at(-1);
+  const indicativeOutcome: Outcome | undefined =
+    start && latest
+      ? snapshotModule.resolveOutcomeFromPrints(start.value, latest.value).outcome
+      : undefined;
+
+  const effectiveStatus: MarketStatus = snapshot?.frozen ? "RESOLVED" : market.status;
+  const finalOutcome = snapshot?.frozen
+    ? snapshot.outcome ?? market.winningOutcome
+    : effectiveStatus === "RESOLVED" || effectiveStatus === "ARCHIVED"
+      ? market.winningOutcome
+      : undefined;
+  let integrityError: string | undefined;
+  if (snapshot?.frozen && snapshot.outcome && finalOutcome && snapshot.outcome !== finalOutcome) {
+    integrityError = `Frozen oracle outcome ${snapshot.outcome} does not match on-chain winner ${finalOutcome}`;
+  }
+
+  return {
+    marketId: market.id,
+    marketAddress,
+    role,
+    observationStart: market.observationStart,
+    observationEnd: market.observationEnd,
+    status: effectiveStatus,
+    points,
+    start,
+    end,
+    indicativeOutcome,
+    finalOutcome,
+    frozen: Boolean(snapshot?.frozen),
+    resolutionTxHash: snapshot?.resolutionTxHash,
+    integrityError,
+    updatedAt: new Date().toISOString()
+  };
+}
+
 async function readOnchainMarket(
   item: DemoMarketDeployment,
   options: { tradeStatsTimeoutMs?: number; includeTradeStats?: boolean } = {}
@@ -1089,11 +1263,23 @@ async function ticketBoughtLogsChunked(
   return logs;
 }
 
-async function ticketMarketSnapshot(marketAddress: string): Promise<{
+type TicketMarketSnapshot = {
   question: string;
   status: MarketStatus;
   winningOutcome?: Outcome;
-}> {
+  evidence?: {
+    startValue?: number;
+    endValue?: number;
+    startTimestamp?: number;
+    endTimestamp?: number;
+    source?: string;
+    resolutionTxHash?: string;
+    frozen?: boolean;
+    outcome?: Outcome;
+  };
+};
+
+async function ticketMarketSnapshot(marketAddress: string): Promise<TicketMarketSnapshot> {
   const market = addr(marketAddress);
   const [question, status, lockTime, winningOutcome] = await Promise.all([
     publicClient.readContract({ address: market, abi: marketAbi, functionName: "question" }),
@@ -1101,10 +1287,33 @@ async function ticketMarketSnapshot(marketAddress: string): Promise<{
     publicClient.readContract({ address: market, abi: marketAbi, functionName: "lockTime" }),
     publicClient.readContract({ address: market, abi: marketAbi, functionName: "winningOutcome" })
   ]);
+  const marketStatus = displayedMarketStatus(Number(status), lockTime);
+  let evidence: TicketMarketSnapshot["evidence"];
+  if (marketStatus === "RESOLVED" || marketStatus === "ARCHIVED" || marketStatus === "CANCELLED") {
+    try {
+      const { getObservationSnapshot } = await import("./observationSnapshots.js");
+      const snapshot = await getObservationSnapshot(market);
+      if (snapshot) {
+        evidence = {
+          startValue: snapshot.startValue,
+          endValue: snapshot.endValue,
+          startTimestamp: snapshot.startTimestamp,
+          endTimestamp: snapshot.endTimestamp,
+          source: snapshot.source,
+          resolutionTxHash: snapshot.resolutionTxHash,
+          frozen: snapshot.frozen,
+          outcome: snapshot.outcome
+        };
+      }
+    } catch {
+      // Evidence is explanatory metadata; on-chain status/outcome remain authoritative.
+    }
+  }
   return {
     question,
-    status: displayedMarketStatus(Number(status), lockTime),
-    winningOutcome: Number(winningOutcome) === 1 ? "YES" : Number(winningOutcome) === 2 ? "NO" : undefined
+    status: marketStatus,
+    winningOutcome: Number(winningOutcome) === 1 ? "YES" : Number(winningOutcome) === 2 ? "NO" : undefined,
+    evidence
   };
 }
 
@@ -1177,11 +1386,7 @@ function cachedMarketForTicket(ticket: Ticket): Market | undefined {
   });
 }
 
-function cachedTicketMarketSnapshot(marketAddress: string): {
-  question: string;
-  status: MarketStatus;
-  winningOutcome?: Outcome;
-} | undefined {
+function cachedTicketMarketSnapshot(marketAddress: string): TicketMarketSnapshot | undefined {
   if (!onchainMarketListCache) return undefined;
   const key = marketAddress.toLowerCase();
   const market = onchainMarketListCache.all.find(
@@ -1198,7 +1403,7 @@ function cachedTicketMarketSnapshot(marketAddress: string): {
 async function refreshCachedTicketPositions(tickets: Map<string, Ticket>): Promise<void> {
   const marketSnapshots = new Map<
     string,
-    Promise<{ question: string; status: MarketStatus; winningOutcome?: Outcome }>
+    Promise<TicketMarketSnapshot>
   >();
   await Promise.all(
     [...tickets.keys()].map(async (id) => {
@@ -1207,7 +1412,12 @@ async function refreshCachedTicketPositions(tickets: Map<string, Ticket>): Promi
       const cachedMarket = cachedMarketForTicket(previous);
       // An OPEN ticket cannot change before its market becomes final. The shared
       // market-cycle cache already knows active rounds, so skip a pointless ticket RPC.
-      if (cachedMarket && cachedMarket.status !== "RESOLVED" && cachedMarket.status !== "CANCELLED") {
+      if (
+        cachedMarket &&
+        cachedMarket.status !== "RESOLVED" &&
+        cachedMarket.status !== "CANCELLED" &&
+        cachedMarket.status !== "ARCHIVED"
+      ) {
         return;
       }
       try {
@@ -1229,7 +1439,7 @@ async function ticketFromChainId(
   createdAt = new Date().toISOString(),
   marketSnapshots?: Map<
     string,
-    Promise<{ question: string; status: MarketStatus; winningOutcome?: Outcome }>
+    Promise<TicketMarketSnapshot>
   >
 ): Promise<Ticket | undefined> {
   if (ticketId <= 0n) return undefined;
@@ -1243,7 +1453,12 @@ async function ticketFromChainId(
   let marketSnapshotPromise = marketSnapshots?.get(marketKey);
   if (!marketSnapshotPromise) {
     const cached = cachedTicketMarketSnapshot(position.market);
-    marketSnapshotPromise = cached
+    const cachedIsActive =
+      cached && cached.status !== "RESOLVED" && cached.status !== "CANCELLED" && cached.status !== "ARCHIVED";
+    // Final result and evidence are always read from the market contract + frozen
+    // snapshot store. A list cache must never be allowed to make a ticket flip
+    // between WIN and LOSS after a later refresh.
+    marketSnapshotPromise = cachedIsActive
       ? Promise.resolve(cached)
       : ticketMarketSnapshot(position.market);
     marketSnapshots?.set(marketKey, marketSnapshotPromise);
@@ -1293,7 +1508,14 @@ async function ticketFromChainId(
     openReferenceFeed: opening?.referenceFeed,
     openReferenceLabel: opening?.referenceLabel,
     openThreshold: opening?.threshold,
-    openReferenceSource: opening?.source
+    openReferenceSource: opening?.source,
+    resolutionStartValue: marketSnapshot.evidence?.startValue,
+    resolutionEndValue: marketSnapshot.evidence?.endValue,
+    resolutionStartAt: marketSnapshot.evidence?.startTimestamp,
+    resolutionEndAt: marketSnapshot.evidence?.endTimestamp,
+    resolutionSource: marketSnapshot.evidence?.source,
+    resolutionTxHash: marketSnapshot.evidence?.resolutionTxHash,
+    resolutionFrozen: marketSnapshot.evidence?.frozen
   };
 }
 

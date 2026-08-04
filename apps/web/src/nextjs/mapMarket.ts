@@ -171,6 +171,23 @@ export function ticketToPosition(ticket: Ticket): Position {
   const canClaim =
     Boolean(ticket.claimable) && (ticket.result === "WIN" || ticket.result === "REFUND");
 
+  const hasResolutionValues =
+    Number.isFinite(ticket.resolutionStartValue) && Number.isFinite(ticket.resolutionEndValue);
+  const resultDetail = ticket.winningOutcome
+    ? hasResolutionValues
+      ? `Winner ${ticket.winningOutcome} · ${formatResolutionValue(
+          Number(ticket.resolutionStartValue),
+          ticket.resolutionSource
+        )} → ${formatResolutionValue(Number(ticket.resolutionEndValue), ticket.resolutionSource)}`
+      : `Winner ${ticket.winningOutcome}`
+    : ticket.marketStatus === "CANCELLED"
+      ? "Market cancelled · stake refunded"
+      : undefined;
+  const roundRaw = String(ticket.marketId || "");
+  const roundLabel = /^0x[a-fA-F0-9]{40}$/.test(roundRaw)
+    ? `Round ${roundRaw.slice(0, 6)}…${roundRaw.slice(-4)}`
+    : undefined;
+
   return {
     id: ticket.id,
     market: ticket.marketQuestion,
@@ -185,8 +202,25 @@ export function ticketToPosition(ticket: Ticket): Position {
         : `${(ticket.result === "REFUND" ? ticket.riskAmount : ticket.payout).toFixed(2)} USDC`,
     status,
     canClaim,
-    claimAction: ticket.result === "REFUND" ? "Claim refund" : canClaim ? "Claim payout" : undefined
+    claimAction: ticket.result === "REFUND" ? "Claim refund" : canClaim ? "Claim payout" : undefined,
+    winner: ticket.winningOutcome,
+    resultDetail,
+    roundLabel,
+    resolutionTxHref: ticket.resolutionTxHash
+      ? `https://testnet.arcscan.app/tx/${ticket.resolutionTxHash}`
+      : undefined
   };
+}
+
+function formatResolutionValue(value: number, source?: string): string {
+  const weather = /weather|meteo|temp/i.test(source || "");
+  if (weather) return `${value.toFixed(2)}°C`;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(value);
 }
 
 /** Format USDC amounts — default 2 decimals (pool TVL, reserved, available, …). */

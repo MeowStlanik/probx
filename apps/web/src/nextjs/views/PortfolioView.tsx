@@ -212,7 +212,7 @@ export function PortfolioView({
                 <tbody>
                   {positions.map((p, i) => {
                     const c = statusChipStyle(p.status);
-                    const marketCell = p.marketId ? (
+                    const marketTitle = p.marketId ? (
                       <Link
                         href={`/markets/${encodeURIComponent(p.marketId)}`}
                         style={{
@@ -226,6 +226,39 @@ export function PortfolioView({
                       </Link>
                     ) : (
                       <span style={{ color: theme.color.ink, fontSize: 12.5 }}>{p.market}</span>
+                    );
+                    const marketCell = (
+                      <div>
+                        <div>{marketTitle}</div>
+                        {p.roundLabel || p.resultDetail ? (
+                          <div
+                            style={{
+                              marginTop: 3,
+                              fontSize: 10.5,
+                              color: theme.color.muted,
+                              lineHeight: 1.35,
+                              fontFamily: theme.font.mono
+                            }}
+                          >
+                            {p.roundLabel}
+                            {p.roundLabel && p.resultDetail ? " · " : ""}
+                            {p.resultDetail}
+                            {p.resolutionTxHref ? (
+                              <>
+                                {" · "}
+                                <a
+                                  href={p.resolutionTxHref}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{ color: theme.color.purple, textDecoration: "none" }}
+                                >
+                                  resolve tx ↗
+                                </a>
+                              </>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                     );
                     return (
                       <tr key={p.id} style={{ background: i % 2 === 0 ? "#fff" : theme.color.tint }}>

@@ -116,10 +116,12 @@ export function MarketDetailShell({
   useEffect(() => {
     // If SSR already filled the card, refresh quietly; otherwise show loading shell.
     void load({ silent: Boolean(initial) });
-    // Poll less aggressively — reduces tab-switch jank
+    // Refresh the on-chain winner promptly around observation end. The resolver-aligned
+    // chart itself is Redis-backed, so this 10s contract refresh only runs while a
+    // visitor keeps one market detail page open.
     const id = window.setInterval(() => {
       if (document.visibilityState === "visible") void load({ silent: true });
-    }, 30_000);
+    }, 10_000);
     return () => window.clearInterval(id);
   }, [load, initial]);
 
