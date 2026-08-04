@@ -184,14 +184,15 @@ export function parseAppKitBridgeResult(
 
   error = error ?? errorText(record.error);
 
-  const phase: AppKitBridgeOutcome["phase"] =
-    state === "success" || mintHash
-      ? "complete"
-      : burnHash
-        ? "burn_submitted"
-        : approvalHash
-          ? "approval_only"
-          : "failed";
+  // Be conservative: approval is not a bridge, and a source-chain burn is not an
+  // Arc mint. Only a captured mint/forward transaction is considered complete.
+  const phase: AppKitBridgeOutcome["phase"] = mintHash
+    ? "complete"
+    : burnHash
+      ? "burn_submitted"
+      : approvalHash
+        ? "approval_only"
+        : "failed";
 
   return { phase, state, approvalHash, burnHash, mintHash, error, raw: result };
 }
@@ -430,11 +431,33 @@ export async function appKitUnifiedBalanceToArc(params: {
       recipientAddress,
       onProgress: params.onProgress
     });
+    if (bridged.phase !== "complete") {
+      const detail = bridged.error ? `: ${bridged.error}` : "";
+      if (bridged.phase === "approval_only") {
+        throw new Error(`App Kit fallback confirmed only USDC approval; no CCTP burn was submitted${detail}`);
+      }
+      if (bridged.phase === "burn_submitted") {
+        throw new Error(
+          `App Kit fallback submitted the CCTP burn, but Arc mint is still pending. Burn tx: ${bridged.burnHash ?? "unknown"}${detail}`
+        );
+      }
+      throw new Error(`App Kit bridge fallback failed (state: ${bridged.state})${detail}`);
+    }
     return {
       mode: "bridge-fallback",
       phase: "complete",
-      hash: bridged.hash,
-      raw: { depositError, bridge: bridged.raw }
+      hash: bridged.mintHash,
+      raw: {
+        depositError,
+        bridge: bridged.raw,
+        outcome: {
+          phase: bridged.phase,
+          state: bridged.state,
+          approvalHash: bridged.approvalHash,
+          burnHash: bridged.burnHash,
+          mintHash: bridged.mintHash
+        }
+      }
     };
   }
 
