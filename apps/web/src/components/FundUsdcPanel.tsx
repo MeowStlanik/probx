@@ -473,13 +473,80 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
           recipientAddress: mintTo,
           onProgress: (msg) => setMessage(`⚡ App Kit: ${msg}`)
         });
-        if (bridged.hash) setBurnTx(bridged.hash);
-        setStep("done");
-        setMessage(
-          `⚡ via Circle App Kit · bridge complete → Arc ${shortHex(mintTo)}. Keep a little USDC for gas.`
-        );
-        await refreshBalance();
-        return;
+
+        if (bridged.phase === "complete") {
+          if (bridged.burnHash) setBurnTx(bridged.burnHash);
+          if (bridged.mintHash) setMintTx(bridged.mintHash);
+          setStep("done");
+          setMessage(
+            `⚡ via Circle App Kit · bridge complete → Arc ${shortHex(mintTo)}. Keep a little USDC for gas.`
+          );
+          await refreshBalance();
+          return;
+        }
+
+        if (bridged.phase === "burn_submitted" && bridged.burnHash) {
+          // App Kit can soft-fail after the source burn (for example while waiting for
+          // attestation/forwarding). Never start a second burn in that case: resume from
+          // the existing source transaction through the same status endpoint as manual CCTP.
+          setBurnTx(bridged.burnHash);
+          if (!sourceCfg) {
+            setStep("attestation");
+            setMessage(
+              `App Kit burn submitted (${shortHex(bridged.burnHash)}). CCTP config is still loading; refresh the Arc balance shortly.`
+            );
+            return;
+          }
+
+          const sourceChain = {
+            id: sourceCfg.id,
+            name: sourceCfg.name,
+            nativeCurrency: sourceCfg.nativeCurrency,
+            rpcUrls: { default: { http: [sourceCfg.rpcUrl] } }
+          } as const;
+          const sourcePublicClient = createPublicClient({
+            chain: sourceChain,
+            transport: http(sourceCfg.rpcUrl)
+          });
+          const { waitSuccessfulReceipt } = await import("@/lib/txReceipt");
+          await waitSuccessfulReceipt(sourcePublicClient, bridged.burnHash);
+
+          setStep("attestation");
+          setMessage("App Kit burn confirmed. Waiting for Circle Forwarding Service mint on Arc…");
+          const started = Date.now();
+          let forwardTx: string | undefined = bridged.mintHash ?? undefined;
+          while (!forwardTx && Date.now() - started < 8 * 60_000) {
+            const status = await pollCctpStatus(sourceCfg.domain, bridged.burnHash);
+            if (status.status === "forwarded" && status.forwardTxHash) {
+              forwardTx = status.forwardTxHash;
+              break;
+            }
+            if (status.status === "attested") {
+              setMessage("App Kit burn confirmed; attestation is ready and Arc mint is finalizing…");
+            }
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+          }
+
+          if (forwardTx) {
+            setMintTx(forwardTx);
+            setStep("done");
+            setMessage(`USDC minted on Arc to ${shortHex(mintTo)}.`);
+          } else {
+            setStep("done");
+            setMessage("Burn confirmed. Arc mint is still finalizing — refresh the balance in a minute.");
+          }
+          await refreshBalance();
+          await refreshSourceBalance(cctpSourceAddress);
+          return;
+        }
+
+        const appKitDetail = bridged.error ? `: ${bridged.error}` : "";
+        if (bridged.phase === "approval_only") {
+          throw new Error(
+            `App Kit confirmed only the USDC approval and did not submit the CCTP burn${appKitDetail}`
+          );
+        }
+        throw new Error(`App Kit bridge did not complete (state: ${bridged.state})${appKitDetail}`);
       } catch (appKitErr) {
         const why = appKitErr instanceof Error ? appKitErr.message : String(appKitErr);
         if (strictAppKit) {
@@ -529,17 +596,27 @@ export function FundUsdcPanel({ open, onClose, initialTab = "direct" }: Props) {
         transport: http(sourceCfg.rpcUrl)
       });
 
-      setStep("approve");
-      setMessage(`Approve ${formatUnits(totalBurn, 6)} USDC on ${sourceCfg.name} from ${shortHex(from)}…`);
-      const approveHash = await walletClient.writeContract({
+      const currentAllowance = await publicClient.readContract({
         address: sourceCfg.usdc as `0x${string}`,
         abi: erc20ApproveAbi,
-        functionName: "approve",
-        args: [sourceCfg.tokenMessengerV2 as `0x${string}`, totalBurn]
+        functionName: "allowance",
+        args: [from, sourceCfg.tokenMessengerV2 as `0x${string}`]
       });
-      {
+
+      if (currentAllowance < totalBurn) {
+        setStep("approve");
+        setMessage(`Approve ${formatUnits(totalBurn, 6)} USDC on ${sourceCfg.name} from ${shortHex(from)}…`);
+        const approveHash = await walletClient.writeContract({
+          address: sourceCfg.usdc as `0x${string}`,
+          abi: erc20ApproveAbi,
+          functionName: "approve",
+          args: [sourceCfg.tokenMessengerV2 as `0x${string}`, totalBurn]
+        });
         const { waitSuccessfulReceipt } = await import("@/lib/txReceipt");
         await waitSuccessfulReceipt(publicClient, approveHash);
+      } else {
+        setStep("approve");
+        setMessage("USDC allowance is already sufficient — submitting the CCTP burn…");
       }
 
       setStep("burn");

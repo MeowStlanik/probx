@@ -64,7 +64,7 @@ function pickHash(result: unknown): `0x${string}` | null {
     const v = r[key];
     if (typeof v === "string" && v.startsWith("0x")) return v as `0x${string}`;
   }
-  for (const nest of ["steps", "transactions", "txs", "result"]) {
+  for (const nest of ["steps", "transactions", "txs", "result", "values", "data"]) {
     const v = r[nest];
     if (Array.isArray(v)) {
       for (const step of v) {
@@ -113,35 +113,132 @@ export async function appKitSendUsdc(params: {
  * mints to the browser wallet address derived from the adapter — wrong when MetaMask
  * burns on source but the user expects funds on the email session wallet.
  */
+export type AppKitBridgeOutcome = {
+  /** `complete` is only emitted when App Kit reports the whole operation as successful. */
+  phase: "complete" | "burn_submitted" | "approval_only" | "failed";
+  state: string;
+  approvalHash: `0x${string}` | null;
+  burnHash: `0x${string}` | null;
+  mintHash: `0x${string}` | null;
+  error?: string;
+  raw: unknown;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function stepLabel(step: Record<string, unknown>): string {
+  return [step.name, step.method, step.type, step.action, step.id]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+}
+
+function errorText(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  const record = asRecord(value);
+  if (!record) return undefined;
+  for (const key of ["message", "reason", "error", "cause"]) {
+    const nested = errorText(record[key]);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
+/**
+ * App Kit returns soft failures as a result object instead of throwing. In particular,
+ * an approval can succeed while the burn step fails. Treating the first hash in the
+ * result as a completed bridge made an approval transaction look like a CCTP transfer.
+ */
+export function parseAppKitBridgeResult(
+  result: unknown,
+  eventHashes: Partial<Pick<AppKitBridgeOutcome, "approvalHash" | "burnHash" | "mintHash">> = {}
+): AppKitBridgeOutcome {
+  const record = asRecord(result) ?? {};
+  const state = typeof record.state === "string" ? record.state.toLowerCase() : "unknown";
+  let approvalHash = eventHashes.approvalHash ?? null;
+  let burnHash = eventHashes.burnHash ?? null;
+  let mintHash = eventHashes.mintHash ?? null;
+  let error: string | undefined;
+
+  const steps = Array.isArray(record.steps) ? record.steps : [];
+  for (const rawStep of steps) {
+    const step = asRecord(rawStep);
+    if (!step) continue;
+    const label = stepLabel(step);
+    const stepState = typeof step.state === "string" ? step.state.toLowerCase() : "unknown";
+    const hash = pickHash(step);
+
+    // A successful step is authoritative. Event hashes are retained as a recovery hint
+    // for a submitted burn when a later attestation/mint step soft-fails.
+    if (stepState === "success" || stepState === "noop") {
+      if (label.includes("approve") && hash) approvalHash = hash;
+      if (label.includes("burn") && hash) burnHash = hash;
+      if ((label.includes("mint") || label.includes("forward")) && hash) mintHash = hash;
+    }
+    if (stepState === "error" && !error) {
+      error = errorText(step.error) ?? errorText(step);
+    }
+  }
+
+  error = error ?? errorText(record.error);
+
+  const phase: AppKitBridgeOutcome["phase"] =
+    state === "success" || mintHash
+      ? "complete"
+      : burnHash
+        ? "burn_submitted"
+        : approvalHash
+          ? "approval_only"
+          : "failed";
+
+  return { phase, state, approvalHash, burnHash, mintHash, error, raw: result };
+}
+
 export async function appKitBridgeToArc(params: {
   source: AppKitSourceChain;
   amount: string;
   /** Arc mint destination — must match the address shown in the Fund UI. */
   recipientAddress: string;
   onProgress?: (msg: string) => void;
-}): Promise<{ hash: `0x${string}` | null; raw: unknown }> {
+}): Promise<AppKitBridgeOutcome> {
   const recipientAddress = requireRecipientAddress(params.recipientAddress);
   const adapter = await browserAdapter();
   params.onProgress?.(`App Kit bridge ${params.source} → Arc_Testnet → ${recipientAddress.slice(0, 10)}…`);
 
   const k = kit();
   const unsubs: Array<() => void> = [];
+  let approvalHash: `0x${string}` | null = null;
+  let burnHash: `0x${string}` | null = null;
+  let mintHash: `0x${string}` | null = null;
   try {
-    const on = (event: string, label: string) => {
+    const on = (
+      event: string,
+      label: string,
+      capture: (hash: `0x${string}`) => void
+    ) => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const off = (k as any).on?.(event, (payload: unknown) => {
           params.onProgress?.(label);
-          void payload;
+          const hash = pickHash(payload);
+          if (hash) capture(hash);
         });
         if (typeof off === "function") unsubs.push(off);
       } catch {
         /* optional events */
       }
     };
-    on("bridge.approve", "Approving USDC…");
-    on("bridge.burn", "Burning on source chain…");
-    on("bridge.mint", "Minting on Arc…");
+    on("bridge.approve", "Approving USDC…", (hash) => {
+      approvalHash = hash;
+    });
+    on("bridge.burn", "Burning on source chain…", (hash) => {
+      burnHash = hash;
+    });
+    on("bridge.mint", "Minting on Arc…", (hash) => {
+      mintHash = hash;
+    });
 
     const result = await k.bridge({
       from: { adapter, chain: params.source },
@@ -149,7 +246,7 @@ export async function appKitBridgeToArc(params: {
       amount: params.amount,
       token: "USDC"
     });
-    return { hash: pickHash(result), raw: result };
+    return parseAppKitBridgeResult(result, { approvalHash, burnHash, mintHash });
   } finally {
     for (const u of unsubs) {
       try {
