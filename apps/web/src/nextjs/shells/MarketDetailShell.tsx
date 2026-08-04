@@ -117,7 +117,9 @@ export function MarketDetailShell({
     // If SSR already filled the card, refresh quietly; otherwise show loading shell.
     void load({ silent: Boolean(initial) });
     // Poll less aggressively — reduces tab-switch jank
-    const id = window.setInterval(() => void load({ silent: true }), 20_000);
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load({ silent: true });
+    }, 30_000);
     return () => window.clearInterval(id);
   }, [load, initial]);
 
@@ -314,11 +316,18 @@ export function MarketDetailShell({
         );
       }
       let ticketId: string | undefined;
+      let confirmedBoost = Number(boostBps) / 10_000;
+      let confirmedRisk = stake;
+      let confirmedPayout = Number(formatUnits(quote.payout, 6));
       try {
         const logs = parseEventLogs({ abi: engineAbi, logs: receipt.logs, eventName: "TicketBought" });
-        ticketId = logs[0]?.args.ticketId?.toString();
+        const bought = logs[0]?.args;
+        ticketId = bought?.ticketId?.toString();
+        if (bought?.boostBps !== undefined) confirmedBoost = Number(bought.boostBps) / 10_000;
+        if (bought?.riskAmount !== undefined) confirmedRisk = Number(formatUnits(bought.riskAmount, 6));
+        if (bought?.payout !== undefined) confirmedPayout = Number(formatUnits(bought.payout, 6));
       } catch {
-        /* ignore */
+        /* event validation below handles missing/invalid logs */
       }
       if (!ticketId) {
         throw new Error(
@@ -331,10 +340,12 @@ export function MarketDetailShell({
         marketAddress,
         marketQuestion: market.question,
         outcome: side,
-        riskAmount: stake,
-        boost,
+        // Persist values emitted by the contract, not the UI selection. This prevents
+        // localStorage from claiming 3× when the mined ticket says something else.
+        riskAmount: confirmedRisk,
+        boost: confirmedBoost,
         fillPrice: Number(quote.price) / 1_000_000,
-        payout: Number(formatUnits(quote.payout, 6)),
+        payout: confirmedPayout,
         fee: Number(formatUnits(quote.fee, 6)),
         lockTime: market.lockTime,
         observationEnd: market.observationEnd,

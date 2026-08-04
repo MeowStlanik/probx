@@ -6,7 +6,7 @@
 </p>
 
 <p align="center">
-  <strong><a href="https://probx-web.vercel.app">▶ Live demo</a></strong> ·
+  <strong><a href="docs/DEPLOYMENT.md">▶ Railway deployment</a></strong> ·
   <a href="#see-it-in-2-minutes">See it in 2 minutes</a> ·
   <a href="#book-economics">Book economics</a> ·
   <a href="#security">Security</a> ·
@@ -53,14 +53,14 @@ so the entire flow — fund, position, resolve, claim — stays in one asset.
 
 ## See it in 2 minutes
 
-1. Open the [live demo](https://probx-web.vercel.app) → **Markets**. Continuous demo loops (BTC direction / London temp) exercise the full reserve → resolve → claim path on a ~75s entry / 60s observation cycle.
+1. Deploy `apps/api` on Railway and `apps/web` on Vercel using [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), then open the Vercel UI → **Markets**. Continuous BTC direction / London temperature loops exercise reserve → resolve → claim on a ~75s entry / 60s observation cycle.
 2. Sign in with email (Circle Developer-Controlled wallet on Arc) or MetaMask.
 3. Fund with testnet USDC — directly on Arc, or from Base Sepolia via **App Kit bridge** (mint lands on the **session** Arc address shown in the UI).
 4. Take a YES/NO position, optionally with Micro Boost. Watch the live chart against the start line, then claim after auto-resolve.
 
 Gas is paid in USDC. There is no ETH step anywhere in that flow.
 
-> Markets are driven by an **external** minute pinger (see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#markets-247-cron)). If the list looks empty, the pinger is down, not the app — any page load also kicks the cycle in the background.
+> Markets are driven by persistent background workers inside the Railway service. No browser heartbeat or external cron pinger is required.
 
 ---
 
@@ -181,7 +181,7 @@ self-call so one bad ticket cannot revert the batch.
 - **App Kits** — Send, Bridge and Unified Balance via `@circle-fin/app-kit`
 - **CCTP** — USDC from Base Sepolia / Eth Sepolia → Arc
 - **Durable wallet mapping** — email → walletId in Redis KV; recovery via Circle `listWallets(refId)`, no duplicate wallets after logout
-- **Email OTP** — app-issued 6-digit code via SMTP (dev-echo locally)
+- **Email OTP** — app-issued 6-digit code via Gmail API over HTTPS (dev-echo locally)
 - **Tx tracking** — position / claim / deposit / send tracked `pending → confirmed / failed`, reconciled server-side
 - **Dual path** — email session or MetaMask throughout
 
@@ -190,28 +190,26 @@ self-call so one bad ticket cannot revert the batch.
 ## Architecture
 
 ```text
-┌─────────────┐     ┌──────────────────────┐     ┌─────────────────────────┐
-│  Next.js UI │────▶│  Next API routes     │────▶│  Arc Testnet            │
-│  (Vercel)   │     │  apps/web/src/app/api│     │  Engine · Vault · Mkts  │
-└──────┬──────┘     │  (+ optional apps/api│     └───────────┬─────────────┘
-       │            │   standalone :3001)  │                 │
-       │            └──────┬───────────────┘                 │ USDC
-       │                   │                                 │
-       │            ┌──────▼───────┐                 ┌───────▼───────┐
-       └───────────▶│ Circle API   │                 │ App Kit       │
-         email EOA  │ Wallets      │                 │ Send · Bridge │
-                    └──────────────┘                 │ Unified Bal.  │
-                                                     └───────────────┘
+┌────────────────┐     HTTPS      ┌────────────────────┐     ┌─────────────────────────┐
+│  Next.js UI    │───────────────▶│  Standalone API    │────▶│  Arc Testnet            │
+│  Vercel        │                │  Railway apps/api  │     │  Engine · Vault · Mkts  │
+└───────┬────────┘                │  + market workers  │     └───────────┬─────────────┘
+        │                         └─────────┬──────────┘                 │ USDC
+        │                                   │                            │
+        │                         ┌─────────▼────────┐           ┌───────▼───────┐
+        └────────────────────────▶│ Circle / Gmail  │           │ App Kit       │
+            browser wallet        │ Redis KV        │           │ Send · Bridge │
+                                  └──────────────────┘           └───────────────┘
 ```
 
 | Package | Role |
 |---------|------|
-| `apps/web` | Markets, portfolio, LP, admin, fund UI + **API route handlers** |
-| `apps/api` | Shared services (quotes, Circle, App Kit, CCTP, workers); optional standalone server on `:3001` |
+| `apps/web` | Vercel-hosted Markets, portfolio, LP, admin and funding UI |
+| `apps/api` | Railway-hosted API, quotes, Circle, Gmail, CCTP and persistent market workers |
 | `contracts` | Foundry sources + [tests](./contracts/test/) |
 | `scripts/` | `deploy-arc`, smoke, demo markets, RPC preflight |
 
-Local run, Vercel env, SMTP, and cron: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**.
+Local run, Railway variables, Gmail API OAuth, and background workers: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)**.
 
 ---
 
@@ -238,7 +236,7 @@ Local run, Vercel env, SMTP, and cron: **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.
 | FeeRouter | [`0xc6ABDD0D4dB15f347E0690F471098694E284AC63`](https://testnet.arcscan.app/address/0xc6ABDD0D4dB15f347E0690F471098694E284AC63) |
 
 Deployed **2026-07-27 14:46 UTC** (free-capital LP + registry + manipulation-resistant book). LP seed: **100000 USDC**. `fromBlock`: **53938140**.  
-Vercel paste: [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md). Full JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json).
+Full deployment JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json).
 
 ---
 
@@ -248,7 +246,7 @@ Vercel paste: [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md). Full JSO
 |------------|----------------|
 | Email login | Circle **Developer-Controlled** wallets on `ARC-TESTNET` |
 | Fallback | Local encrypted session EOA if `CIRCLE_*` incomplete |
-| OTP | App-issued 6-digit code (SMTP in prod; `EMAIL_OTP_DEV_ECHO=1` shows code in UI locally) |
+| OTP | App-issued 6-digit code through Gmail API; `EMAIL_OTP_DEV_ECHO=1` shows code in UI locally |
 | **Send** | App Kit `kit.send` on Arc; Circle DCW transfer via `tokenId`; raw viem fallback |
 | **Bridge** | App Kit `kit.bridge` (CCTP v2 underneath); manual CCTP Forwarding fallback |
 | **LP liquidity** | On-Arc vault deposit, plus **Any chain** tab — Unified Balance where available, else App Kit bridge → deposit |
@@ -263,7 +261,7 @@ instead of falling back.
 MetaMask can burn on the source chain while the mint lands on the email session — separate
 connect, no session hijack.
 
-Server Circle / SMTP / session env vars: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+Server Circle / Gmail API / session variables: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ---
 
@@ -280,7 +278,7 @@ Connect (email or MetaMask)
 ```
 
 **Admin:** `/admin` — create test markets (demo oracles). No UI entry point; open the URL
-directly. On Vercel/production, admin is **closed** unless `ADMIN_SECRET` (or `CRON_SECRET`)
+directly. In production, admin is **closed** unless `ADMIN_SECRET` (or `CRON_SECRET`)
 is set; locally it stays open with a warning.
 
 ---
@@ -293,7 +291,7 @@ Testnet deployment built for a hackathon. Honest limits:
 - **Custodial by design (email path).** Circle Developer-Controlled wallets (or a local session EOA fallback) mean the server can sign for email users. MetaMask users hold their own keys.
 - **Oracle is centralized today.** Owner/oracle can resolve; feeds are server-side (Coinbase / Open-Meteo). No quorum, on-chain attestation, or dispute period yet — acceptable for demo, not production infrastructure claims.
 - **Demo risk parameters.** **100000 USDC** seeded vault with loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000`). Sized so a demo can exercise full boost range.
-- **Ops dependencies.** External minute pinger for 24/7 cycles; `ADMIN_SECRET` / `OTP_HMAC_SECRET` required on shared deploys (fail closed on Vercel when unset).
+- **Ops dependencies.** One persistent Railway service plus Redis KV; `ADMIN_SECRET`, `OTP_HMAC_SECRET`, session secrets, and Gmail OAuth credentials are required for production.
 - **Contract security.** Engine only accepts markets from the factory registry (`isMarket`). **Live stack must be redeployed** after this change — frontend alone cannot patch the old engine.
 
 ---
@@ -302,10 +300,9 @@ Testnet deployment built for a hackathon. Honest limits:
 
 | Doc | Contents |
 |-----|----------|
-| **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)** | Local run, Vercel settings, env vars, SMTP, cron |
-| [`docs/VERCEL_ENV_UPDATE.md`](docs/VERCEL_ENV_UPDATE.md) | Address bump after redeploy |
+| **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)** | Local run, Railway deploy, Gmail API OAuth, workers |
+| [`railway.json`](railway.json) | Railpack build/start/healthcheck configuration |
 | [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) | Live contract addresses |
-| [`docs/EXTERNAL_CRON.md`](docs/EXTERNAL_CRON.md) | Minute pinger setup |
 | [`contracts/test/`](./contracts/test/) | **50** forge tests: 25 scenario + 3 registry + 6 LP + 12 accounting/fuzz + 4 book-manipulation — `pnpm contracts:test` |
 | [`.env.example`](.env.example) | Full env template |
 | [`LICENSE`](./LICENSE) | MIT |

@@ -1,33 +1,44 @@
 /**
  * Server-only data loaders for RSC pages.
  *
- * Priority:
- * 1) Direct Arc RPC via web deployment.json (no apps/api bundle quirks)
- * 2) Absolute HTTP to this deployment's /api/* (proven live on Vercel)
- * 3) In-process dispatch (local / monorepo)
- * 4) Offline fallbacks
+ * When NEXT_PUBLIC_API_BASE_URL/API_BASE_URL is configured, server rendering uses
+ * that backend exclusively. This prevents a Vercel UI from silently mixing its own
+ * bundled API with the persistent Railway backend.
  */
 import type { LpStats, Market, Ticket } from "./types";
 import { emptyLpStats } from "./sampleData";
 import { isOnchainMarketId } from "./api";
 import { readOnchainLpStats } from "./readOnchainLpStats";
 
-function serverOrigin(): string {
-  const explicit = (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "").trim();
-  if (explicit) return explicit.replace(/\/$/, "");
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
-    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+function normalizeOrigin(raw: string): string {
+  let value = raw.trim().replace(/\/$/, "");
+  if (!value || value === "same" || value === "/" || value === "undefined" || value === "null") {
+    return "";
   }
+  if (value.endsWith("/api")) value = value.slice(0, -4).replace(/\/$/, "");
+  return value;
+}
+
+function configuredApiOrigin(): { origin: string; external: boolean } {
+  const apiOrigin = normalizeOrigin(
+    process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || ""
+  );
+  if (apiOrigin) return { origin: apiOrigin, external: true };
+
+  const siteOrigin = normalizeOrigin(
+    process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || ""
+  );
+  if (siteOrigin) return { origin: siteOrigin, external: false };
+
   const port = process.env.PORT || "3000";
-  return `http://127.0.0.1:${port}`;
+  return { origin: `http://127.0.0.1:${port}`, external: false };
 }
 
 async function httpGetJson(
   path: string,
   timeoutMs = 6_000
 ): Promise<{ ok: boolean; status: number; body: unknown }> {
-  const origin = serverOrigin();
+  const { origin } = configuredApiOrigin();
   const url = `${origin}${path.startsWith("/") ? path : `/${path}`}`;
   const response = await fetch(url, {
     cache: "no-store",
@@ -43,8 +54,12 @@ function onlyOnchain(markets: Market[]): Market[] {
   return markets.filter((m) => isOnchainMarketId(m.id) || isOnchainMarketId(m.contractAddress));
 }
 
+function externalApiConfigured(): boolean {
+  return configuredApiOrigin().external;
+}
+
 export async function fetchMarkets(): Promise<Market[]> {
-  // Prefer HTTP — same code path as the working Vercel /api/markets route
+  // Prefer HTTP — same code path as the deployed /api/markets route
   try {
     const result = await httpGetJson("/api/markets");
     if (result.ok && Array.isArray(result.body) && result.body.length > 0) {
@@ -54,6 +69,8 @@ export async function fetchMarkets(): Promise<Market[]> {
   } catch {
     // continue
   }
+
+  if (externalApiConfigured()) return [];
 
   try {
     const { dispatchApiRequest } = await import("../../../api/src/dispatch");
@@ -71,6 +88,19 @@ export async function fetchMarkets(): Promise<Market[]> {
 
 export async function fetchMarket(id: string): Promise<Market | undefined> {
   if (!isOnchainMarketId(id)) return undefined;
+
+  if (externalApiConfigured()) {
+    try {
+      const result = await httpGetJson(`/api/markets/${encodeURIComponent(id)}`, 8_000);
+      if (result.ok && result.body && typeof result.body === "object") {
+        const market = normalizeMarket(result.body as Market);
+        if (isOnchainMarketId(market.id) || isOnchainMarketId(market.contractAddress)) return market;
+      }
+    } catch {
+      // External backend is authoritative; do not mix in the Vercel-bundled API.
+    }
+    return undefined;
+  }
 
   // In-process first — avoids SSR → HTTP → same Next process deadlocks / multi-second waits
   // when the server is busy compiling or handling other requests.
@@ -121,15 +151,17 @@ export async function fetchLpStats(): Promise<LpStats> {
     // continue
   }
 
-  // 2) In-process dispatch (local monorepo / same isolate)
-  try {
-    const { dispatchApiRequest } = await import("../../../api/src/dispatch");
-    const result = await dispatchApiRequest({ method: "GET", path: "/api/lp/stats" });
-    if (result.status >= 200 && result.status < 300 && result.body) {
-      return normalizeLpStats(result.body as LpStats);
+  // 2) In-process dispatch (local monorepo / same isolate only).
+  if (!externalApiConfigured()) {
+    try {
+      const { dispatchApiRequest } = await import("../../../api/src/dispatch");
+      const result = await dispatchApiRequest({ method: "GET", path: "/api/lp/stats" });
+      if (result.status >= 200 && result.status < 300 && result.body) {
+        return normalizeLpStats(result.body as LpStats);
+      }
+    } catch {
+      // continue
     }
-  } catch {
-    // continue
   }
 
   // 3) Direct chain read — TVL only, no aggregates
@@ -156,6 +188,9 @@ export async function fetchUserTickets(address: string): Promise<Ticket[]> {
     }
     throw new Error(`Portfolio endpoint returned HTTP ${result.status}`);
   } catch (error) {
+    if (externalApiConfigured()) {
+      throw error instanceof Error ? error : new Error("Portfolio endpoint unreachable");
+    }
     if (error instanceof Error && error.message.startsWith("Portfolio")) throw error;
     const { dispatchApiRequest } = await import("../../../api/src/dispatch");
     const result = await dispatchApiRequest({

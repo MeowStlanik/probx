@@ -24,7 +24,7 @@ import { acquireLock, NamespaceStore, releaseLock } from "./persistentStore.js";
 import { BTC_OBSERVATION_MS, WEATHER_OBSERVATION_MS } from "./observationSnapshots.js";
 import { withMarketCreateLock } from "./marketCreateLock.js";
 
-/** Persist settlement cursor across serverless runs (100+ tickets). */
+/** Persist settlement cursor across worker runs (100+ tickets). */
 const settleCursorStore = new NamespaceStore<{
   cursor: number;
   updatedAt: string;
@@ -40,7 +40,7 @@ export function isSettleCursorDone(
 }
 
 const SETTLE_CHUNK = 12;
-/** Max chunks per worker invocation to stay under serverless timeout. */
+/** Max chunks per worker pass to keep each cycle bounded. */
 const SETTLE_MAX_CHUNKS_PER_RUN = 4;
 
 async function settleAllTicketsChunked(
@@ -170,20 +170,23 @@ export async function runMarketCycleOnce(): Promise<{
         settled,
         hidden,
         created,
-        errors: ["Set ORACLE_PRIVATE_KEY (or DEPLOYER_PRIVATE_KEY / PRIVATE_KEY) on Vercel"]
+        errors: ["Set ORACLE_PRIVATE_KEY (or DEPLOYER_PRIVATE_KEY / PRIVATE_KEY) in Railway"]
       };
     }
 
     const markets = await listOnchainMarkets({ forCycle: true });
     const now = Date.now();
 
-    // 0) Capture observation start/end snapshots before any resolve (immutable prints).
-    try {
-      await captureObservationSnapshots();
-    } catch (error) {
-      errors.push(
-        `observation snapshots: ${error instanceof Error ? error.message : String(error)}`
-      );
+    // 0) Dedicated oracle-snapshot worker normally owns feed capture. Only use the
+    // cycle as a fallback when that worker is explicitly disabled.
+    if (process.env.ORACLE_SNAPSHOT_ENABLED === "0") {
+      try {
+        await captureObservationSnapshots();
+      } catch (error) {
+        errors.push(
+          `observation snapshots: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
 
     // 1) Resolve + settle ready BTC / weather
@@ -395,7 +398,7 @@ export async function runMarketCycleOnce(): Promise<{
     });
 
     // Update aggregate stats from markets we already fetched (no duplicate RPC).
-    // AWAITED so Vercel does not tear down the isolate before KV write finishes.
+    // Await the KV write so cycle state is durable before the run completes.
     try {
       await saveAggregateStatsFromMarkets(refreshed);
     } catch (error) {
@@ -430,64 +433,6 @@ function hasResolverKey(): boolean {
       process.env.ARC_DEPLOYER_PRIVATE_KEY ||
       process.env.PRIVATE_KEY
   );
-}
-
-/**
- * Opportunistic 24/7 driver for serverless deploys.
- *
- * Vercel Hobby cron is ~daily, so the cycle is otherwise driven by an external
- * pinger. This hook also runs the cycle in the background on site traffic
- * (chart polls /api/demo-data every second), throttled across instances via
- * durable KV so concurrent requests do not stampede. Zero-traffic periods still
- * need the external pinger — serverless cannot wake itself.
- */
-/**
- * Traffic-kick throttle. This is pure latency overhead: a round is resolvable the moment
- * observationEnd passes and the end print exists, but nothing resolves it until the next
- * cycle run. At 50s it dominated the wait a user actually feels — the entry window and the
- * observation window are the product, this is not.
- *
- * Safe to lower: runMarketCycleOnce holds a 90s distributed lock ("market-cycle") plus a
- * per-instance `running` flag, so extra kicks return skipped:"distributed-lock" instead of
- * overlapping. The cost of a smaller value is invocation + RPC volume while someone is on
- * the site, not correctness. Zero-traffic periods still depend on the external pinger.
- */
-const KICK_MIN_INTERVAL_MS = (() => {
-  const parsed = Number(process.env.MARKET_CYCLE_KICK_MIN_MS ?? "12000");
-  if (!Number.isFinite(parsed)) return 12_000;
-  return Math.min(120_000, Math.max(5_000, Math.floor(parsed)));
-})();
-let localLastKickAt = 0;
-
-export async function maybeRunMarketCycleInBackground(): Promise<void> {
-  if (!onchainEnabled() || !hasResolverKey()) return;
-  if (process.env.MARKET_CYCLE_ON_TRAFFIC === "0") return;
-
-  const now = Date.now();
-  // Cheap per-instance gate first (no KV round-trip on every 1s poll).
-  if (now - localLastKickAt < KICK_MIN_INTERVAL_MS) return;
-  localLastKickAt = now;
-
-  try {
-    const { NamespaceStore } = await import("./persistentStore.js");
-    const store = new NamespaceStore<{ at: number }>("market-cycle-kick");
-    const last = await store.get("lastKickAt");
-    if (last && now - last.at < KICK_MIN_INTERVAL_MS) return;
-    await store.set("lastKickAt", { at: now });
-  } catch {
-    // KV unavailable — fall through with the per-instance gate only.
-  }
-
-  try {
-    const result = await runMarketCycleOnce();
-    if (result.created.length || result.resolved.length) {
-      console.log(
-        `[market-cycle:on-traffic] created=${result.created.length} resolved=${result.resolved.length}`
-      );
-    }
-  } catch (error) {
-    console.error("[market-cycle:on-traffic]", error);
-  }
 }
 
 function isReferenceRole(role?: string, category?: string, question?: string): boolean {
@@ -567,6 +512,6 @@ function saveCycleState(state: CycleState): void {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(state, null, 2), "utf8");
   } catch {
-    // non-fatal on serverless
+    // non-fatal for the worker
   }
 }

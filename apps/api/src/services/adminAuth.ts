@@ -7,7 +7,7 @@
  *   `adminSecret` in the JSON body or `?secret=` / `?admin_secret=` query param.
  * - Nothing configured:
  *   - local/dev → endpoints stay open with a one-time loud warning
- *   - Vercel / NODE_ENV=production → endpoints stay CLOSED (fail closed)
+ *   - NODE_ENV=production → endpoints stay CLOSED (fail closed)
  */
 import { timingSafeEqual } from "node:crypto";
 
@@ -19,11 +19,7 @@ function expectedAdminSecret(): string {
 
 /** Shared / production-like hosts must not leave admin open without a secret. */
 function isSharedRuntime(): boolean {
-  return Boolean(
-    process.env.VERCEL ||
-      process.env.AWS_LAMBDA_FUNCTION_NAME ||
-      process.env.NODE_ENV === "production"
-  );
+  return process.env.NODE_ENV === "production";
 }
 
 export function adminSecretConfigured(): boolean {

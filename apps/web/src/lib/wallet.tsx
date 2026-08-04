@@ -150,7 +150,7 @@ type WalletContextValue = {
   sessionToken: string | null;
   /** MetaMask / injected */
   connect: () => Promise<`0x${string}` | null>;
-  /** Step 1: request 6-digit email OTP (returns otpToken for Vercel multi-instance verify). */
+  /** Step 1: request 6-digit email OTP (returns otpToken for multi-instance verification). */
   requestEmailOtp: (
     email: string
   ) => Promise<{ email: string; message: string; otpToken: string } | null>;
@@ -421,7 +421,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setError(null);
     setConnecting(true);
     try {
-      // Empty base = same-origin unified API (Vercel) — valid
+      // Empty base remains valid for local same-origin development
       const response = await fetch(apiUrl("/api/wallet/session/request-otp"), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -437,7 +437,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (!response.ok) throw new Error(payload.error || `OTP HTTP ${response.status}`);
       if (!payload.email) throw new Error("Invalid OTP response.");
       if (!payload.otpToken) throw new Error("Server did not return otpToken — redeploy required.");
-      // Persist across menu close / re-render / multi-instance verify (Vercel).
+      // Persist across menu close / re-render / multi-instance verification.
       // Server also sets HttpOnly cookie as backup.
       persistOtpChallenge(payload.email, payload.otpToken);
       return {
@@ -724,7 +724,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!address) return;
     void refreshBalance(address);
-    const interval = window.setInterval(() => void refreshBalance(address), 15_000);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refreshBalance(address);
+    }, 60_000);
     return () => window.clearInterval(interval);
   }, [address, refreshBalance]);
 

@@ -73,10 +73,12 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
     return href;
   }, [quickTradeHref, router]);
 
-  // Background cache — every 8s (not on critical path of click)
+  // Background cache — the click path always revalidates, so once per minute is enough.
   useEffect(() => {
     void resolveQuickHref();
-    const id = window.setInterval(() => void resolveQuickHref(), 8_000);
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void resolveQuickHref();
+    }, 60_000);
     return () => window.clearInterval(id);
   }, [resolveQuickHref]);
 

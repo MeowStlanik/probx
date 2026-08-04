@@ -1,5 +1,5 @@
 // Aliased: a local `createHash` (a tx hash) already exists further down this file.
-import { createHash as sha256 } from "node:crypto";
+import { createHash as sha256, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,9 +19,10 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import type { LpSnapshot, Market, MarketStatus, Outcome, PriceQuote, Ticket } from "../db/schema.js";
 import { runtimeFile } from "../runtimePaths.js";
-/** Bundled with the API so Vercel serverless always has Arc addresses (fs paths often miss). */
+/** Bundled with the API so deployment paths cannot hide the Arc addresses. */
 import bundledArcDeployment from "../config/arc-deployment.json" with { type: "json" };
 import { waitSuccessfulReceipt } from "./txReceipt.js";
+import { acquireLock, NamespaceStore, releaseLock } from "./persistentStore.js";
 
 interface DemoMarketDeployment {
   id?: string;
@@ -36,6 +37,12 @@ type MarketUiState = {
   hidden: string[];
   pinned?: string[];
 };
+
+
+const marketOriginStore = new NamespaceStore<{
+  fromBlock: string;
+  createdAt: string;
+}>("market-origin-v1");
 
 const marketUiStatePath = runtimeFile("market-ui-state.json");
 const initialMarketUiState = loadMarketUiState();
@@ -300,9 +307,9 @@ export type AggregateMarketStats = {
 
 let aggregateStatsCache: AggregateMarketStats | null = null;
 // Aggregate stats are a headline number (total volume / tickets / resolved), not a
-// live feed: they move on the order of minutes, while the UI polls /api/markets every
-// 1–2s. At 30s this recomputed twice a minute, and every recompute is a full chunked
-// eth_getLogs sweep over ARC_RECENT_SCAN_BLOCKS — the single largest RPC cost in the
+// live feed: they move on the order of minutes. Recomputing every market cycle would
+// still launch a full chunked eth_getLogs sweep over ARC_RECENT_SCAN_BLOCKS — the
+// single largest RPC cost in the
 // app. Ten minutes keeps the number honest and cuts that sweep by ~20x.
 const AGGREGATE_STATS_FRESH_MS = (() => {
   const parsed = Number(process.env.AGGREGATE_STATS_FRESH_MS ?? "600000");
@@ -331,6 +338,18 @@ export async function saveAggregateStatsFromMarkets(markets: Market[]): Promise<
     totalVolume += m.volume || 0;
     totalTickets += m.ticketCount || 0;
     if (m.status === "RESOLVED") totalResolved++;
+  }
+
+  const now = Date.now();
+  const aggregateFresh =
+    aggregateStatsCache && now - aggregateStatsCacheAt < AGGREGATE_STATS_FRESH_MS;
+  if (aggregateFresh) {
+    // The market cycle runs every ~20s. Reusing the ten-minute engine total avoids
+    // a 250k-block chunked eth_getLogs sweep on every cycle.
+    return {
+      ...aggregateStatsCache!,
+      totalResolved: Math.max(aggregateStatsCache!.totalResolved, totalResolved)
+    };
   }
 
   // Prefer one chunked engine-wide log scan — accurate even when per-market
@@ -434,26 +453,263 @@ export async function getAggregateStats(): Promise<AggregateMarketStats | null> 
   }
 }
 
+type OnchainMarketListCache = {
+  at: number;
+  all: Market[];
+};
+
+let onchainMarketListCache: OnchainMarketListCache | null = null;
+let onchainMarketListInflight: Promise<Market[]> | null = null;
+let publicActiveRefreshAt = 0;
+let publicActiveRefreshInflight: Promise<void> | null = null;
+
+/**
+ * Full market reads are expensive: each market needs ~10 eth_call plus a log query.
+ * All HTTP routes and workers share this cache. Market times are immutable, so workers
+ * can safely decide when to snapshot/resolve from cached timestamps; successful writes
+ * patch the cached market directly instead of forcing another full factory scan.
+ */
+function onchainMarketListCacheMs(): number {
+  const configured = Number(process.env.RPC_MARKET_CACHE_MS ?? 300_000);
+  if (!Number.isFinite(configured)) return 300_000;
+  return Math.min(10 * 60_000, Math.max(30_000, Math.floor(configured)));
+}
+
+
+function publicActiveMarketCacheMs(): number {
+  const configured = Number(process.env.RPC_PUBLIC_MARKET_CACHE_MS ?? 60_000);
+  if (!Number.isFinite(configured)) return 60_000;
+  return Math.min(2 * 60_000, Math.max(10_000, Math.floor(configured)));
+}
+
+function marketCacheKey(market: Pick<Market, "id" | "contractAddress">): string {
+  return String(market.contractAddress || market.id).trim().toLowerCase();
+}
+
+function rememberOnchainMarket(market: Market): void {
+  if (!onchainMarketListCache) {
+    onchainMarketListCache = { at: Date.now(), all: [market] };
+    return;
+  }
+  const key = marketCacheKey(market);
+  const next = onchainMarketListCache.all.filter((item) => marketCacheKey(item) !== key);
+  next.push(market);
+  onchainMarketListCache = {
+    // Keep the last full-refresh timestamp. Local patches must not postpone the
+    // periodic reconciliation forever when markets are created every few minutes.
+    at: onchainMarketListCache.at,
+    all: next.sort(compareDemoMarkets)
+  };
+}
+
+function visibleCachedMarkets(all: Market[]): Market[] {
+  return all.filter((market) => {
+    const raw = market.contractAddress || market.id;
+    try {
+      return !hiddenMarketAddresses.has(getAddress(raw).toLowerCase());
+    } catch {
+      return true;
+    }
+  });
+}
+
+function applyTimeDerivedStatuses(all: Market[]): Market[] {
+  const now = Date.now();
+  return all.map((market) => {
+    if (market.status !== "OPEN") return market;
+    const lockAt = Date.parse(market.lockTime || "");
+    if (!Number.isFinite(lockAt) || now < lockAt) return market;
+    return { ...market, status: "LOCKED" as MarketStatus };
+  });
+}
+
+async function refreshMutableOnchainMarket(market: Market): Promise<Market> {
+  const address = getAddress(market.contractAddress || market.id);
+  const [yesPrice, noPrice, status, winningOutcome] = await Promise.all([
+    publicClient.readContract({ address, abi: marketAbi, functionName: "yesPrice" }),
+    publicClient.readContract({ address, abi: marketAbi, functionName: "noPrice" }),
+    publicClient.readContract({ address, abi: marketAbi, functionName: "status" }),
+    publicClient.readContract({ address, abi: marketAbi, functionName: "winningOutcome" })
+  ]);
+  const statusValue = contractStatus(Number(status));
+  const lockAt = Date.parse(market.lockTime || "");
+  const displayedStatus =
+    statusValue === "OPEN" && Number.isFinite(lockAt) && Date.now() >= lockAt
+      ? "LOCKED"
+      : statusValue;
+  return {
+    ...market,
+    status: displayedStatus,
+    yesPrice: Number(yesPrice) / 1_000_000,
+    noPrice: Number(noPrice) / 1_000_000,
+    ticketYesPrice: Number(yesPrice) / 1_000_000,
+    ticketNoPrice: Number(noPrice) / 1_000_000,
+    winningOutcome:
+      Number(winningOutcome) === 1 ? "YES" : Number(winningOutcome) === 2 ? "NO" : undefined
+  };
+}
+
+async function refreshPublicActiveMarkets(all: Market[]): Promise<void> {
+  const now = Date.now();
+  if (now - publicActiveRefreshAt < publicActiveMarketCacheMs()) return;
+  if (publicActiveRefreshInflight) return publicActiveRefreshInflight;
+
+  const candidates = collapseAutoCycleMarkets(
+    visibleCachedMarkets(all).filter(
+      (market) =>
+        market.status === "OPEN" || market.status === "LOCKED" || market.status === "OBSERVATION"
+    )
+  );
+
+  publicActiveRefreshInflight = (async () => {
+    await Promise.all(
+      candidates.map(async (market) => {
+        const address = market.contractAddress || market.id;
+        try {
+          const refreshed = await refreshMutableOnchainMarket(market);
+          const stats = await Promise.race([
+            marketTradeStats(getAddress(address)),
+            new Promise<ReturnType<typeof emptyMarketTradeStats>>((resolve) =>
+              setTimeout(() => resolve(emptyMarketTradeStats()), 2_000)
+            )
+          ]);
+          refreshed.volume = stats.volume;
+          refreshed.ticketCount = stats.ticketCount;
+          refreshed.yesVolume = stats.yesVolume;
+          refreshed.noVolume = stats.noVolume;
+          rememberOnchainMarket(refreshed);
+        } catch {
+          // Public desk can use the last good cached card.
+        }
+      })
+    );
+    publicActiveRefreshAt = Date.now();
+  })().finally(() => {
+    publicActiveRefreshInflight = null;
+  });
+
+  return publicActiveRefreshInflight;
+}
+
+async function loadAllOnchainMarkets(): Promise<Market[]> {
+  // Include hidden so the cycle can continue settlement, while the public projection
+  // below filters them without another factory/RPC read.
+  const known = await listKnownMarkets({ includeHidden: true });
+  const cachedByAddress = new Map(
+    (onchainMarketListCache?.all ?? []).map((market) => [marketCacheKey(market), market] as const)
+  );
+  const markets = await Promise.all(
+    known.map(async (item) => {
+      const key = getAddress(item.market).toLowerCase();
+      const cached = cachedByAddress.get(key);
+      if (!cached) return readOnchainMarket(item, { includeTradeStats: false });
+      // Immutable metadata (question/times/rules) never needs another eth_call.
+      // Final markets cannot change again, while active markets need only four
+      // mutable fields refreshed.
+      if (
+        cached.status === "RESOLVED" ||
+        cached.status === "CANCELLED" ||
+        cached.status === "ARCHIVED"
+      ) {
+        return cached;
+      }
+      return refreshMutableOnchainMarket(cached);
+    })
+  );
+  const all = markets.filter((market): market is Market => Boolean(market)).sort(compareDemoMarkets);
+
+  // Trade-volume scans are much more expensive than fixed metadata reads because
+  // eth_getLogs is chunked. Enrich only the two currently displayed rounds.
+  const activeForDesk = collapseAutoCycleMarkets(
+    visibleCachedMarkets(all).filter(
+      (market) =>
+        market.status === "OPEN" || market.status === "LOCKED" || market.status === "OBSERVATION"
+    )
+  );
+  await Promise.all(
+    activeForDesk.map(async (market) => {
+      const address = market.contractAddress || market.id;
+      try {
+        const stats = await Promise.race([
+          marketTradeStats(getAddress(address)),
+          new Promise<ReturnType<typeof emptyMarketTradeStats>>((resolve) =>
+            setTimeout(() => resolve(emptyMarketTradeStats()), 2_000)
+          )
+        ]);
+        market.volume = stats.volume;
+        market.ticketCount = stats.ticketCount;
+        market.yesVolume = stats.yesVolume;
+        market.noVolume = stats.noVolume;
+      } catch {
+        // Metadata is still useful to workers/UI when public getLogs flakes.
+      }
+    })
+  );
+
+  return all;
+}
+
 export async function listOnchainMarkets(options: {
   /** Include finished markets for resolve/hide (cron). UI list hides RESOLVED without tickets. */
   forCycle?: boolean;
+  /** Force a chain refresh for explicit diagnostics only. */
+  forceRefresh?: boolean;
 } = {}): Promise<Market[]> {
   assertDeployment();
-  const known = await listKnownMarkets({ includeHidden: Boolean(options.forCycle) });
-  // Cycle / aggregate stats need real volume — allow longer log scans than the public desk.
-  const tradeStatsTimeoutMs = options.forCycle ? 8_000 : 1_500;
-  const markets = await Promise.all(
-    known.map((item) => readOnchainMarket(item, { tradeStatsTimeoutMs }))
-  );
-  const all = markets.filter((market): market is Market => Boolean(market)).sort(compareDemoMarkets);
+  const now = Date.now();
+  const cacheFresh =
+    onchainMarketListCache &&
+    now - onchainMarketListCache.at < onchainMarketListCacheMs();
+
+  let all: Market[];
+  if (!options.forceRefresh && cacheFresh) {
+    all = onchainMarketListCache!.all;
+  } else {
+    if (!onchainMarketListInflight) {
+      onchainMarketListInflight = loadAllOnchainMarkets()
+        .then((loaded) => {
+          const refreshedAt = Date.now();
+          onchainMarketListCache = { at: refreshedAt, all: loaded };
+          publicActiveRefreshAt = refreshedAt;
+          return loaded;
+        })
+        .finally(() => {
+          onchainMarketListInflight = null;
+        });
+    }
+    try {
+      all = await onchainMarketListInflight;
+    } catch (error) {
+      // A stale schedule is safer and far cheaper than repeatedly hammering a flaky
+      // public RPC. Direct resolve/create writes still verify their own receipts.
+      if (onchainMarketListCache) {
+        console.warn(
+          "[rpc-cache] market refresh failed; serving stale schedule:",
+          error instanceof Error ? error.message : error
+        );
+        all = onchainMarketListCache.all;
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  all = applyTimeDerivedStatuses(all);
+  if (onchainMarketListCache) onchainMarketListCache = { ...onchainMarketListCache, all };
+
   if (options.forCycle) return all;
+
+  // Refresh only the two visible contracts for live odds/status. This runs only
+  // when the public API is requested; idle Railway deployments spend no RPC here.
+  await refreshPublicActiveMarkets(all);
+  all = onchainMarketListCache?.all ?? all;
 
   // Public markets desk:
   // - only open / locked / observation (never RESOLVED/CANCELLED)
   // - BTC + London weather only (no demo "GREEN signal" / admin leftovers)
   // - one freshest market each so the grid stays 2 cards centered
   // Portfolio still loads tickets by address for claims.
-  const live = all.filter(
+  const live = visibleCachedMarkets(all).filter(
     (market) =>
       market.status === "OPEN" || market.status === "LOCKED" || market.status === "OBSERVATION"
   );
@@ -489,7 +745,10 @@ function collapseAutoCycleMarkets(markets: Market[]): Market[] {
   return [...pickOne(btc), ...pickOne(weather)];
 }
 
-export async function getOnchainMarket(id: string): Promise<Market | undefined> {
+export async function getOnchainMarket(
+  id: string,
+  options: { includeTradeStats?: boolean } = {}
+): Promise<Market | undefined> {
   assertDeployment();
   // Prefer direct address read (works for finished/hidden rounds users still open from Portfolio).
   try {
@@ -499,20 +758,27 @@ export async function getOnchainMarket(id: string): Promise<Market | undefined> 
       label: "On-chain market",
       role: "legacy",
       market: asAddr
-    });
-    if (market) return market;
+    }, { includeTradeStats: options.includeTradeStats });
+    if (market) {
+      rememberOnchainMarket(market);
+      return market;
+    }
   } catch {
     // id may be a short demo slug
   }
   const item = findDemoMarket(id);
   if (!item) return undefined;
   // Include hidden markets when fetched by id (claim / portfolio deep-link).
-  return readOnchainMarket(item);
+  const market = await readOnchainMarket(item, {
+    includeTradeStats: options.includeTradeStats
+  });
+  if (market) rememberOnchainMarket(market);
+  return market;
 }
 
 async function readOnchainMarket(
   item: DemoMarketDeployment,
-  options: { tradeStatsTimeoutMs?: number } = {}
+  options: { tradeStatsTimeoutMs?: number; includeTradeStats?: boolean } = {}
 ): Promise<Market | undefined> {
   const market = addr(item.market);
   const tradeStatsTimeoutMs = options.tradeStatsTimeoutMs ?? 1_500;
@@ -541,12 +807,15 @@ async function readOnchainMarket(
   ]);
   // TicketBought volume for desk stats; live odds come from on-chain yesPrice/noPrice.
   // Cap log scan so a single market detail never stalls navigation on a slow RPC.
-  const tradeStats = await Promise.race([
-    marketTradeStats(market).catch(() => emptyMarketTradeStats()),
-    new Promise<ReturnType<typeof emptyMarketTradeStats>>((resolve) =>
-      setTimeout(() => resolve(emptyMarketTradeStats()), tradeStatsTimeoutMs)
-    )
-  ]);
+  const tradeStats =
+    options.includeTradeStats === false
+      ? emptyMarketTradeStats()
+      : await Promise.race([
+          marketTradeStats(market).catch(() => emptyMarketTradeStats()),
+          new Promise<ReturnType<typeof emptyMarketTradeStats>>((resolve) =>
+            setTimeout(() => resolve(emptyMarketTradeStats()), tradeStatsTimeoutMs)
+          )
+        ]);
   const role = classifyDemoMarket(item, question);
   const liveYes = Number(yesPrice) / 1_000_000;
   const liveNo = Number(noPrice) / 1_000_000;
@@ -627,8 +896,20 @@ async function marketTradeStats(market: `0x${string}`): Promise<{
   yesVolume: number;
   noVolume: number;
 }> {
-  // Always chunk — Arc public RPC rejects eth_getLogs ranges > 10_000 blocks.
-  const logs = await ticketBoughtLogsForMarket(market, true);
+  // Public card stats only need the current short-lived round. The generic recent
+  // ticket window is 250k blocks for portfolio recovery and would require dozens of
+  // getLogs chunks per card. Keep this dedicated window small and settlement-safe
+  // scans separate.
+  const latestBlock = await publicClient.getBlockNumber();
+  const configured = parseBlockNumber(process.env.ARC_MARKET_STATS_SCAN_BLOCKS ?? "8000");
+  const windowBlocks = configured > 0n ? configured : 8_000n;
+  const deploymentFloor = configuredTicketFromBlock();
+  const recentFloor = latestBlock > windowBlocks ? latestBlock - windowBlocks : 0n;
+  const fromBlock = deploymentFloor > recentFloor ? deploymentFloor : recentFloor;
+  const logs =
+    fromBlock <= latestBlock
+      ? await ticketBoughtLogsChunked({ market }, fromBlock, latestBlock)
+      : [];
   let totalRisk = 0n;
   let yesRisk = 0n;
   let noRisk = 0n;
@@ -730,6 +1011,11 @@ async function ticketBoughtLogsForMarket(
 
 async function ticketBoughtLogsForBuyer(buyer: `0x${string}`, fromBlock: bigint, toBlock: bigint) {
   const args = { buyer };
+  // Arc rejects wide ranges. Do not spend one guaranteed-failing RPC call before
+  // falling back to chunks on a first Portfolio load.
+  if (toBlock - fromBlock > 9_000n) {
+    return ticketBoughtLogsChunked(args, fromBlock, toBlock);
+  }
   try {
     return await publicClient.getLogs({
       address: addr(deployment.microBoostEngine),
@@ -821,50 +1107,56 @@ async function ticketMarketSnapshot(marketAddress: string): Promise<{
 type TicketCacheEntry = {
   scannedToBlock: bigint;
   tickets: Map<string, Ticket>;
+  refreshedAt: number;
 };
 
 const ticketCache = new Map<string, TicketCacheEntry>();
+
+function ticketCacheFreshMs(): number {
+  const configured = Number(process.env.RPC_TICKET_CACHE_MS ?? 60_000);
+  if (!Number.isFinite(configured)) return 60_000;
+  return Math.min(5 * 60_000, Math.max(15_000, Math.floor(configured)));
+}
 
 export async function ticketsForUserOnchain(user: string): Promise<Ticket[]> {
   assertDeployment();
   const buyer = addr(user);
   const cacheKey = buyer.toLowerCase();
+  const existing = ticketCache.get(cacheKey);
+  if (existing && Date.now() - existing.refreshedAt < ticketCacheFreshMs()) {
+    return [...existing.tickets.values()].sort(compareTicketIdsDesc);
+  }
+
   // getBlockNumber can flake on a single RPC; fall back to cache / empty rather than 500.
   let latestBlock: bigint;
   try {
     latestBlock = await publicClient.getBlockNumber();
   } catch (error) {
-    const cached = ticketCache.get(cacheKey);
-    if (cached?.tickets.size) {
-      return [...cached.tickets.values()].sort(compareTicketIdsDesc);
+    if (existing?.tickets.size) {
+      return [...existing.tickets.values()].sort(compareTicketIdsDesc);
     }
     throw error;
   }
-  const existing = ticketCache.get(cacheKey);
   const fromBlock = existing ? existing.scannedToBlock + 1n : recentTicketScanFromBlock(latestBlock);
+  const logs = fromBlock <= latestBlock
+    ? await ticketBoughtLogsForBuyer(buyer, fromBlock, latestBlock)
+    : [];
 
-  if (!existing || fromBlock <= latestBlock) {
-    const logs = fromBlock <= latestBlock
-      ? await ticketBoughtLogsForBuyer(buyer, fromBlock, latestBlock)
-      : [];
-
-    const tickets = existing?.tickets ?? new Map<string, Ticket>();
-    for (const log of logs) {
-      try {
-        const ticket = await ticketFromBoughtLog(log.args.ticketId, tickets);
-        if (ticket) tickets.set(ticket.id, ticket);
-      } catch {
-        // Skip a bad log — one pruned/failed eth_call must not blank the portfolio.
-      }
+  const tickets = existing?.tickets ?? new Map<string, Ticket>();
+  for (const log of logs) {
+    try {
+      const ticket = await ticketFromBoughtLog(log.args.ticketId, tickets);
+      if (ticket) tickets.set(ticket.id, ticket);
+    } catch {
+      // Skip a bad log — one pruned/failed eth_call must not blank the portfolio.
     }
-    if (tickets.size > 0) {
-      await refreshCachedTicketPositions(tickets);
-    }
-    ticketCache.set(cacheKey, { scannedToBlock: latestBlock, tickets });
   }
+  if (tickets.size > 0) {
+    await refreshCachedTicketPositions(tickets);
+  }
+  ticketCache.set(cacheKey, { scannedToBlock: latestBlock, tickets, refreshedAt: Date.now() });
 
-  const current = ticketCache.get(cacheKey);
-  return [...(current?.tickets.values() ?? [])].sort(compareTicketIdsDesc);
+  return [...tickets.values()].sort(compareTicketIdsDesc);
 }
 
 async function ticketFromBoughtLog(ticketId: bigint | undefined, tickets: Map<string, Ticket>): Promise<Ticket | undefined> {
@@ -872,11 +1164,54 @@ async function ticketFromBoughtLog(ticketId: bigint | undefined, tickets: Map<st
   return ticketFromChainId(ticketId, tickets.get(ticketKey(ticketId))?.createdAt);
 }
 
+function cachedMarketForTicket(ticket: Ticket): Market | undefined {
+  if (!onchainMarketListCache) return undefined;
+  const key = String(ticket.marketId || "").toLowerCase();
+  return onchainMarketListCache.all.find((market) => {
+    const address = String(market.contractAddress || "").toLowerCase();
+    return market.id.toLowerCase() === key || address === key;
+  });
+}
+
+function cachedTicketMarketSnapshot(marketAddress: string): {
+  question: string;
+  status: MarketStatus;
+  winningOutcome?: Outcome;
+} | undefined {
+  if (!onchainMarketListCache) return undefined;
+  const key = marketAddress.toLowerCase();
+  const market = onchainMarketListCache.all.find(
+    (item) => String(item.contractAddress || item.id).toLowerCase() === key
+  );
+  if (!market) return undefined;
+  return {
+    question: market.question,
+    status: market.status,
+    winningOutcome: market.winningOutcome
+  };
+}
+
 async function refreshCachedTicketPositions(tickets: Map<string, Ticket>): Promise<void> {
+  const marketSnapshots = new Map<
+    string,
+    Promise<{ question: string; status: MarketStatus; winningOutcome?: Outcome }>
+  >();
   await Promise.all(
     [...tickets.keys()].map(async (id) => {
+      const previous = tickets.get(id);
+      if (!previous || previous.status !== "OPEN") return;
+      const cachedMarket = cachedMarketForTicket(previous);
+      // An OPEN ticket cannot change before its market becomes final. The shared
+      // market-cycle cache already knows active rounds, so skip a pointless ticket RPC.
+      if (cachedMarket && cachedMarket.status !== "RESOLVED" && cachedMarket.status !== "CANCELLED") {
+        return;
+      }
       try {
-        const ticket = await ticketFromChainId(ticketIdNumber(id), tickets.get(id)?.createdAt);
+        const ticket = await ticketFromChainId(
+          ticketIdNumber(id),
+          previous.createdAt,
+          marketSnapshots
+        );
         if (ticket) tickets.set(id, ticket);
       } catch {
         // Keep the last known ticket snapshot if a live refresh fails.
@@ -885,7 +1220,14 @@ async function refreshCachedTicketPositions(tickets: Map<string, Ticket>): Promi
   );
 }
 
-async function ticketFromChainId(ticketId: bigint, createdAt = new Date().toISOString()): Promise<Ticket | undefined> {
+async function ticketFromChainId(
+  ticketId: bigint,
+  createdAt = new Date().toISOString(),
+  marketSnapshots?: Map<
+    string,
+    Promise<{ question: string; status: MarketStatus; winningOutcome?: Outcome }>
+  >
+): Promise<Ticket | undefined> {
   if (ticketId <= 0n) return undefined;
   const position = await publicClient.readContract({
     address: addr(deployment.positionTicket),
@@ -893,7 +1235,16 @@ async function ticketFromChainId(ticketId: bigint, createdAt = new Date().toISOS
     functionName: "getTicket",
     args: [ticketId]
   });
-  const marketSnapshot = await ticketMarketSnapshot(position.market);
+  const marketKey = position.market.toLowerCase();
+  let marketSnapshotPromise = marketSnapshots?.get(marketKey);
+  if (!marketSnapshotPromise) {
+    const cached = cachedTicketMarketSnapshot(position.market);
+    marketSnapshotPromise = cached
+      ? Promise.resolve(cached)
+      : ticketMarketSnapshot(position.market);
+    marketSnapshots?.set(marketKey, marketSnapshotPromise);
+  }
+  const marketSnapshot = await marketSnapshotPromise;
   const ticketStatusValue = ticketStatus(Number(position.status));
   const winningOutcome = marketSnapshot.winningOutcome;
   const ticketOutcome = position.outcome === 1 ? "YES" : "NO";
@@ -1038,7 +1389,7 @@ export async function resolveMarketOnchain(id: string, outcome: Outcome) {
     args: [outcome === "YES" ? 1 : 2]
   });
   const receipt = await waitSuccessfulReceipt(publicClient, hash);
-  return { hash, status: receipt.status, market: await getOnchainMarket(id) };
+  return { hash, status: receipt.status, market: await getOnchainMarket(id, { includeTradeStats: false }) };
 }
 
 /**
@@ -1062,13 +1413,18 @@ function simpleSourceHash(parts: {
  * Capture feed samples for active observation windows.
  * End samples only use ticks with observedAt >= observationEnd.
  */
-export async function captureObservationSnapshots(): Promise<{ updated: number }> {
+export async function captureObservationSnapshots(): Promise<{
+  updated: number;
+  skipped?: string;
+}> {
   assertDeployment();
   const { requireOracleKv } = await import("./rawTicks.js");
   try {
     requireOracleKv();
-  } catch {
-    // Local dev without KV: still capture to file store.
+  } catch (error) {
+    // Local development may use the file store. Production must never collect
+    // payout evidence in process-local files because a restart would split history.
+    if (process.env.NODE_ENV === "production") throw error;
   }
 
   const {
@@ -1080,28 +1436,106 @@ export async function captureObservationSnapshots(): Promise<{ updated: number }
   const { getRawTicks, nearestRawTick, firstTickAtOrAfter, pushRawTick } = await import(
     "./rawTicks.js"
   );
-  const markets = await listOnchainMarkets({ forCycle: true });
-  // Worker-only feed ingest (not the public demo-data read path).
-  const data = await getDemoReferenceData({ ingestOracleTicks: true });
-  const now = Date.now();
-  let updated = 0;
 
-  // BTC: always record fresh spot with provider time.
-  if (Number.isFinite(data.btcUsd?.price)) {
-    const observedAt = Date.parse(data.btcUsd!.updatedAt) || now;
-    const price = data.btcUsd!.price as number;
-    const src = data.btcUsd!.source ?? "coinbase";
+  // This is normally a memory-cache hit. A full factory + market refresh is shared
+  // by every route/worker and happens only once per RPC_MARKET_CACHE_MS.
+  const markets = await listOnchainMarkets({ forCycle: true });
+  const now = Date.now();
+  const btcMaxDist = snapshotMaxDistanceMs("btc");
+  const weatherMaxDist = snapshotMaxDistanceMs("weather");
+
+  type Candidate = {
+    market: Market;
+    role: "btc" | "weather";
+    obsStartMs: number;
+    obsEndMs: number;
+  };
+
+  const candidates: Candidate[] = [];
+  for (const market of markets) {
+    const status = String(market.status || "").toUpperCase();
+    if (!["OPEN", "LOCKED", "OBSERVATION", "OBSERVE"].includes(status)) continue;
+
+    const obsStartMs = Date.parse(market.observationStart || "") || 0;
+    const obsEndMs = Date.parse(market.observationEnd || "") || 0;
+    if (!obsStartMs || !obsEndMs) continue;
+
+    const q = (market.question || "").toLowerCase();
+    const isBtc =
+      market.demoRole === "btc_price" ||
+      market.category === "crypto-candle" ||
+      /\bbtc\b/.test(q) ||
+      q.includes("bitcoin");
+    const isWeather =
+      market.demoRole === "london_weather" ||
+      market.category === "weather" ||
+      q.includes("london") ||
+      q.includes("temp") ||
+      q.includes("weather");
+
+    if (isBtc) {
+      // Poll only near the two immutable boundaries. Five-second sampling gives
+      // several chances inside the accepted window without fetching BTC all day.
+      const nearStart =
+        now >= obsStartMs - 20_000 && now <= obsStartMs + btcMaxDist;
+      const nearEnd =
+        now >= obsEndMs - 2_000 && now <= obsEndMs + btcMaxDist;
+      if (nearStart || nearEnd) {
+        candidates.push({ market, role: "btc", obsStartMs, obsEndMs });
+      }
+    } else if (isWeather) {
+      // Weather prints on a 15-minute grid. Begin shortly before each boundary;
+      // the provider timestamp may itself be older and is retained as provenance.
+      const nearStart =
+        now >= obsStartMs - 2 * 60_000 && now <= obsStartMs + weatherMaxDist;
+      const nearEnd =
+        now >= obsEndMs - 2 * 60_000 && now <= obsEndMs + weatherMaxDist;
+      if (nearStart || nearEnd) {
+        candidates.push({ market, role: "weather", obsStartMs, obsEndMs });
+      }
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { updated: 0, skipped: "no-active-boundary" };
+  }
+
+  const needsBtc = candidates.some((item) => item.role === "btc");
+  const needsWeather = candidates.some((item) => item.role === "weather");
+  // Oracle capture needs only current prints, never the chart-history endpoints.
+  const [btcResult, weatherResult] = await Promise.allSettled([
+    needsBtc ? fetchCachedBtcSpot() : Promise.resolve(undefined),
+    needsWeather ? fetchCachedWeather() : Promise.resolve(undefined)
+  ]);
+  const btcData = btcResult.status === "fulfilled" ? btcResult.value : undefined;
+  const weather =
+    weatherResult.status === "fulfilled"
+      ? (weatherResult.value as
+          | {
+              temperatureC?: number;
+              updatedAt?: string;
+              observedAt?: string;
+              source?: string;
+              isStale?: boolean;
+            }
+          | undefined)
+      : undefined;
+
+  // BTC: record a fresh provider-timestamped print.
+  if (needsBtc && btcData && Number.isFinite(btcData.price)) {
+    const observedAt = Date.parse(btcData.updatedAt) || now;
+    const price = btcData.price as number;
+    const src = btcData.source ?? "coinbase";
     await pushRawTick("btc", price, observedAt, {
       provider: src,
       receivedAt: now,
       sourceHash: simpleSourceHash({ feed: "btc", value: price, observedAt, provider: src })
     });
   }
+
   // Weather: never promote cached/stale readings into oracle ticks.
-  const weather = data.londonWeather as
-    | { temperatureC?: number; updatedAt?: string; observedAt?: string; source?: string; isStale?: boolean }
-    | undefined;
   if (
+    needsWeather &&
     weather &&
     Number.isFinite(weather.temperatureC) &&
     !weather.isStale &&
@@ -1122,42 +1556,22 @@ export async function captureObservationSnapshots(): Promise<{ updated: number }
     }
   }
 
-  const btcMaxDist = snapshotMaxDistanceMs("btc");
-  const weatherMaxDist = snapshotMaxDistanceMs("weather");
+  // Read each role's ZSET once, not once per market.
+  const [btcTicks, weatherTicks] = await Promise.all([
+    needsBtc ? getRawTicks("btc") : Promise.resolve([]),
+    needsWeather ? getRawTicks("weather") : Promise.resolve([])
+  ]);
 
-  for (const market of markets) {
-    const status = String(market.status || "").toUpperCase();
-    if (!["OPEN", "LOCKED", "OBSERVATION", "OBSERVE"].includes(status)) {
-      continue;
-    }
-
-    const obsStartMs = Date.parse(market.observationStart || "") || 0;
-    const obsEndMs = Date.parse(market.observationEnd || "") || 0;
-    if (!obsStartMs || !obsEndMs) continue;
-    if (now < obsStartMs - 40_000) continue;
-
-    const q = (market.question || "").toLowerCase();
-    const isBtc =
-      market.demoRole === "btc_price" ||
-      market.category === "crypto-candle" ||
-      /\bbtc\b/.test(q) ||
-      q.includes("bitcoin");
-    const isWeather =
-      market.demoRole === "london_weather" ||
-      market.category === "weather" ||
-      q.includes("london") ||
-      q.includes("temp") ||
-      q.includes("weather");
-
+  let updated = 0;
+  for (const candidate of candidates) {
+    const { market, role, obsStartMs, obsEndMs } = candidate;
     const mkt = market.contractAddress || market.id;
     if (!mkt) continue;
 
-    if (isBtc) {
-      const source = data.btcUsd?.source ?? "Coinbase spot";
-      const ticks = await getRawTicks("btc");
-      const open = nearestRawTick(ticks, obsStartMs, btcMaxDist);
-      // End: first tick at or after observationEnd only.
-      const close = firstTickAtOrAfter(ticks, obsEndMs, btcMaxDist);
+    if (role === "btc") {
+      const source = btcData?.source ?? "Coinbase spot";
+      const open = nearestRawTick(btcTicks, obsStartMs, btcMaxDist);
+      const close = firstTickAtOrAfter(btcTicks, obsEndMs, btcMaxDist);
       await applyBoundaryFromRawTicks({
         market: mkt,
         role: "btc",
@@ -1185,12 +1599,12 @@ export async function captureObservationSnapshots(): Promise<{ updated: number }
           : undefined,
         source
       });
-      if (Number.isFinite(data.btcUsd?.price)) {
-        const observedAt = Date.parse(data.btcUsd!.updatedAt) || now;
+      if (btcData && Number.isFinite(btcData.price)) {
+        const observedAt = Date.parse(btcData.updatedAt) || now;
         await recordObservationSample({
           market: mkt,
           role: "btc",
-          value: data.btcUsd!.price as number,
+          value: btcData.price as number,
           atMs: observedAt,
           obsStartMs,
           obsEndMs,
@@ -1204,45 +1618,63 @@ export async function captureObservationSnapshots(): Promise<{ updated: number }
         });
       }
       updated += 1;
-    } else if (isWeather) {
-      const source = weather?.source ?? "Open-Meteo";
-      const ticks = await getRawTicks("weather");
-      const open = nearestRawTick(ticks, obsStartMs, weatherMaxDist);
-      const close = firstTickAtOrAfter(ticks, obsEndMs, weatherMaxDist);
-      await applyBoundaryFromRawTicks({
-        market: mkt,
-        role: "weather",
-        obsStartMs,
-        obsEndMs,
-        open: open
-          ? {
-              value: open.value,
-              observedAt: open.at,
-              receivedAt: open.tick.receivedAt || undefined,
-              provider: open.tick.provider,
-              sourceHash: open.tick.sourceHash
-            }
-          : undefined,
-        close: close
-          ? {
-              value: close.value,
-              observedAt: close.at,
-              receivedAt: close.tick.receivedAt || undefined,
-              provider: close.tick.provider,
-              sourceHash: close.tick.sourceHash
-            }
-          : undefined,
-        source
-      });
-      updated += 1;
+      continue;
     }
+
+    const source = weather?.source ?? "Open-Meteo";
+    const open = nearestRawTick(weatherTicks, obsStartMs, weatherMaxDist);
+    const close = firstTickAtOrAfter(weatherTicks, obsEndMs, weatherMaxDist);
+    await applyBoundaryFromRawTicks({
+      market: mkt,
+      role: "weather",
+      obsStartMs,
+      obsEndMs,
+      open: open
+        ? {
+            value: open.value,
+            observedAt: open.at,
+            receivedAt: open.tick.receivedAt || undefined,
+            provider: open.tick.provider,
+            sourceHash: open.tick.sourceHash
+          }
+        : undefined,
+      close: close
+        ? {
+            value: close.value,
+            observedAt: close.at,
+            receivedAt: close.tick.receivedAt || undefined,
+            provider: close.tick.provider,
+            sourceHash: close.tick.sourceHash
+          }
+        : undefined,
+      source
+    });
+    updated += 1;
   }
+
   return { updated };
 }
 
 export async function resolveReferenceMarketOnchain(id: string) {
+  const token = randomBytes(8).toString("hex");
+  const lockKey = `market-resolve:${String(id).trim().toLowerCase()}`;
+  const gotLock = await acquireLock(lockKey, 90_000, token);
+  if (!gotLock) {
+    return {
+      deferred: true,
+      error: "Resolution already in progress for this market"
+    };
+  }
+  try {
+    return await resolveReferenceMarketOnchainUnlocked(id);
+  } finally {
+    await releaseLock(lockKey, token).catch(() => undefined);
+  }
+}
+
+async function resolveReferenceMarketOnchainUnlocked(id: string) {
   assertDeployment();
-  const market = await getOnchainMarket(id);
+  const market = await getOnchainMarket(id, { includeTradeStats: false });
   if (!market) return undefined;
 
   const obsStartMs = Date.parse(market.observationStart || "") || 0;
@@ -1286,20 +1718,19 @@ export async function resolveReferenceMarketOnchain(id: string) {
     requireOracleKv();
   } catch (e) {
     // Shared runtime without KV must fail closed for oracle.
-    if (process.env.VERCEL || process.env.NODE_ENV === "production") {
+    if (process.env.NODE_ENV === "production") {
       return { error: e instanceof Error ? e.message : "oracle KV required", market };
     }
   }
 
   const role = isBtc ? ("btc" as const) : ("weather" as const);
-  // Worker path: allow feed ingest for oracle ticks (public demo-data does not).
-  const data = await getDemoReferenceData({ ingestOracleTicks: true });
   const mkt = market.contractAddress || market.id;
   const maxDist = snapshotMaxDistanceMs(role);
   const graceMs = snapshotGraceMs(role);
-  const source = isBtc
-    ? data.btcUsd?.source ?? "Coinbase spot"
-    : data.londonWeather?.source ?? "Open-Meteo";
+  // captureObservationSnapshots() already fetched the current print when the market
+  // was inside a boundary window. Resolution uses durable raw ticks from Redis and
+  // must not refetch chart histories or another provider print.
+  const source = isBtc ? "Coinbase spot" : "Open-Meteo";
 
   const ticks = await getRawTicks(role);
   const open = nearestRawTick(ticks, obsStartMs, maxDist);
@@ -1367,7 +1798,7 @@ export async function resolveReferenceMarketOnchain(id: string) {
       error: ready.reason,
       cancelled: true,
       cancel,
-      market: await getOnchainMarket(id)
+      market: await getOnchainMarket(id, { includeTradeStats: false })
     };
   }
 
@@ -1403,7 +1834,7 @@ export async function resolveReferenceMarketOnchain(id: string) {
       return {
         ...result,
         error: `on-chain status/outcome mismatch after resolve (status=${statusNum}, win=${winNum})`,
-        market: await getOnchainMarket(id)
+        market: await getOnchainMarket(id, { includeTradeStats: false })
       };
     }
     await freezeObservationSnapshot({
@@ -1424,7 +1855,7 @@ export async function resolveReferenceMarketOnchain(id: string) {
     return {
       ...result,
       error: `resolve ok but freeze failed: ${freezeErr instanceof Error ? freezeErr.message : freezeErr}`,
-      market: await getOnchainMarket(id)
+      market: await getOnchainMarket(id, { includeTradeStats: false })
     };
   }
 
@@ -1456,7 +1887,7 @@ export async function cancelMarketOnchain(id: string, reason: string) {
     args: [reason]
   });
   const receipt = await waitSuccessfulReceipt(publicClient, hash);
-  return { hash, status: receipt.status, market: await getOnchainMarket(id), reason };
+  return { hash, status: receipt.status, market: await getOnchainMarket(id, { includeTradeStats: false }), reason };
 }
 
 /** Worth asking the chain whether anything is still open. */
@@ -1485,7 +1916,7 @@ export function settleRunIsComplete(input: {
 }
 
 /**
- * Settle open tickets for a market in chunks so serverless workers stay under timeout.
+ * Settle open tickets for a market in bounded chunks so worker passes stay responsive.
  * Pass `cursor` (ticket index into bought logs) to continue; response includes nextCursor.
  */
 export async function settleMarketTicketsOnchain(
@@ -1501,8 +1932,29 @@ export async function settleMarketTicketsOnchain(
     return { error: "Market must be resolved or cancelled before tickets can be settled." };
   }
 
-  // Full range: settlement must see every ticket ever bought on this market.
-  const logs = await ticketBoughtLogsForMarket(market, true, true);
+  // Settlement must see every ticket for this market. New markets persist their
+  // creation block, so the strict scan starts there instead of at the deployment
+  // block. Legacy markets fall back to the original full-range behaviour.
+  const origin = await marketOriginStore.get(market.toLowerCase()).catch(() => null);
+  const latestBlock = await publicClient.getBlockNumber();
+  let settlementFromBlock = configuredTicketFromBlock();
+  if (origin?.fromBlock) {
+    try {
+      const parsed = BigInt(origin.fromBlock);
+      if (parsed >= 0n && parsed <= latestBlock) settlementFromBlock = parsed;
+    } catch {
+      // Keep strict deployment-block fallback for malformed legacy metadata.
+    }
+  }
+  const logs =
+    settlementFromBlock <= latestBlock
+      ? await ticketBoughtLogsChunked(
+          { market },
+          settlementFromBlock,
+          latestBlock,
+          true
+        )
+      : [];
   const wallet = resolverWallet();
   const settled: Array<{ ticketId: string; hash: string; status: string }> = [];
   /** Already-settled tickets — safe to walk past. */
@@ -1577,7 +2029,7 @@ export async function settleMarketTicketsOnchain(
   });
 
   return {
-    market: await getOnchainMarket(id),
+    market: await getOnchainMarket(id, { includeTradeStats: false }),
     settledCount: settled.length,
     skippedCount: skipped.length,
     settled,
@@ -1668,6 +2120,15 @@ export async function createMarketOnchain(body: {
     return { createHash, status: createReceipt.status, error: "MarketCreated event not found" };
   }
 
+  if (createReceipt.blockNumber !== null && createReceipt.blockNumber !== undefined) {
+    await marketOriginStore
+      .set(getAddress(marketAddress).toLowerCase(), {
+        fromBlock: createReceipt.blockNumber.toString(),
+        createdAt: new Date().toISOString()
+      })
+      .catch(() => undefined);
+  }
+
   const openHash = await wallet.writeContract({
     address: addr(marketAddress),
     abi: marketAbi,
@@ -1682,12 +2143,14 @@ export async function createMarketOnchain(body: {
   };
   exposeMarketInUi(item.market);
 
+  const createdMarket = await readOnchainMarket(item, { includeTradeStats: false });
+  if (createdMarket) rememberOnchainMarket(createdMarket);
   return {
     createHash,
     openHash,
     status: openReceipt.status,
     marketAddress: item.market,
-    market: await readOnchainMarket(item)
+    market: createdMarket
   };
 }
 
@@ -1738,13 +2201,15 @@ export async function resetDemoMarketsOnchain() {
   };
 }
 
+type HistoryPoint = { value: number; at: number };
+
 type DemoReferenceData = {
-  btcUsd?: Awaited<ReturnType<typeof fetchBtcSpot>>;
-  londonWeather?: Awaited<ReturnType<typeof fetchWeather>>;
+  btcUsd?: Awaited<ReturnType<typeof fetchBtcSpot>> & { history?: HistoryPoint[] };
+  londonWeather?: Omit<Awaited<ReturnType<typeof fetchWeather>>, "history"> & {
+    history?: HistoryPoint[];
+  };
   updatedAt: string;
 };
-
-type HistoryPoint = { value: number; at: number };
 
 let btcReferenceCache: { expiresAt: number; data: DemoReferenceData["btcUsd"] } | undefined;
 let weatherReferenceCache: { expiresAt: number; data: NonNullable<DemoReferenceData["londonWeather"]> } | undefined;
@@ -1755,7 +2220,7 @@ const weatherTickHistory: HistoryPoint[] = [];
 
 /**
  * KV-backed tick history persistence.
- * On Vercel serverless, in-memory arrays are lost on cold starts / new instances,
+ * In-memory arrays are lost on restarts and differ across replicas,
  * so observation charts looked empty. Load last ~10 min from KV once per isolate;
  * write back every 45s (throttled) so free-tier Upstash stays comfortable.
  */
@@ -1812,20 +2277,43 @@ async function maybeSaveTickHistoryToKv(): Promise<void> {
   }
 }
 
+const demoReferenceResponseCache = new Map<
+  "full" | "lite",
+  { at: number; data: DemoReferenceData }
+>();
+const demoReferenceResponseInflight = new Map<
+  "full" | "lite",
+  Promise<DemoReferenceData>
+>();
+
 /**
  * Public demo/chart feed. By default does NOT write oracle raw-ticks — those
  * are written only from the market-cycle / resolve worker path
  * (`ingestOracleTicks: true`) so viewer traffic cannot wash the ZSET.
  */
-export async function getDemoReferenceData(opts?: { ingestOracleTicks?: boolean }) {
+export async function getDemoReferenceData(opts?: {
+  ingestOracleTicks?: boolean;
+  includeHistory?: boolean;
+}) {
+  const publicRead = !opts?.ingestOracleTicks;
+  const includeHistory = opts?.includeHistory !== false;
+  const cacheKey = includeHistory ? "full" : "lite";
+  const cached = demoReferenceResponseCache.get(cacheKey);
+  if (publicRead && cached && Date.now() - cached.at < 5_000) {
+    return cached.data;
+  }
+  const inflight = demoReferenceResponseInflight.get(cacheKey);
+  if (publicRead && inflight) return inflight;
+
+  const load = async (): Promise<DemoReferenceData> => {
   // Hydrate tick history from KV on cold start so charts show accumulated data.
   await ensureTickHistoryFromKv();
 
   const [btc, weather, btcHistory, weatherHistory] = await Promise.allSettled([
     fetchCachedBtcSpot(),
     fetchCachedWeather(),
-    fetchCachedBtcHistory(),
-    fetchCachedWeatherHistory()
+    includeHistory ? fetchCachedBtcHistory() : Promise.resolve([]),
+    includeHistory ? fetchCachedWeatherHistory() : Promise.resolve([])
   ]);
   const btcData = btc.status === "fulfilled" ? btc.value : undefined;
   if (btcData && Number.isFinite(btcData.price)) {
@@ -1882,29 +2370,47 @@ export async function getDemoReferenceData(opts?: { ingestOracleTicks?: boolean 
   // Persist ticks to KV periodically (non-blocking).
   void maybeSaveTickHistoryToKv();
 
-  return {
-    btcUsd: btcData
-      ? {
-          ...btcData,
-          history: mergeHistory(btcCandles, btcTickHistory, 1).slice(-90)
-        }
-      : undefined,
-    londonWeather: weatherData
-      ? {
-          ...weatherData,
-          history: mergeHistory(weatherFromFeed, weatherTickHistory, 15).slice(-120)
-        }
-      : undefined,
-    updatedAt: new Date().toISOString()
+    return {
+      btcUsd: btcData
+        ? {
+            ...btcData,
+            ...(includeHistory
+              ? { history: mergeHistory(btcCandles, btcTickHistory, 1).slice(-90) }
+              : { history: undefined })
+          }
+        : undefined,
+      londonWeather: weatherData
+        ? {
+            ...weatherData,
+            ...(includeHistory
+              ? { history: mergeHistory(weatherFromFeed, weatherTickHistory, 15).slice(-120) }
+              : { history: undefined })
+          }
+        : undefined,
+      updatedAt: new Date().toISOString()
+    };
   };
+
+  if (!publicRead) return load();
+  const request = load()
+    .then((data) => {
+      demoReferenceResponseCache.set(cacheKey, { at: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      demoReferenceResponseInflight.delete(cacheKey);
+    });
+  demoReferenceResponseInflight.set(cacheKey, request);
+  return request;
 }
 
 async function fetchCachedBtcSpot() {
   const now = Date.now();
-  // Coinbase Exchange public ticker is cacheable ~1s; keep server cache slightly under that.
+  // Five-second oracle sampling does not benefit from sub-second refetches. Sharing
+  // a 4s cache also collapses concurrent chart + worker requests.
   if (btcReferenceCache && btcReferenceCache.expiresAt > now) return btcReferenceCache.data;
   const data = await fetchBtcSpot();
-  btcReferenceCache = { data, expiresAt: now + 900 };
+  btcReferenceCache = { data, expiresAt: now + 4_000 };
   return data;
 }
 
@@ -1917,7 +2423,9 @@ async function fetchCachedWeather() {
   if (weatherReferenceCache && weatherReferenceCache.expiresAt > now) return weatherReferenceCache.data;
   try {
     const data = await fetchWeather("London", 51.5072, -0.1276);
-    weatherReferenceCache = { data, expiresAt: now + 8_000 };
+    // Provider prints are on a 15-minute grid; one request per minute is ample for
+    // boundary capture and avoids wasting Railway egress/CPU on duplicate payloads.
+    weatherReferenceCache = { data, expiresAt: now + 60_000 };
     weatherStaleCache = { data, savedAt: now };
     return data;
   } catch (error) {
@@ -2002,7 +2510,7 @@ function mergeHistory(base: HistoryPoint[], ticks: HistoryPoint[], bucketMinutes
 }
 
 function resolverWallet() {
-  // Accept common aliases so Vercel env can use DEPLOYER_* or ORACLE_*
+  // Accept common signer-key aliases used by deployment environments
   const key =
     process.env.ORACLE_PRIVATE_KEY ||
     process.env.DEPLOYER_PRIVATE_KEY ||
@@ -2027,13 +2535,33 @@ function buildRpcUrls(config?: Deployment): string[] {
     .split(",")
     .map((url) => url.trim())
     .filter(Boolean);
-  return Array.from(new Set([
-    ...envUrls,
-    ...(Array.isArray(config?.rpcUrls) ? config.rpcUrls : []),
-    config?.rpcUrl,
-    "https://rpc.testnet.arc.network",
-    "https://arc-testnet.drpc.org"
-  ].filter(Boolean) as string[])).filter(isStableArcRpcUrl);
+  const primaryEnvUrl =
+    process.env.ARC_RPC_URL?.trim() || process.env.NEXT_PUBLIC_ARC_RPC_URL?.trim();
+  const explicit = Array.from(
+    new Set([...(primaryEnvUrl ? [primaryEnvUrl] : []), ...envUrls].filter(Boolean))
+  ).filter(isStableArcRpcUrl);
+  const publicFallbacks = ["https://rpc.testnet.arc.network", "https://arc-testnet.drpc.org"];
+
+  // An explicit Railway endpoint is authoritative. Silently falling through to
+  // public gateways makes usage accounting unpredictable and may repeat a failed
+  // request against several providers. Opt in only for emergency availability.
+  if (explicit.length > 0) {
+    const allowPublicFallback = process.env.RPC_ENABLE_PUBLIC_FALLBACK === "1";
+    return Array.from(
+      new Set([
+        ...explicit,
+        ...(allowPublicFallback ? publicFallbacks : [])
+      ])
+    ).filter(isStableArcRpcUrl);
+  }
+
+  return Array.from(
+    new Set([
+      ...(Array.isArray(config?.rpcUrls) ? config.rpcUrls : []),
+      config?.rpcUrl,
+      ...publicFallbacks
+    ].filter(Boolean) as string[])
+  ).filter(isStableArcRpcUrl);
 }
 
 function isStableArcRpcUrl(url: string): boolean {
@@ -2041,17 +2569,21 @@ function isStableArcRpcUrl(url: string): boolean {
 }
 
 function buildRpcTransport(urls: string[]) {
-  // Batch concurrent eth_calls into one JSON-RPC request (a market read is 10
-  // calls; a list is 10×N). Not every gateway accepts batch arrays, so each URL
-  // gets a [batched, plain] pair inside fallback() — if the batched transport
-  // errors, viem automatically degrades to plain per-call requests instead of
-  // taking the whole read path down. RPC_BATCH=0 disables batching entirely.
+  // Batch concurrent eth_calls to reduce HTTP overhead. dRPC's free tier accepts
+  // at most three methods in one batch; larger batches fail and then repeat all
+  // calls through the plain fallback. Keep the default provider-safe and allow
+  // a smaller value through RPC_BATCH_SIZE. RPC_BATCH=0 disables batching.
   if (process.env.RPC_BATCH === "0") {
     const plain = urls.map((url) => http(url));
     return plain.length === 1 ? plain[0] : fallback(plain, { rank: false });
   }
+
+  const requestedBatchSize = Number(process.env.RPC_BATCH_SIZE ?? "3");
+  const batchSize = Number.isFinite(requestedBatchSize)
+    ? Math.max(1, Math.min(3, Math.floor(requestedBatchSize)))
+    : 3;
   const transports = urls.flatMap((url) => [
-    http(url, { batch: { batchSize: 25, wait: 16 } }),
+    http(url, { batch: { batchSize, wait: 16 } }),
     http(url)
   ]);
   return fallback(transports, { rank: false });
@@ -2060,7 +2592,7 @@ function buildRpcTransport(urls: string[]) {
 function loadDeployment(): Deployment {
   const candidates = [
     process.env.PROBX_DEPLOYMENT_PATH,
-    // Next Root Directory = apps/web (Vercel)
+    // Next app working-directory candidate
     resolve(process.cwd(), "src/lib/deployment.json"),
     resolve(process.cwd(), "../web/src/lib/deployment.json"),
     resolve(process.cwd(), "apps/web/src/lib/deployment.json"),

@@ -1,10 +1,9 @@
 /**
  * Self-contained HMAC session tokens.
  *
- * Vercel serverless /tmp is per-instance and ephemeral — storing only a
- * server-side hash there made refresh log users out and buyTicket return
- * "expired session". Tokens carry email/address/walletId and verify without
- * shared filesystem state.
+ * Process-local files are not reliable across production restarts or replicas.
+ * Tokens therefore carry email/address/walletId and verify without shared
+ * filesystem state.
  */
 import { createHmac, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";

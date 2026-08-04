@@ -59,7 +59,9 @@ export function PortfolioShell() {
   useEffect(() => {
     void load();
     if (!address) return;
-    const id = window.setInterval(() => void load(), 12_000);
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 60_000);
     return () => window.clearInterval(id);
   }, [address, load]);
 

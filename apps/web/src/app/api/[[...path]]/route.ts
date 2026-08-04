@@ -1,12 +1,9 @@
-import { after, type NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { dispatchApiRequest } from "../../../../../api/src/dispatch";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-/** Allow resolve/create txs to finish after the fast 200 to external pingers. */
-export const maxDuration = 60;
-
-/** Survives multi-instance Vercel: bind OTP challenge to the browser. */
+/** Bind the OTP challenge to the browser across instances/restarts. */
 const OTP_COOKIE = "probx_otp";
 const OTP_COOKIE_MAX_AGE = 10 * 60; // match OTP TTL
 
@@ -16,6 +13,35 @@ function isSecureRequest(request: NextRequest): boolean {
   if (request.nextUrl.protocol === "https:") return true;
   const proto = request.headers.get("x-forwarded-proto");
   return proto === "https";
+}
+
+
+function corsHeaders(request: NextRequest): Record<string, string> {
+  const requestOrigin = request.headers.get("origin")?.trim() ?? "";
+  const configured = (process.env.CORS_ORIGINS ?? "").trim();
+  const allowed = configured
+    .split(",")
+    .map((value) => value.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Headers": "content-type, authorization, x-session-email, x-session-token",
+    "Access-Control-Max-Age": "600",
+    Vary: "Origin"
+  };
+
+  if (allowed.length === 0 || allowed.includes("*")) {
+    headers["Access-Control-Allow-Origin"] = "*";
+    return headers;
+  }
+
+  const normalizedOrigin = requestOrigin.replace(/\/$/, "");
+  if (normalizedOrigin && allowed.includes(normalizedOrigin)) {
+    headers["Access-Control-Allow-Origin"] = requestOrigin;
+  }
+  // No allow-origin header on a mismatch: the browser blocks the request instead
+  // of accidentally granting a different configured frontend.
+  return headers;
 }
 
 function cookieOptions(request: NextRequest, maxAge: number) {
@@ -28,82 +54,10 @@ function cookieOptions(request: NextRequest, maxAge: number) {
   };
 }
 
-function isCronPath(apiPath: string): boolean {
-  return apiPath === "/api/cron/auto-resolve" || apiPath === "/api/cron/market-cycle";
-}
-
-/**
- * Cron endpoints often run 20–50s (Arc RPC + create/resolve).
- * External pingers (cron-job.org free) time out ~30s → report Timeout even when
- * work would succeed. Auth-check sync, then finish work in `after()` so the
- * client gets 200 in <1s while Vercel keeps the isolate alive up to maxDuration.
- */
-async function handleCron(request: NextRequest, apiPath: string) {
-  const headers = {
-    authorization: request.headers.get("authorization") ?? undefined,
-    "x-session-email": request.headers.get("x-session-email") ?? undefined,
-    "x-session-token": request.headers.get("x-session-token") ?? undefined
-  };
-
-  // Auth-only probe: wrong secret must still 401 before we ack.
-  const expected = (process.env.CRON_SECRET || process.env.VERCEL_CRON_SECRET || "").trim();
-  if (apiPath === "/api/cron/auto-resolve" && expected) {
-    const q = request.nextUrl.searchParams;
-    const fromQuery = q.get("secret") || q.get("cron_secret");
-    const auth = (headers.authorization ?? "").trim();
-    const ok = fromQuery === expected || auth === `Bearer ${expected}`;
-    if (!ok) {
-      return NextResponse.json(
-        {
-          error:
-            "Cron authorization required. Set CRON_SECRET on the server and pass ?secret=… or Authorization: Bearer …"
-        },
-        { status: 401, headers: { "Cache-Control": "no-store" } }
-      );
-    }
-  }
-
-  const method = request.method;
-  const searchParams = request.nextUrl.searchParams;
-
-  after(async () => {
-    try {
-      const result = await dispatchApiRequest({
-        method,
-        path: apiPath,
-        searchParams,
-        body: {},
-        headers
-      });
-      if (result.status >= 400) {
-        console.error(`[cron] ${apiPath} finished with ${result.status}`, result.body);
-      } else {
-        console.log(`[cron] ${apiPath} ok`, result.body);
-      }
-    } catch (error) {
-      console.error(`[cron] ${apiPath} failed`, error);
-    }
-  });
-
-  return NextResponse.json(
-    {
-      ok: true,
-      accepted: true,
-      path: apiPath,
-      note: "Work continues in background (up to maxDuration). External pingers should treat 200 as success."
-    },
-    { status: 200, headers: { "Cache-Control": "no-store" } }
-  );
-}
-
 async function handle(request: NextRequest, context: RouteContext) {
   const { path: segments = [] } = await context.params;
   const joined = segments.length ? segments.join("/") : "";
   const apiPath = joined ? `/api/${joined}` : "/api";
-
-  if (isCronPath(apiPath) && (request.method === "GET" || request.method === "POST")) {
-    return handleCron(request, apiPath);
-  }
 
   let body: Record<string, unknown> = {};
   if (request.method !== "GET" && request.method !== "HEAD") {
@@ -137,26 +91,11 @@ async function handle(request: NextRequest, context: RouteContext) {
     }
   });
 
-  // Keep the BTC/weather round alive whenever the site has traffic
-  // (chart polls demo-data every second). Throttled inside; runs after the
-  // response so the request itself stays fast. External pinger still covers
-  // zero-traffic periods.
-  if (
-    request.method === "GET" &&
-    (apiPath === "/api/demo-data" || apiPath === "/api/markets")
-  ) {
-    after(async () => {
-      const { maybeRunMarketCycleInBackground } = await import(
-        "../../../../../api/src/services/marketCycleWorker"
-      );
-      await maybeRunMarketCycleInBackground();
-    });
-  }
-
   const response = NextResponse.json(result.body, {
     status: result.status,
     headers: {
-      "Cache-Control": "no-store"
+      "Cache-Control": "no-store",
+      ...corsHeaders(request)
     }
   });
 
@@ -183,13 +122,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
   return handle(request, context);
 }
 
-export async function OPTIONS() {
+export async function OPTIONS(request: NextRequest) {
   return new NextResponse(null, {
     status: 204,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Access-Control-Allow-Headers": "content-type, authorization, x-session-email, x-session-token"
-    }
+    headers: corsHeaders(request)
   });
 }

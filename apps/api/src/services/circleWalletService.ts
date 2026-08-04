@@ -33,7 +33,7 @@ type CircleMapRecord = {
 
 type CircleClient = ReturnType<typeof initiateDeveloperControlledWalletsClient>;
 
-// Durable email -> wallet mapping (Vercel KV in prod, file fallback locally).
+// Durable email -> wallet mapping (Redis in production, file fallback locally).
 // This replaces the previous per-instance /tmp JSON, so the same email keeps
 // the same Circle wallet across cold starts, redeploys and logouts.
 const walletMap = new NamespaceStore<CircleMapRecord>("circle-wallet-map");

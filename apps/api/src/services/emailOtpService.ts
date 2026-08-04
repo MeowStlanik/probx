@@ -53,7 +53,7 @@ async function incrWithTtl(
       );
       return typeof n === "number" ? n : Number(n) || 0;
     } catch {
-      // Shared/production: never silently fall back to process-local (no limit at all on Vercel).
+      // Production: never silently fall back to process-local counters.
       if (isSharedRuntime()) {
         throw new Error("Login rate limit store unavailable. Try again in a moment.");
       }
@@ -168,15 +168,11 @@ function hashCode(email: string, code: string): string {
 const DEV_OTP_FALLBACK = "probx-dev-otp-hmac-change-me";
 
 function isSharedRuntime(): boolean {
-  return Boolean(
-    process.env.VERCEL ||
-      process.env.AWS_LAMBDA_FUNCTION_NAME ||
-      process.env.NODE_ENV === "production"
-  );
+  return process.env.NODE_ENV === "production";
 }
 
 /**
- * Shared secret for signed OTP tokens (must be identical on every Vercel instance).
+ * Shared secret for signed OTP tokens (must be identical on every production instance).
  * Prefer a dedicated OTP_HMAC_SECRET; other env keys are emergency fallbacks only.
  * The hard-coded dev string is rejected on shared/production runtimes.
  */
@@ -185,8 +181,6 @@ function otpHmacSecret(): string {
     process.env.OTP_HMAC_SECRET ||
     process.env.CIRCLE_ENTITY_SECRET ||
     process.env.CIRCLE_API_KEY ||
-    process.env.BREVO_API_KEY ||
-    process.env.SMTP_PASS ||
     ""
   ).trim();
 
@@ -210,7 +204,7 @@ function otpHmacSecret(): string {
 
 let warnedDefaultSecret = false;
 
-/** Stateless OTP challenge — survives multi-instance /tmp on Vercel. Includes jti for single-use. */
+/** Stateless OTP challenge suitable for multi-instance deployments. Includes jti for single-use. */
 function makeOtpToken(email: string, codeHash: string, expiresAt: number): string {
   const jti = randomBytes(16).toString("hex");
   const payload = Buffer.from(
@@ -257,29 +251,31 @@ async function consumeOtpJti(jti: string): Promise<boolean> {
   return setIfAbsent(`otp-jti:${jti}`, { usedAt: new Date().toISOString() }, 24 * 3600);
 }
 
-function hasSmtpConfig(): boolean {
-  if ((process.env.SMTP_URL || "").trim()) return true;
-  return Boolean(
-    (process.env.SMTP_HOST || process.env.BREVO_SMTP_HOST || "").trim() &&
-      (process.env.SMTP_USER || process.env.BREVO_SMTP_USER || "").trim() &&
-      (process.env.SMTP_PASS || process.env.BREVO_SMTP_PASS || process.env.SMTP_PASSWORD || "").trim()
-  );
+function gmailApiConfig(): {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  senderEmail: string;
+  senderName: string;
+} | null {
+  const clientId = (process.env.GMAIL_OAUTH_CLIENT_ID || "").trim();
+  const clientSecret = (process.env.GMAIL_OAUTH_CLIENT_SECRET || "").trim();
+  const refreshToken = (process.env.GMAIL_OAUTH_REFRESH_TOKEN || "").trim();
+  const senderEmail = (process.env.GMAIL_SENDER_EMAIL || "").trim().toLowerCase();
+  const senderName = (process.env.GMAIL_SENDER_NAME || "ProbX Arc").trim();
+  if (!clientId || !clientSecret || !refreshToken || !isValidEmail(senderEmail)) return null;
+  return { clientId, clientSecret, refreshToken, senderEmail, senderName };
 }
 
 function hasEmailProvider(): boolean {
-  return Boolean(
-    process.env.RESEND_API_KEY ||
-      process.env.BREVO_API_KEY ||
-      process.env.SENDINBLUE_API_KEY ||
-      hasSmtpConfig()
-  );
+  return gmailApiConfig() !== null;
 }
 
 /**
  * Dev echo: show code in API response.
  * - EMAIL_OTP_DEV_ECHO=1 force on
  * - EMAIL_OTP_DEV_ECHO=0 force off
- * - default: on when no email provider is configured
+ * - default: on when Gmail API is not configured
  */
 export function otpDevEchoEnabled(): boolean {
   if (process.env.EMAIL_OTP_DEV_ECHO === "0") return false;
@@ -287,161 +283,171 @@ export function otpDevEchoEnabled(): boolean {
   return !hasEmailProvider();
 }
 
-async function sendOtpEmail(email: string, code: string): Promise<{ sent: boolean; via?: string; error?: string }> {
-  const subject = "ProbX Arc login code";
-  const text = `Your ProbX verification code is ${code}. It expires in 10 minutes.\n\nIf you did not request this, ignore this email.`;
-  const html = `<p>Your ProbX verification code is <strong style="font-size:1.25rem;letter-spacing:0.12em">${code}</strong>.</p><p>It expires in 10 minutes.</p>`;
+type GmailAccessToken = { value: string; expiresAt: number };
+let cachedGmailAccessToken: GmailAccessToken | null = null;
 
-  // 1) Personal SMTP first (Gmail App Password lands better than free Brevo shared IPs)
-  if (hasSmtpConfig()) {
-    const smtpResult = await sendViaSmtp(email, subject, text, html);
-    if (smtpResult.sent) return smtpResult;
-    // Do NOT silently fall through to Brevo — that fakes "emailSent" while Gmail never received mail.
-    // Only fall through if SMTP was not intended as primary (no SMTP_HOST set to gmail/brevo explicitly).
-    const host = (process.env.SMTP_HOST || process.env.BREVO_SMTP_HOST || "").toLowerCase();
-    if (host.includes("gmail") || host.includes("google") || process.env.SMTP_STRICT === "1") {
-      return smtpResult;
-    }
-    if (!process.env.BREVO_API_KEY && !process.env.RESEND_API_KEY && !process.env.SENDINBLUE_API_KEY) {
-      return smtpResult;
-    }
+async function getGmailAccessToken(forceRefresh = false): Promise<string> {
+  const config = gmailApiConfig();
+  if (!config) throw new Error("Gmail API credentials are incomplete.");
+
+  const now = Date.now();
+  if (!forceRefresh && cachedGmailAccessToken && cachedGmailAccessToken.expiresAt > now + 60_000) {
+    return cachedGmailAccessToken.value;
   }
 
-  // 2) Brevo REST API (xkeysib-…) — accepted by Brevo, but Gmail often delays/spam free senders
-  const brevoKey = (process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY || "").trim();
-  if (brevoKey) {
-    const fromEmail = (process.env.BREVO_FROM_EMAIL || process.env.EMAIL_FROM || "").trim();
-    const fromName = (process.env.BREVO_FROM_NAME || "ProbX Arc").trim();
-    if (!fromEmail || !fromEmail.includes("@")) {
-      return {
-        sent: false,
-        via: "brevo",
-        error: "Set BREVO_FROM_EMAIL to a sender you verified in Brevo (e.g. your Gmail)."
-      };
-    }
-    try {
-      const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-        method: "POST",
-        headers: {
-          "api-key": brevoKey,
-          "Content-Type": "application/json",
-          Accept: "application/json"
-        },
-        body: JSON.stringify({
-          sender: { name: fromName, email: fromEmail },
-          to: [{ email }],
-          subject,
-          textContent: text,
-          htmlContent: html
-        })
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        return { sent: false, via: "brevo", error: `Brevo HTTP ${response.status}: ${body.slice(0, 220)}` };
-      }
-      return { sent: true, via: "brevo" };
-    } catch (error) {
-      return {
-        sent: false,
-        via: "brevo",
-        error: error instanceof Error ? error.message : "Brevo request failed"
-      };
-    }
-  }
-
-  // 3) Resend — test mode only delivers to the Resend account owner unless domain is verified
-  const resendKey = (process.env.RESEND_API_KEY || "").trim();
-  if (resendKey) {
-    const from =
-      (process.env.RESEND_FROM || process.env.EMAIL_FROM || "ProbX Arc <onboarding@resend.dev>").trim();
-    try {
-      const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ from, to: [email], subject, text, html })
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        return { sent: false, via: "resend", error: `Resend HTTP ${response.status}: ${body.slice(0, 200)}` };
-      }
-      return { sent: true, via: "resend" };
-    } catch (error) {
-      return {
-        sent: false,
-        via: "resend",
-        error: error instanceof Error ? error.message : "Resend request failed"
-      };
-    }
-  }
-
-  return {
-    sent: false,
-    error:
-      "no email provider (set SMTP_HOST/USER/PASS for Brevo SMTP, or BREVO_API_KEY, or RESEND_API_KEY)"
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      refresh_token: config.refreshToken,
+      grant_type: "refresh_token"
+    })
+  });
+  const body = (await response.json().catch(() => ({}))) as {
+    access_token?: string;
+    expires_in?: number;
+    error?: string;
+    error_description?: string;
   };
+  if (!response.ok || !body.access_token) {
+    const detail = body.error_description || body.error || `HTTP ${response.status}`;
+    throw new Error(`Google OAuth token refresh failed: ${String(detail).slice(0, 220)}`);
+  }
+
+  cachedGmailAccessToken = {
+    value: body.access_token,
+    expiresAt: now + Math.max(60, Number(body.expires_in) || 3600) * 1000
+  };
+  return body.access_token;
 }
 
-async function sendViaSmtp(
+function cleanHeader(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
+}
+
+function encodeMimeHeader(value: string): string {
+  const clean = cleanHeader(value);
+  return /^[\x20-\x7e]*$/.test(clean)
+    ? clean
+    : `=?UTF-8?B?${Buffer.from(clean, "utf8").toString("base64")}?=`;
+}
+
+function base64MimeBody(value: string): string {
+  const encoded = Buffer.from(value, "utf8").toString("base64");
+  return encoded.match(/.{1,76}/g)?.join("\r\n") || "";
+}
+
+function createGmailRawMessage(input: {
+  fromEmail: string;
+  fromName: string;
+  to: string;
+  subject: string;
+  text: string;
+  html: string;
+}): string {
+  const boundary = `probx_${randomBytes(12).toString("hex")}`;
+  const mime = [
+    `From: ${encodeMimeHeader(input.fromName)} <${cleanHeader(input.fromEmail)}>`,
+    `To: ${cleanHeader(input.to)}`,
+    `Subject: ${encodeMimeHeader(input.subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64MimeBody(input.text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    base64MimeBody(input.html),
+    `--${boundary}--`,
+    ""
+  ].join("\r\n");
+  return Buffer.from(mime, "utf8").toString("base64url");
+}
+
+async function postGmailMessage(accessToken: string, raw: string): Promise<Response> {
+  return fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ raw })
+  });
+}
+
+async function sendViaGmailApi(
   to: string,
   subject: string,
   text: string,
   html: string
-): Promise<{ sent: boolean; via?: string; error?: string }> {
+): Promise<{ sent: boolean; via: string; error?: string }> {
+  const config = gmailApiConfig();
+  if (!config) {
+    return {
+      sent: false,
+      via: "gmail-api",
+      error:
+        "Set GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET, GMAIL_OAUTH_REFRESH_TOKEN and GMAIL_SENDER_EMAIL."
+    };
+  }
+
   try {
-    const nodemailer = await import("nodemailer");
-    const host = (process.env.SMTP_HOST || process.env.BREVO_SMTP_HOST || "smtp-relay.brevo.com").trim();
-    const port = Number(process.env.SMTP_PORT || process.env.BREVO_SMTP_PORT || "587");
-    const user = (process.env.SMTP_USER || process.env.BREVO_SMTP_USER || "").trim();
-    const pass = (
-      process.env.SMTP_PASS ||
-      process.env.SMTP_PASSWORD ||
-      process.env.BREVO_SMTP_PASS ||
-      ""
-    ).trim();
-    const smtpUrl = (process.env.SMTP_URL || "").trim();
-
-    const fromEmail = (
-      process.env.BREVO_FROM_EMAIL ||
-      process.env.EMAIL_FROM ||
-      process.env.SMTP_FROM ||
-      user
-    ).trim();
-    const fromName = (process.env.BREVO_FROM_NAME || process.env.SMTP_FROM_NAME || "ProbX Arc").trim();
-    if (!fromEmail.includes("@")) {
-      return {
-        sent: false,
-        via: "smtp",
-        error: "Set BREVO_FROM_EMAIL / EMAIL_FROM to your verified sender (e.g. stlanik95@gmail.com)."
-      };
-    }
-
-    const transport = smtpUrl
-      ? nodemailer.createTransport(smtpUrl)
-      : nodemailer.createTransport({
-          host,
-          port: Number.isFinite(port) ? port : 587,
-          secure: port === 465,
-          auth: user && pass ? { user, pass } : undefined
-        });
-
-    await transport.sendMail({
-      from: `${fromName} <${fromEmail}>`,
+    const raw = createGmailRawMessage({
+      fromEmail: config.senderEmail,
+      fromName: config.senderName,
       to,
       subject,
       text,
       html
     });
-    return { sent: true, via: "smtp" };
+    let accessToken = await getGmailAccessToken();
+    let response = await postGmailMessage(accessToken, raw);
+    if (response.status === 401) {
+      cachedGmailAccessToken = null;
+      accessToken = await getGmailAccessToken(true);
+      response = await postGmailMessage(accessToken, raw);
+    }
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      return {
+        sent: false,
+        via: "gmail-api",
+        error: `Gmail API HTTP ${response.status}: ${body.slice(0, 240)}`
+      };
+    }
+    return { sent: true, via: "gmail-api" };
   } catch (error) {
     return {
       sent: false,
-      via: "smtp",
-      error: error instanceof Error ? error.message : "SMTP send failed"
+      via: "gmail-api",
+      error: error instanceof Error ? error.message : "Gmail API request failed"
     };
   }
+}
+
+async function sendOtpEmail(
+  email: string,
+  code: string
+): Promise<{ sent: boolean; via?: string; error?: string }> {
+  const subject = "ProbX Arc login code";
+  const text = `Your ProbX verification code is ${code}. It expires in 10 minutes.\n\nIf you did not request this, ignore this email.`;
+  const html = `<p>Your ProbX verification code is <strong style="font-size:1.25rem;letter-spacing:0.12em">${code}</strong>.</p><p>It expires in 10 minutes.</p>`;
+
+  if (!hasEmailProvider()) {
+    return {
+      sent: false,
+      via: "gmail-api",
+      error: "Gmail API is not configured."
+    };
+  }
+  return sendViaGmailApi(email, subject, text, html);
 }
 
 export async function requestEmailOtp(
@@ -451,7 +457,7 @@ export async function requestEmailOtp(
   email: string;
   expiresInSec: number;
   message: string;
-  /** Signed challenge — must be sent back with verify (required on Vercel multi-instance). */
+  /** Signed challenge — must be sent back with verify (required on multi-instance deployments). */
   otpToken: string;
   emailSent?: boolean;
 }> {
@@ -464,7 +470,7 @@ export async function requestEmailOtp(
   const expiresAt = Date.now() + OTP_TTL_MS;
   const otpToken = makeOtpToken(email, codeHash, expiresAt);
 
-  // Best-effort local store (single process / local dev). Vercel verify uses otpToken.
+  // Best-effort local store (single process / local dev). Production verification uses otpToken.
   try {
     const store = loadStore();
     store.byEmail[email] = {
@@ -476,7 +482,7 @@ export async function requestEmailOtp(
     };
     saveStore(store);
   } catch {
-    // ignore file store failures on serverless
+    // ignore best-effort local file store failures
   }
 
   console.log(`[email-otp] ${email} code issued (ttl ${OTP_TTL_MS / 1000}s, token issued)`);
@@ -498,7 +504,7 @@ export async function requestEmailOtp(
   } else if (hasEmailProvider()) {
     message = `Could not send email (${shortProviderError(delivery.error)}). Try again in a moment.`;
   } else {
-    message = "Email is not configured on the server. Ask the host to set SMTP/API keys.";
+    message = "Email is not configured on the server. Set the Gmail API OAuth variables.";
   }
 
   return {
@@ -528,7 +534,7 @@ export async function consumeEmailOtp(
   if (!isValidEmail(email)) throw new Error("Enter a valid email address.");
   if (!/^\d{6}$/.test(code)) throw new Error("Enter the 6-digit verification code.");
 
-  // Signed token from request-otp (JSON body and/or HttpOnly cookie). Required on Vercel.
+  // Signed token from request-otp (JSON body and/or HttpOnly cookie). Required in production.
   const token = String(otpToken ?? "").trim();
   if (token) {
     const parsed = parseOtpToken(token);
@@ -564,7 +570,7 @@ export async function consumeEmailOtp(
     return email;
   }
 
-  // Fallback: local file store (single-instance / local API only — not reliable on Vercel).
+  // Fallback: local file store (single-instance / local API only).
   const store = loadStore();
   const record = store.byEmail[email];
   if (!record) {

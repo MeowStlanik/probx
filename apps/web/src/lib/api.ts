@@ -7,21 +7,17 @@ import { emptyLpStats } from "./sampleData";
 function serverOrigin(): string {
   const explicit = (process.env.NEXT_PUBLIC_SITE_URL || process.env.SITE_URL || "").trim();
   if (explicit) return explicit.replace(/\/$/, "");
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
-    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
-  }
   const port = process.env.PORT || "3000";
   return `http://127.0.0.1:${port}`;
 }
 
 /**
  * API base URL.
- * - Browser on Vercel / same-origin: empty string → hits `/api/*` on this host
+ * - Browser with no explicit backend / same-origin: empty string → hits `/api/*` on this host
  * - Empty string is VALID — never treat it as "backend unavailable"
  * - Prefer apiUrl("/api/...") instead of checking if (!base)
  * - Server (SSR): always absolute origin so fetch does not throw / return empty stats
- * - Override with NEXT_PUBLIC_API_BASE_URL (leave empty on Vercel)
+ * - Override with NEXT_PUBLIC_API_BASE_URL (set to Railway for the Vercel UI)
  *
  * Common misconfigs that used to 404 the chart (`/api/api/demo-data`):
  * - base ending in `/api`
@@ -55,20 +51,9 @@ export function apiBaseUrl(): string {
   return serverOrigin();
 }
 
-/**
- * Paths that must be served same-origin (Vercel) regardless of NEXT_PUBLIC_API_BASE_URL.
- * The wallet/session OTP flow sends email over SMTP; Railway's datacenter blocks
- * outbound SMTP (ports 587/465 time out), while Vercel allows it. Everything else —
- * market reads, the cycle, CCTP — goes to the API base (Railway) as normal.
- */
-function forceSameOrigin(path: string): boolean {
-  const p = path.startsWith("/") ? path : `/${path}`;
-  return p.startsWith("/api/wallet/session/");
-}
-
 /** Join API base + path; works with empty base (same-origin). */
 export function apiUrl(path: string): string {
-  const base = forceSameOrigin(path) ? "" : apiBaseUrl();
+  const base = apiBaseUrl();
   let p = path.startsWith("/") ? path : `/${path}`;
   // Guard against accidental double /api when base already ends with it.
   if (base.endsWith("/api") && p.startsWith("/api/")) {
@@ -77,23 +62,12 @@ export function apiUrl(path: string): string {
   return base ? `${base}${p}` : p;
 }
 
-/** Fetch /api/demo-data with same-origin fallback (chart + reference panel). */
-export async function fetchDemoReferenceData(): Promise<unknown> {
-  const candidates = Array.from(new Set([apiUrl("/api/demo-data"), "/api/demo-data"].filter(Boolean)));
-  let lastStatus = 0;
-  let lastError: unknown;
-  for (const url of candidates) {
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      lastStatus = res.status;
-      if (!res.ok) continue;
-      return await res.json();
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  if (lastStatus) throw new Error(`HTTP ${lastStatus}`);
-  throw lastError instanceof Error ? lastError : new Error("Feed unreachable");
+/** Fetch live reference data from exactly one configured backend. */
+export async function fetchDemoReferenceData(options: { lite?: boolean } = {}): Promise<unknown> {
+  const suffix = options.lite ? "?lite=1" : "";
+  const res = await fetch(apiUrl(`/api/demo-data${suffix}`), { cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
 /** Real Arc markets use 0x addresses. Offline sample ids (mkt_*) must never reach buyTicket. */
@@ -136,28 +110,18 @@ export async function fetchTickets(): Promise<Ticket[]> {
 
 export async function fetchUserTickets(address: string): Promise<Ticket[]> {
   const path = `/api/users/${encodeURIComponent(address)}/tickets`;
-  const candidates = Array.from(new Set([apiUrl(path), path].filter(Boolean)));
-  let lastStatus = 0;
-  let lastError: unknown;
-  for (const url of candidates) {
-    try {
-      const response = await fetch(url, { cache: "no-store" });
-      lastStatus = response.status;
-      if (!response.ok) continue;
-      const body = (await response.json()) as Ticket[];
-      if (!Array.isArray(body)) continue;
-      return body.map((ticket) => ({
-        ...ticket,
-        marketQuestion: ticket.marketQuestion ?? ticket.marketId
-      }));
-    } catch (e) {
-      lastError = e;
-    }
+  const response = await fetch(apiUrl(path), { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Portfolio endpoint returned HTTP ${response.status}`);
   }
-  if (lastStatus) {
-    throw new Error(`Portfolio endpoint returned HTTP ${lastStatus}`);
+  const body = (await response.json()) as Ticket[];
+  if (!Array.isArray(body)) {
+    throw new Error("Portfolio endpoint returned an invalid payload");
   }
-  throw lastError instanceof Error ? lastError : new Error("Portfolio endpoint unreachable");
+  return body.map((ticket) => ({
+    ...ticket,
+    marketQuestion: ticket.marketQuestion ?? ticket.marketId
+  }));
 }
 
 export async function fetchLpStats(): Promise<LpStats> {

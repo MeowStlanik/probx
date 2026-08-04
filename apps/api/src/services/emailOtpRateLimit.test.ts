@@ -14,12 +14,10 @@ const mutableEnv = process.env as Record<string, string | undefined>;
 
 
 async function main() {
-  // Local (no VERCEL): IP bucket is wired and counts independently of email.
+  // Local development: IP bucket is wired and counts independently of email.
   // Use unique emails so per-email (3/10m) does not mask the IP path.
   const ip = `203.0.113.${Date.now() % 200}`;
-  const prevVercel = process.env.VERCEL;
   const prevNodeEnv = process.env.NODE_ENV;
-  delete process.env.VERCEL;
   mutableEnv.NODE_ENV = "development";
   process.env.EMAIL_OTP_DEV_ECHO = "1";
   // Ensure OTP secret path works locally
@@ -73,17 +71,12 @@ async function main() {
   assert.equal(fpBlocked, true, "fingerprint rate limit must be reachable via requestEmailOtp meta");
 
   // Shared runtime without KV must fail closed on rate-limit path.
-  process.env.VERCEL = "1";
   mutableEnv.NODE_ENV = "production";
   // Ensure no KV
   const savedUrl = process.env.UPSTASH_REDIS_REST_URL;
   const savedTok = process.env.UPSTASH_REDIS_REST_TOKEN;
-  const savedKvUrl = process.env.KV_REST_API_URL;
-  const savedKvTok = process.env.KV_REST_API_TOKEN;
   delete process.env.UPSTASH_REDIS_REST_URL;
   delete process.env.UPSTASH_REDIS_REST_TOKEN;
-  delete process.env.KV_REST_API_URL;
-  delete process.env.KV_REST_API_TOKEN;
   // OTP_HMAC_SECRET required on shared — already set
   let failedClosed = false;
   try {
@@ -96,14 +89,10 @@ async function main() {
   assert.equal(failedClosed, true, "shared runtime without KV must refuse OTP rate-limit path");
 
   // restore
-  if (prevVercel === undefined) delete process.env.VERCEL;
-  else process.env.VERCEL = prevVercel;
   if (prevNodeEnv === undefined) delete mutableEnv.NODE_ENV;
   else mutableEnv.NODE_ENV = prevNodeEnv;
   if (savedUrl !== undefined) process.env.UPSTASH_REDIS_REST_URL = savedUrl;
   if (savedTok !== undefined) process.env.UPSTASH_REDIS_REST_TOKEN = savedTok;
-  if (savedKvUrl !== undefined) process.env.KV_REST_API_URL = savedKvUrl;
-  if (savedKvTok !== undefined) process.env.KV_REST_API_TOKEN = savedKvTok;
 
   console.log("emailOtpRateLimit tests passed");
 }

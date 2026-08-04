@@ -1,173 +1,139 @@
-# ProbX — local run, Vercel deploy, email OTP
+# ProbX — Vercel UI + Railway API
 
-Operational docs (not needed for judging). Live demo: **https://probx-web.vercel.app**
+Production is split into two deployments:
 
-Contract addresses and vault seed: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json).
+- **Vercel:** `apps/web` UI only. All browser and SSR API calls use the Railway origin.
+- **Railway:** lightweight `apps/api` Node server plus persistent market workers.
+- **Gmail API:** email OTP over HTTPS; SMTP ports are not used.
 
----
+`railway.json` intentionally builds and starts only `@probx/api`. Do not replace its start command with the root `pnpm start`, because that starts the full Next server and uses more memory.
 
-## Quick start (local)
+## Vercel variables
 
-```bash
-pnpm install
-cp .env.example .env   # fill keys — never commit .env
-
-# Recommended (UI + API in one Next process, port 3000):
-pnpm dev:web
-
-# Optional: standalone API on :3001 (set NEXT_PUBLIC_API_BASE_URL=http://localhost:3001)
-pnpm dev:api
-```
-
-Leave `NEXT_PUBLIC_API_BASE_URL` empty to call same-origin `/api/*` (default for Vercel and local Next).
-
-```bash
-pnpm contracts:build
-pnpm contracts:test      # 36 forge tests (scenario + registry + accounting) → contracts/test/
-pnpm deploy:arc          # FULL redeploy required after market-registry security fix
-pnpm deploy:arc          # needs PRIVATE_KEY + USDC on Arc Testnet
-```
-
-Env template: [`.env.example`](../.env.example)
-
----
-
-## Deploy (Vercel — UI + API together)
-
-API lives as Next.js route handlers under `apps/web/src/app/api/**`; no separate API host required.
-
-| Setting | Value |
-|---------|--------|
-| Framework | Next.js |
-| Root Directory | **`apps/web`** (uses `apps/web/vercel.json`) |
-| Install | `npm install -g pnpm@9.12.3 && pnpm install` |
-| Build | `pnpm --filter @probx/web build` |
-| Output Directory | *(leave empty)* |
-
-After a contract redeploy, update public addresses + `ARC_FROM_BLOCK`. Checklist: [`VERCEL_ENV_UPDATE.md`](./VERCEL_ENV_UPDATE.md).
-
-### Environment variables
-
-**Public**
-
-```text
-NEXT_PUBLIC_API_BASE_URL=
-NEXT_PUBLIC_CHAIN_ID=5042002
+```dotenv
+NEXT_PUBLIC_API_BASE_URL=https://your-api.up.railway.app
+NEXT_PUBLIC_SITE_URL=https://your-ui.vercel.app
+# Browser reads use the public Arc RPC instead of consuming the private dRPC project.
 NEXT_PUBLIC_ARC_RPC_URL=https://rpc.testnet.arc.network
-NEXT_PUBLIC_USDC_ADDRESS=0x3600000000000000000000000000000000000000
-NEXT_PUBLIC_MICRO_BOOST_ENGINE_ADDRESS=0x469592aEff57eE56e910A75eA69a6538E8B59A67
-NEXT_PUBLIC_LIQUIDITY_POOL_ADDRESS=0xdB25f054D2D88c38FB06f74ADaD1b06e87a06De8
-NEXT_PUBLIC_MARKET_FACTORY_ADDRESS=0xf659eDf16E55307095a08fd29727316513acdF19
-NEXT_PUBLIC_CIRCLE_KIT_KEY=
+NEXT_PUBLIC_ARC_RPC_URLS=
+BACKGROUND_WORKERS_ENABLED=0
 ```
 
-**Server-only** (Sensitive; no `NEXT_PUBLIC_` prefix)
+Redeploy Vercel after changing `NEXT_PUBLIC_*`; those values are embedded at build time.
 
-```text
-ARC_RPC_URL=https://rpc.testnet.arc.network
+## Railway variables
+
+```dotenv
+NODE_ENV=production
+HOST=0.0.0.0
+SITE_URL=https://your-ui.vercel.app
+CORS_ORIGINS=https://your-ui.vercel.app
+BACKGROUND_WORKERS_ENABLED=1
+
+ARC_RPC_URL=https://your-private-or-drpc-endpoint
+ARC_RPC_URLS=
+RPC_ENABLE_PUBLIC_FALLBACK=0
 ARC_FROM_BLOCK=53938140
-PRIVATE_KEY=
 ORACLE_PRIVATE_KEY=
+
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+
 ADMIN_SECRET=
 CRON_SECRET=
-CIRCLE_API_KEY=
-CIRCLE_ENTITY_SECRET=
-CIRCLE_WALLET_SET_ID=
-CIRCLE_KIT_KEY=
-CCTP_SOURCE_PRIVATE_KEY=
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASS=
-BREVO_FROM_EMAIL=
-BREVO_FROM_NAME=ProbX
-EMAIL_OTP_DEV_ECHO=0
-EMAIL_OTP_REQUIRED=1
 OTP_HMAC_SECRET=
+SESSION_HMAC_SECRET=
 SESSION_WALLET_SECRET=
-SESSION_HMAC_SECRET=           # REQUIRED on any shared deploy — signs session tokens
+```
+
+Add the Circle and Gmail values from `.env.example` when those flows are enabled.
+
+## Low-cost worker configuration
+
+```dotenv
 MARKET_CYCLE_ENABLED=1
-MARKET_CYCLE_ON_TRAFFIC=1      # background cycle on site traffic (0 = off)
-RPC_BATCH=1                    # JSON-RPC batching (0 = plain per-call requests)
-CRON_THROTTLE_MS=30000         # min gap between anonymous cron/cycle runs (min 5000)
-CORS_ORIGINS=                  # standalone API only; default *
-CCTP_DEMO_MAX_PER_CALL=10      # demo treasury cap, USDC per call
-CCTP_DEMO_DAILY_PER_ADDRESS=25 # demo treasury cap, USDC per address per day
-UPSTASH_REDIS_REST_URL=        # durable wallet map + tx statuses (free tier ok)
-UPSTASH_REDIS_REST_TOKEN=      # KV_REST_API_URL / KV_REST_API_TOKEN also accepted
-APP_KIT_STRICT=0               # 1 = hard-fail instead of App Kit → viem/CCTP fallback
+MARKET_CYCLE_INTERVAL_MS=30000
+
+ORACLE_SNAPSHOT_ENABLED=1
+ORACLE_SNAPSHOT_INTERVAL_MS=7000
+
+# The market cycle already resolves and settles. A second resolver loop only duplicates RPC.
+AUTO_RESOLVE_ENABLED=0
+
+# Shared dRPC cache and bounded log scans.
+RPC_MARKET_CACHE_MS=300000
+RPC_PUBLIC_MARKET_CACHE_MS=60000
+RPC_TICKET_CACHE_MS=60000
+ARC_MARKET_LIST_LIMIT=18
+ARC_MARKET_STATS_SCAN_BLOCKS=8000
+AGGREGATE_STATS_FRESH_MS=600000
+RPC_BATCH=1
+RPC_BATCH_SIZE=3
 ```
 
-> **`SESSION_HMAC_SECRET` unset** → tokens are signed with a random per-instance key that
-> does not survive cold starts, so users get logged out mid-session on Vercel. The server
-> warns loudly rather than falling back to a key committed to this repo.
+The 7-second snapshot timer does not reread all contracts. It uses the shared five-minute schedule cache and fetches BTC/weather only near an active market's start or end boundary. The 30-second market cycle creates the next round, resolves finished rounds and settles tickets.
 
-> **Without the KV vars** the email → wallet mapping and tx statuses fall back to
-> per-instance `/tmp` files — fine locally, ephemeral on Vercel. Set Upstash (free) for
-> production reliability.
-
-> ⚠️ **`ADMIN_SECRET` is required on Vercel / production.** With it unset on a shared runtime, admin endpoints **fail closed** (403). Locally (no `VERCEL`, non-production) they stay open with a loud warning for convenience. Same rule: **`OTP_HMAC_SECRET` is required on Vercel** — the public dev fallback is rejected.
-
----
-
-## Markets 24/7 (cron)
-
-The market cycle (create → observe → resolve) needs a trigger about **once per minute**.
-Vercel Hobby cron fires ~once a day, so:
-
-1. **External pinger (recommended):** hit `GET /api/cron/market-cycle?secret=CRON_SECRET` every minute — free on cron-job.org. Guide: [`EXTERNAL_CRON.md`](./EXTERNAL_CRON.md).
-   *Note:* `market-cycle` is intentionally callable **without** a secret (the browser heartbeat drives it); passing `CRON_SECRET` **bypasses the throttle** rather than granting access. `auto-resolve` does require the secret when one is configured.
-2. **On-traffic fallback (built-in):** while anyone has the site open, the cycle self-runs in the background (throttled via KV across instances; `MARKET_CYCLE_KICK_MIN_MS`, default 12s). Prefer `MARKET_CYCLE_ON_TRAFFIC=0` on free tier if you have a reliable external pinger.
-   GitHub Actions is **not** a usable backup here: its scheduler floors well above a minute and slips badly under load — observed runs landed ~3.5 h apart, not 60 s. A workflow for this was removed rather than left as a false safety net.
-
----
-
-## Email OTP (Gmail SMTP)
-
-Production mail is sent from the app (not Circle). With Gmail, prefer an **App Password**:
-
-1. [2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification)
-2. [App passwords](https://myaccount.google.com/apppasswords) → Mail
+Keep **one Railway replica**, disable sleeping/serverless mode, and do not configure an external cron as the primary scheduler. The protected endpoints remain available for emergency recovery:
 
 ```text
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=you@gmail.com
-SMTP_PASS=                    # 16-char app password — keep only on Vercel if preferred
-BREVO_FROM_EMAIL=you@gmail.com
-BREVO_FROM_NAME=ProbX
-EMAIL_OTP_DEV_ECHO=0          # 1 = show code in UI (local/dev)
-EMAIL_OTP_REQUIRED=1
+GET /api/cron/market-cycle?secret=CRON_SECRET
+GET /api/cron/auto-resolve?secret=CRON_SECRET
+GET /api/cron/market-cycle/status
 ```
 
----
+## Gmail API OAuth
 
-## Circle env (server)
-
-```text
-CIRCLE_API_KEY=
-CIRCLE_ENTITY_SECRET=          # 64-char hex; save recovery_file_*.dat when registering
-CIRCLE_WALLET_SET_ID=
-CIRCLE_KIT_KEY=                # Circle Console → kit key (optional for basic send)
-CCTP_SOURCE_PRIVATE_KEY=       # optional server fund treasury
-```
-
-Entity secret is per **Circle account** (not per API key). Without `recovery_file_*.dat`
-you cannot reset a lost secret.
-
----
-
-## Release zip (no secrets)
+1. Enable Gmail API in Google Cloud.
+2. Configure the OAuth consent screen and create a **Desktop app** OAuth client.
+3. Generate a refresh token locally:
 
 ```bash
-git add -A && git commit -m "…"
-pnpm pack:release    # git archive only — never zip the working tree by hand
+GMAIL_OAUTH_CLIENT_ID='...' \
+GMAIL_OAUTH_CLIENT_SECRET='...' \
+pnpm gmail:oauth
 ```
 
----
+4. Add to Railway:
 
-## Related
+```dotenv
+GMAIL_OAUTH_CLIENT_ID=
+GMAIL_OAUTH_CLIENT_SECRET=
+GMAIL_OAUTH_REFRESH_TOKEN=
+GMAIL_SENDER_EMAIL=you@gmail.com
+GMAIL_SENDER_NAME=ProbX Arc
+EMAIL_OTP_DEV_ECHO=0
+EMAIL_OTP_REQUIRED=1
+```
 
-- Addresses: [`DEPLOYMENT_ARC_TESTNET.json`](./DEPLOYMENT_ARC_TESTNET.json)
-- Vercel address bump: [`VERCEL_ENV_UPDATE.md`](./VERCEL_ENV_UPDATE.md)
-- External cron: [`EXTERNAL_CRON.md`](./EXTERNAL_CRON.md)
+## Verification
+
+After deployment:
+
+```bash
+curl https://your-api.up.railway.app/api/health
+```
+
+Expected worker state:
+
+```json
+{
+  "ok": true,
+  "workers": {
+    "enabled": true,
+    "marketCycle": { "started": true, "intervalMs": 30000 },
+    "oracleSnapshot": { "started": true, "intervalMs": 7000 },
+    "autoResolve": { "started": false }
+  }
+}
+```
+
+Railway logs should include:
+
+```text
+ProbX Arc API listening on http://0.0.0.0:<PORT>
+[workers] starting persistent Railway workers
+[oracle-snapshot] worker started (every 7000ms)
+[market-cycle] background timer every 30000ms
+```
+
+See `docs/RPC_BUDGET.md` for the request budget and Railway cost controls.

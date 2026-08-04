@@ -2,9 +2,9 @@
   "name": "probx-arc-micro",
   "version": "0.1.0",
   "private": true,
-  "description": "Short-horizon prediction markets on Arc — USDC-native settlement, LP-underwritten reserves, Circle Wallets + CCTP.",
+  "description": "Short-horizon prediction markets on Arc \u2014 USDC-native settlement, LP-underwritten reserves, Circle Wallets + CCTP.",
   "scripts": {
-    "dev": "pnpm --parallel dev",
+    "dev": "pnpm --filter @probx/web dev",
     "dev:web": "pnpm --filter @probx/web dev",
     "dev:api": "pnpm --filter @probx/api dev",
     "build": "pnpm --recursive build",
@@ -17,7 +17,9 @@
     "demo:markets": "node scripts/arc-demo-markets.mjs",
     "smoke:arc": "node scripts/arc-smoke-test.mjs",
     "rpc:arc": "node scripts/arc-rpc-preflight.mjs",
-    "pack:release": "bash scripts/pack-release.sh"
+    "pack:release": "bash scripts/pack-release.sh",
+    "start": "node apps/web/node_modules/next/dist/bin/next start apps/web -H 0.0.0.0 -p ${PORT:-3000}",
+    "gmail:oauth": "node scripts/gmail-oauth-token.mjs"
   },
   "keywords": [
     "settlement",

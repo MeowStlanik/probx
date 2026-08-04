@@ -1,8 +1,7 @@
 /**
  * AES-256-GCM at-rest encryption for server-side secrets (session wallet keys).
  *
- * Threat model: the runtime JSON store (`.runtime/*.json` locally, `/tmp` on
- * Vercel) may leak without env vars leaking. Private keys must not sit there
+ * Threat model: the runtime JSON store may leak without environment variables leaking. Private keys must not sit there
  * in plaintext. Values are encrypted with a key derived (scrypt) from
  * SESSION_WALLET_SECRET / OTP_HMAC_SECRET / CIRCLE_* env, falling back to a
  * random key persisted in a separate 0600 file next to the data.

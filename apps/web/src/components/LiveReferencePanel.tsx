@@ -46,9 +46,9 @@ type LiveReferencePanelProps = {
   weatherMarketHref?: string;
 };
 
-const BTC_POLL_MS = 1_000;
-const WEATHER_POLL_MS = 3_000;
-const ALL_POLL_MS = 2_000;
+const BTC_POLL_MS = 5_000;
+const WEATHER_POLL_MS = 30_000;
+const ALL_POLL_MS = 10_000;
 
 const BTC_HISTORY_CAP = 100;
 const WEATHER_HISTORY_CAP = 120;
@@ -63,6 +63,7 @@ export function LiveReferencePanel({
 }: LiveReferencePanelProps) {
   const btcHistoryRef = useRef<HistoryPoint[]>([]);
   const weatherHistoryRef = useRef<HistoryPoint[]>([]);
+  const loadedFullHistoryRef = useRef(false);
   const [data, setData] = useState<DemoReferenceData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [btcHistory, setBtcHistory] = useState<HistoryPoint[]>([]);
@@ -111,7 +112,10 @@ export function LiveReferencePanel({
   const refresh = useCallback(async (manual = false) => {
     if (manual) setManualRefreshing(true);
     try {
-      const next = (await fetchDemoReferenceData()) as DemoReferenceData;
+      const next = (await fetchDemoReferenceData({
+        lite: loadedFullHistoryRef.current
+      })) as DemoReferenceData;
+      loadedFullHistoryRef.current = true;
 
       if (showBtc && next.btcUsd && Number.isFinite(next.btcUsd.price)) {
         applyHistory("btc", next.btcUsd.history, {
@@ -138,7 +142,9 @@ export function LiveReferencePanel({
 
   useEffect(() => {
     void refresh(false);
-    const interval = window.setInterval(() => void refresh(false), pollMs);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh(false);
+    }, pollMs);
     return () => window.clearInterval(interval);
   }, [pollMs, refresh]);
 

@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { AppProviders } from "@/components/AppProviders";
-import { MarketCycleHeartbeat } from "@/components/MarketCycleHeartbeat";
 import { TxToast } from "@/components/TxToast";
 import { AppChrome } from "@/nextjs/shells/AppChrome";
 // Keep legacy class styles for FundUsdcPanel + loading shells still using globals.
@@ -33,7 +32,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <AppProviders>
           <AppChrome>
-            <MarketCycleHeartbeat />
             {children}
           </AppChrome>
           <TxToast />

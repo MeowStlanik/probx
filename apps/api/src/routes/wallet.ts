@@ -158,7 +158,7 @@ export async function handleWalletGet(
   return null;
 }
 
-/** Best-effort client IP from reverse-proxy headers (Vercel / Cloudflare). */
+/** Best-effort client IP from reverse-proxy headers. */
 export function clientIpFromHeaders(headers: Record<string, string | undefined>): string | undefined {
   const xff = (headers["x-forwarded-for"] ?? headers["x-real-ip"] ?? "").trim();
   if (!xff) return undefined;

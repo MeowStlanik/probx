@@ -47,8 +47,10 @@ export function HomeShell({
 
   useEffect(() => {
     void refresh();
-    // Fast poll so new OPEN markets show while the timer still has time left.
-    const id = window.setInterval(() => void refresh(), 5_000);
+    // Keep the landing page fresh without polling Railway every five seconds per tab.
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, 20_000);
     return () => window.clearInterval(id);
   }, [refresh]);
 

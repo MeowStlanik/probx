@@ -212,7 +212,7 @@ export async function listTxForOwner(owner: string, limit = 25): Promise<TxRecor
   return refreshed;
 }
 
-/** Reconcile all still-pending records (used by the cron heartbeat). */
+/** Reconcile all still-pending records (used by the background worker and manual cron). */
 export async function reconcilePending(maxToCheck = 40): Promise<{ checked: number; settled: number }> {
   const all = await store.all();
   const pending = Object.values(all)

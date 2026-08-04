@@ -14,6 +14,11 @@ const COOLDOWN_MS = 4_000;
 
 let timer: NodeJS.Timeout | undefined;
 let running = false;
+let startedAt: string | undefined;
+let intervalMs: number | undefined;
+let lastRunAt: string | undefined;
+let lastSuccessAt: string | undefined;
+let lastError: string | undefined;
 
 /**
  * Periodically resolves BTC/weather reference markets from live feeds once the
@@ -21,8 +26,8 @@ let running = false;
  */
 export function startAutoResolveWorker(): void {
   if (timer) return;
-  if (process.env.AUTO_RESOLVE_ENABLED === "0") {
-    console.log("[auto-resolve] disabled via AUTO_RESOLVE_ENABLED=0");
+  if (process.env.AUTO_RESOLVE_ENABLED !== "1") {
+    console.log("[auto-resolve] disabled (set AUTO_RESOLVE_ENABLED=1 only for a separate resolver service)");
     return;
   }
   if (!onchainEnabled()) {
@@ -41,8 +46,12 @@ export function startAutoResolveWorker(): void {
     return;
   }
 
-  const intervalMs = Number(process.env.AUTO_RESOLVE_INTERVAL_MS ?? DEFAULT_INTERVAL_MS);
-  const safeInterval = Number.isFinite(intervalMs) && intervalMs >= 2_000 ? intervalMs : DEFAULT_INTERVAL_MS;
+  const configuredInterval = Number(process.env.AUTO_RESOLVE_INTERVAL_MS ?? DEFAULT_INTERVAL_MS);
+  const safeInterval = Number.isFinite(configuredInterval) && configuredInterval >= 2_000
+    ? configuredInterval
+    : DEFAULT_INTERVAL_MS;
+  intervalMs = safeInterval;
+  startedAt = new Date().toISOString();
 
   console.log(`[auto-resolve] worker started (every ${safeInterval}ms)`);
   void tick().catch((error) => {
@@ -64,7 +73,7 @@ export function stopAutoResolveWorker(): void {
   }
 }
 
-/** One resolve pass (used by Vercel Cron / on-demand). */
+/** One resolve pass (used by the manual cron endpoint / on-demand). */
 export async function runAutoResolveOnce(): Promise<{ checked: number; attempted: number }> {
   return tick();
 }
@@ -72,6 +81,7 @@ export async function runAutoResolveOnce(): Promise<{ checked: number; attempted
 async function tick(): Promise<{ checked: number; attempted: number }> {
   if (running) return { checked: 0, attempted: 0 };
   running = true;
+  lastRunAt = new Date().toISOString();
   let checked = 0;
   let attempted = 0;
   try {
@@ -149,6 +159,11 @@ async function tick(): Promise<{ checked: number; attempted: number }> {
         inFlight.delete(key);
       }
     }
+    lastSuccessAt = new Date().toISOString();
+    lastError = undefined;
+  } catch (error) {
+    lastError = error instanceof Error ? error.message : String(error);
+    throw error;
   } finally {
     running = false;
   }
@@ -214,5 +229,18 @@ export async function autoResolvePreview(marketId: string) {
     hasThreshold: hasParseableThreshold(market.demoRole, market.category, market.question),
     readyAt: market.observationEnd || market.lockTime,
     ready: Date.now() >= Date.parse(market.observationEnd || market.lockTime)
+  };
+}
+
+
+export function getAutoResolveWorkerStatus() {
+  return {
+    started: Boolean(timer),
+    running,
+    intervalMs,
+    startedAt,
+    lastRunAt,
+    lastSuccessAt,
+    lastError
   };
 }

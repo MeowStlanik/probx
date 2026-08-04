@@ -1,19 +1,9 @@
 /**
  * Durable key/value store for wallet mappings and transaction records.
  *
- * Production (Vercel) uses a REST KV — Vercel KV / Upstash Redis — so that the
- * email -> walletId/address mapping survives cold starts, redeploys, and
- * multi-instance fan-out. The previous /tmp JSON file is per-instance and
- * ephemeral, which is exactly the failure this store removes.
- *
- * If no KV env is present (local dev), it transparently falls back to a JSON
- * file under the runtime dir so nothing breaks and behaviour is unchanged.
- *
- * No new npm dependency: the KV is reached over its REST API with fetch.
- * Supported env shapes:
- *   - Vercel KV / Upstash Redis REST:
- *       KV_REST_API_URL + KV_REST_API_TOKEN
- *       (or UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN)
+ * Production uses Upstash Redis over HTTPS so state survives Railway restarts
+ * and remains safe if the service is scaled beyond one process. Local
+ * development falls back to JSON files in the runtime directory.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -22,10 +12,8 @@ import { runtimeFile } from "../runtimePaths.js";
 type KvConfig = { url: string; token: string };
 
 function kvConfig(): KvConfig | null {
-  const url =
-    process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || "";
-  const token =
-    process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || "";
+  const url = process.env.UPSTASH_REDIS_REST_URL || "";
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || "";
   if (!url || !token) return null;
   return { url: url.replace(/\/$/, ""), token };
 }
@@ -34,13 +22,9 @@ export function persistenceMode(): "kv" | "file" {
   return kvConfig() ? "kv" : "file";
 }
 
-/** True on Vercel / production shared hosts where process-local state is unsafe. */
+/** True when process-local state is unsafe for production guarantees. */
 export function isSharedRuntime(): boolean {
-  return Boolean(
-    process.env.VERCEL ||
-      process.env.AWS_LAMBDA_FUNCTION_NAME ||
-      process.env.NODE_ENV === "production"
-  );
+  return process.env.NODE_ENV === "production";
 }
 
 /**
@@ -51,7 +35,7 @@ export function requireDurableKv(feature: string): void {
   if (!isSharedRuntime()) return;
   if (persistenceMode() !== "kv") {
     throw new Error(
-      `${feature} requires durable KV (UPSTASH_REDIS_REST_URL / KV_REST_API_URL) on shared deploys.`
+      `${feature} requires durable KV (UPSTASH_REDIS_REST_URL) in production.`
     );
   }
 }

@@ -157,9 +157,10 @@ export function LpShell({
     void refresh();
     void refreshLedger();
     const id = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
       void refresh();
       void refreshLedger();
-    }, 15_000);
+    }, 60_000);
     return () => window.clearInterval(id);
   }, [refresh, refreshLedger]);
 

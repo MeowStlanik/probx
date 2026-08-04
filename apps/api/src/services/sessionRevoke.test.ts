@@ -12,7 +12,6 @@ import {
 
 // Local/dev: allow revoke without KV
 (process.env as { NODE_ENV?: string }).NODE_ENV = "development";
-delete process.env.VERCEL;
 
 async function main() {
   const token = issueSignedSession({

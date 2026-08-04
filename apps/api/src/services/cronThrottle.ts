@@ -1,11 +1,6 @@
 /**
- * Best-effort in-memory throttle for cron/cycle endpoints.
- *
- * The market cycle is deliberately callable without a secret (the client
- * heartbeat drives it on Vercel Hobby, where cron runs only once a day).
- * Without a throttle, spamming the endpoint burns oracle gas on every call.
- * One run per window per instance keeps the heartbeat design intact while
- * capping abuse. Callers that present a valid CRON_SECRET bypass the throttle.
+ * Best-effort in-memory throttle for manual cron endpoints.
+ * Authenticated calls bypass this throttle in dispatch.ts.
  */
 const lastRunByKey = new Map<string, number>();
 

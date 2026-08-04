@@ -67,8 +67,9 @@ export interface Position {
   stake: string;
   boost: string;
   payout: string;
-  status: 'Open' | 'Won · unclaimed' | 'Claimed' | 'Lost';
+  status: 'Open' | 'Won · unclaimed' | 'Refund · unclaimed' | 'Claimed' | 'Refunded' | 'Lost';
   canClaim: boolean;
+  claimAction?: "Claim payout" | "Claim refund";
   txHref?: string;
 }
 

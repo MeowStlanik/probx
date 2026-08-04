@@ -25,6 +25,7 @@ import { handleWalletGet, handleWalletPost } from "./routes/wallet.js";
 import { reconcilePending } from "./services/txTrackerService.js";
 import { runAutoResolveOnce } from "./services/autoResolveWorker.js";
 import { getMarketCycleStatus, runMarketCycleOnce } from "./services/marketCycleWorker.js";
+import { getBackgroundWorkerStatus, startBackgroundWorkers } from "./services/backgroundWorkers.js";
 
 export type DispatchResult = { status: number; body: unknown };
 
@@ -43,10 +44,13 @@ export async function dispatchApiRequest(input: {
   const headers = input.headers ?? {};
 
   try {
+    // Instrumentation is the primary bootstrap. This request-path call is a safe
+    // fallback for platforms that skip instrumentation; production remains opt-in.
+    startBackgroundWorkers();
     resolveExpiredDemoMarkets((await import("./db/client.js")).db);
 
     if (method === "GET" && (path === "/health" || path === "/api/health")) {
-      return { status: 200, body: { ok: true } };
+      return { status: 200, body: { ok: true, workers: getBackgroundWorkerStatus() } };
     }
     if (method === "GET" && path === "/api/contracts") {
       return { status: 200, body: contractAddresses() };
@@ -55,7 +59,10 @@ export async function dispatchApiRequest(input: {
       return { status: 200, body: await listMarkets() };
     }
     if (method === "GET" && path === "/api/demo-data") {
-      return { status: 200, body: await demoReferenceData() };
+      return {
+        status: 200,
+        body: await demoReferenceData({ includeHistory: searchParams.get("lite") !== "1" })
+      };
     }
     if (
       method === "GET" &&
@@ -97,7 +104,7 @@ export async function dispatchApiRequest(input: {
     }
 
     if (method === "GET" && path === "/api/cron/auto-resolve") {
-      // When CRON_SECRET is set, require it (external pinger / Vercel cron).
+      // Require CRON_SECRET in production; local development may run anonymously.
       // Without secret configured (local dev): allow but throttle gas-spam.
       const cronAuth = authorizeCron(searchParams, headers);
       if (cronAuth === "deny") return cronDenied();
@@ -115,11 +122,11 @@ export async function dispatchApiRequest(input: {
     }
 
     if (method === "GET" && path === "/api/cron/market-cycle") {
-      // Client heartbeat calls this without secret while a tab is open (throttled).
-      // External pingers should pass CRON_SECRET to bypass throttle.
-      // Unlike auto-resolve, anonymous is always allowed here (demo UX).
-      const authed = authorizeCron(searchParams, headers) === "ok";
-      if (!authed && cronThrottled("market-cycle")) {
+      // Manual market-cycle endpoint. Require CRON_SECRET in production;
+      // local anonymous calls remain throttled.
+      const cronAuth = authorizeCron(searchParams, headers);
+      if (cronAuth === "deny") return cronDenied();
+      if (cronAuth === "anonymous" && cronThrottled("market-cycle")) {
         return { status: 200, body: { ok: true, skipped: "throttled", cycleStatus: getMarketCycleStatus() } };
       }
       const cycle = await runMarketCycleOnce();
@@ -129,7 +136,7 @@ export async function dispatchApiRequest(input: {
     }
 
     if (method === "GET" && path === "/api/cron/market-cycle/status") {
-      return { status: 200, body: getMarketCycleStatus() };
+      return { status: 200, body: { ...getMarketCycleStatus(), workers: getBackgroundWorkerStatus() } };
     }
 
     if (method === "GET") {
@@ -243,8 +250,9 @@ export async function dispatchApiRequest(input: {
     }
 
     if (method === "POST" && path === "/api/cron/market-cycle") {
-      const authed = authorizeCron(searchParams, headers) === "ok";
-      if (!authed && cronThrottled("market-cycle")) {
+      const cronAuth = authorizeCron(searchParams, headers);
+      if (cronAuth === "deny") return cronDenied();
+      if (cronAuth === "anonymous" && cronThrottled("market-cycle")) {
         return { status: 200, body: { ok: true, skipped: "throttled", cycleStatus: getMarketCycleStatus() } };
       }
       const cycle = await runMarketCycleOnce();
@@ -282,14 +290,13 @@ function adminDenied(): DispatchResult {
  * - secret configured + missing/wrong proof → "deny" (401)
  *
  * Proof: ?secret= / ?cron_secret= or `Authorization: Bearer <secret>`
- * (Vercel Cron sends Bearer when CRON_SECRET / VERCEL_CRON_SECRET is set).
  */
 function authorizeCron(
   searchParams: URLSearchParams,
   headers: Record<string, string | undefined>
 ): "ok" | "anonymous" | "deny" {
-  const expected = (process.env.CRON_SECRET || process.env.VERCEL_CRON_SECRET || "").trim();
-  if (!expected) return "anonymous";
+  const expected = (process.env.CRON_SECRET || "").trim();
+  if (!expected) return process.env.NODE_ENV === "production" ? "deny" : "anonymous";
   if (cronSecretMatches(expected, searchParams, headers)) return "ok";
   return "deny";
 }

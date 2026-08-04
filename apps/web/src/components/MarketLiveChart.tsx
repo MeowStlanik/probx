@@ -11,7 +11,7 @@ type MarketLiveChartProps = {
   feed: "btc" | "weather";
 };
 
-const POLL_MS = { btc: 1_000, weather: 2_500 } as const;
+const POLL_MS = { btc: 5_000, weather: 30_000 } as const;
 
 const UP = "#1F9D6B";
 const DOWN = "#D6544A";
@@ -31,6 +31,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const histRef = useRef<Point[]>([]);
+  const loadedFullHistoryRef = useRef(false);
   const startRef = useRef<number | null>(null);
   const [points, setPoints] = useState<Point[]>([]);
   const [startValue, setStartValue] = useState<number | null>(null);
@@ -69,7 +70,9 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
 
   const pull = useCallback(async () => {
     try {
-      const data = (await fetchDemoReferenceData()) as {
+      const data = (await fetchDemoReferenceData({
+        lite: loadedFullHistoryRef.current
+      })) as {
         btcUsd?: { price: number; updatedAt: string; history?: Array<{ value: number; at: number }> };
         londonWeather?: {
           temperatureC: number;
@@ -77,6 +80,8 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
           history?: Array<{ value: number; at: number }>;
         };
       };
+
+      loadedFullHistoryRef.current = true;
 
       let value: number | undefined;
       let at: number;
@@ -164,7 +169,9 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
 
   useEffect(() => {
     void pull();
-    const poll = window.setInterval(() => void pull(), POLL_MS[feed]);
+    const poll = window.setInterval(() => {
+      if (document.visibilityState === "visible") void pull();
+    }, POLL_MS[feed]);
     const clock = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => {
       window.clearInterval(poll);
@@ -411,7 +418,7 @@ export function MarketLiveChart({ market, feed }: MarketLiveChartProps) {
             }
             body={
               error
-                ? "Live feed could not load. Leave NEXT_PUBLIC_API_BASE_URL empty on Vercel, redeploy, and hard-refresh."
+                ? "Live feed could not load. Leave NEXT_PUBLIC_API_BASE_URL empty on Railway, redeploy, and hard-refresh."
                 : phase === "live"
                   ? "Recording BTC / temp samples during the observation window only."
                   : phase === "after"

@@ -55,8 +55,10 @@ export function MarketsShell({
 
   useEffect(() => {
     void load({ silent: Boolean(initial?.length) });
-    // 5s poll — markets used to appear mid-OPEN after slow refresh.
-    const id = window.setInterval(() => void load({ silent: true }), 5_000);
+    // 15s is fast enough for ~75s entry windows and cuts API/RPC fan-out per open tab.
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load({ silent: true });
+    }, 20_000);
     return () => window.clearInterval(id);
   }, [initial?.length, load]);
 

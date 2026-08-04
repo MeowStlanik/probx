@@ -158,9 +158,9 @@ export function ticketToPosition(ticket: Ticket): Position {
   } else if (ticket.result === "WIN" && !ticket.claimable && ticket.status === "SETTLED") {
     status = "Claimed";
   } else if (ticket.result === "REFUND" && ticket.claimable) {
-    status = "Won · unclaimed";
+    status = "Refund · unclaimed";
   } else if (ticket.result === "REFUND") {
-    status = "Claimed";
+    status = "Refunded";
   } else if (ticket.status === "SETTLED") {
     status = "Claimed";
   } else if (ticket.claimable && ticket.result === "WIN") {
@@ -184,7 +184,8 @@ export function ticketToPosition(ticket: Ticket): Position {
         ? "0.00 USDC"
         : `${(ticket.result === "REFUND" ? ticket.riskAmount : ticket.payout).toFixed(2)} USDC`,
     status,
-    canClaim
+    canClaim,
+    claimAction: ticket.result === "REFUND" ? "Claim refund" : canClaim ? "Claim payout" : undefined
   };
 }
 

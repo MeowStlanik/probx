@@ -53,6 +53,9 @@ export function PortfolioView({
 
   const statusChipStyle = (status: Position["status"]) => {
     if (status === "Won · unclaimed" || status === "Claimed") return { bg: theme.color.yesSoft, fg: theme.color.yes };
+    if (status === "Refund · unclaimed" || status === "Refunded") {
+      return { bg: theme.color.blueSoft, fg: theme.color.blue };
+    }
     if (status === "Lost") return { bg: theme.color.noSoft, fg: theme.color.no };
     return { bg: theme.color.blueSoft, fg: theme.color.blue };
   };
@@ -68,7 +71,7 @@ export function PortfolioView({
         <EmptyState
           tone="error"
           title="Couldn't load your positions"
-          description="Arc RPC / API read failed — your funds are safe on-chain. Check NEXT_PUBLIC_API_BASE_URL is empty on Vercel, then Retry."
+          description="Arc RPC / backend read failed — your funds are safe on-chain. Check the configured Railway API URL and CORS_ORIGINS, then Retry."
           action={
             <button
               onClick={onRetry}
@@ -284,7 +287,7 @@ export function PortfolioView({
                               disabled={claimingId === p.id}
                               onClick={() => onClaim(p.id)}
                             >
-                              {claimingId === p.id ? "…" : "Claim"}
+                              {claimingId === p.id ? "…" : p.claimAction ?? "Claim"}
                             </Button>
                           ) : p.status === "Lost" ? (
                             <span style={{ fontSize: 11.5, color: theme.color.muted }}>No payout</span>

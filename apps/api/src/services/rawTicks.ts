@@ -141,7 +141,7 @@ export async function pushRawTick(
       return;
     } catch (err) {
       // A transient Redis failure must not silently downgrade the oracle to per-instance
-      // files on a shared deploy: each serverless instance would then resolve from its
+      // files on a shared deploy: each process could then resolve from its
       // own private tick history. Fail loudly here; only local dev may fall back.
       if (isSharedRuntime()) {
         throw new Error(

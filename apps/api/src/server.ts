@@ -1,11 +1,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { URL } from "node:url";
 import { dispatchApiRequest } from "./dispatch.js";
-import { startAutoResolveWorker } from "./services/autoResolveWorker.js";
-import { runMarketCycleOnce } from "./services/marketCycleWorker.js";
+import { startBackgroundWorkers } from "./services/backgroundWorkers.js";
 
 const port = Number(process.env.PORT ?? "8787");
-const host = process.env.HOST ?? "127.0.0.1";
+const host = process.env.HOST ?? "0.0.0.0";
 
 const server = createServer(async (req, res) => {
   try {
@@ -39,18 +38,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, host, () => {
   console.log(`ProbX Arc API listening on http://${host}:${port}`);
-  startAutoResolveWorker();
-  // Local/dev: drive the 60s open + 60s observe BTC/weather cycle.
-  if (process.env.MARKET_CYCLE_ENABLED !== "0") {
-    const intervalMs = Number(process.env.MARKET_CYCLE_INTERVAL_MS ?? 55_000);
-    const safe = Number.isFinite(intervalMs) && intervalMs >= 20_000 ? intervalMs : 55_000;
-    console.log(`[market-cycle] local timer every ${safe}ms`);
-    void runMarketCycleOnce().catch((error) => console.error("[market-cycle] initial", error));
-    const timer = setInterval(() => {
-      void runMarketCycleOnce().catch((error) => console.error("[market-cycle]", error));
-    }, safe);
-    timer.unref?.();
-  }
+  startBackgroundWorkers();
 });
 
 function pickHeaders(req: IncomingMessage): Record<string, string | undefined> {

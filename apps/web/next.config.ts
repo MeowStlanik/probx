@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true
   },
-  serverExternalPackages: ["@circle-fin/developer-controlled-wallets", "nodemailer"],
+  serverExternalPackages: ["@circle-fin/developer-controlled-wallets"],
   outputFileTracingRoot: path.join(configDir, "../.."),
   webpack: (config) => {
     config.resolve.extensionAlias = {
