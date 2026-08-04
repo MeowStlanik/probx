@@ -47,10 +47,23 @@ const server = createServer(async (req, res) => {
   const returnedState = url.searchParams.get("state");
   const code = url.searchParams.get("code");
   const oauthError = url.searchParams.get("error");
+
+  // Browsers, extensions, antivirus software, or an old OAuth tab can hit the
+  // registered callback URL without the current authorization parameters.
+  // Ignore those requests instead of terminating the one-time OAuth helper.
+  if (!returnedState && !code && !oauthError) {
+    res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+    res.end("OAuth helper is running. Return to the terminal and open the newest Google authorization URL.");
+    console.warn("Ignored callback request without OAuth parameters.");
+    return;
+  }
+
+  // A stale Google authorization tab may return a state from an older helper
+  // run. Keep waiting for the callback that belongs to the current process.
   if (returnedState !== state) {
-    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-    res.end("OAuth state mismatch. Close this page and run the command again.");
-    finish(1, "OAuth state mismatch.");
+    res.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Stale OAuth callback ignored. Return to the terminal and open the newest authorization URL.");
+    console.warn("Ignored stale OAuth callback with a mismatched state.");
     return;
   }
   if (oauthError || !code) {

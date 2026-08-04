@@ -85,3 +85,7 @@ https://probx.up.railway.app/api/health
 ```
 
 Confirm the worker state reports enabled market-cycle and oracle-snapshot workers. New markets should normally follow the previous market within roughly one or two cycle intervals.
+
+### Gmail OAuth: `state mismatch`
+
+The helper ignores stale or parameterless callback requests and keeps waiting for the current Google authorization flow. Close old OAuth tabs, run `pnpm gmail:oauth` once, and open only the newest URL printed in that terminal.
