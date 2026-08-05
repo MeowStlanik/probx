@@ -17,7 +17,8 @@ contract MicroMarket {
     /// @dev Book overround (sportsbook margin). Quoted YES+NO ≈ 108% of fair scale.
     ///      Self-funds boost up to ~1.09x; above that the vault subsidises by design.
     uint256 public constant OVERROUND_BPS = 10_800; // 108%
-    /// @dev Upper bound only — impact is strictly proportional to stake (no floor).
+    /// @dev Upper bound for one trade. Impact is linear in stake at fixed depth until this cap;
+    ///      there is deliberately no minimum-impact floor for dust trades.
     uint256 public constant MAX_IMPACT = 120_000; // 12%
 
     /// @dev Max drift of fair mid away from its seed, in bps of the *cheaper* side.
@@ -254,7 +255,8 @@ contract MicroMarket {
         require(riskAmount > 0, "ZERO_RISK");
 
         uint256 depth = impactLiquidity + totalYesRisk + totalNoRisk;
-        // risk/(2*depth) of full scale — strictly proportional (no MIN_IMPACT floor).
+        // risk/(2*depth) of full scale — linear at the current depth until MAX_IMPACT;
+        // deliberately no MIN_IMPACT floor.
         uint256 impact = (riskAmount * PRICE_SCALE) / (depth * 2);
         if (impact > MAX_IMPACT) impact = MAX_IMPACT;
 

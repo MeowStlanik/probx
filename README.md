@@ -53,7 +53,7 @@ so the entire flow — fund, position, resolve, claim — stays in one asset.
 
 ## See it in 2 minutes
 
-1. Deploy `apps/api` on Railway and `apps/web` on Vercel using [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), then open the Vercel UI → **Markets**. Continuous BTC direction / London temperature loops exercise reserve → resolve → claim on a ~75s entry / 60s observation cycle.
+1. Deploy the full Next.js app on Railway using [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), then open **Markets**. The BTC loop exercises reserve → resolve → claim with a ~60–75s visible entry window and a 60s observation. London weather uses a 30-minute observation so its start and end come from distinct Open-Meteo 15-minute prints.
 2. Sign in with email (Circle Developer-Controlled wallet on Arc) or MetaMask.
 3. Fund with testnet USDC — directly on Arc, or from Base Sepolia via **App Kit bridge** (mint lands on the **session** Arc address shown in the UI).
 4. Take a YES/NO position, optionally with Micro Boost. Watch the live chart against the start line, then claim after auto-resolve.
@@ -92,7 +92,7 @@ the first layer of house edge and funds modest boost.
 
 - **UI:** odds display as normalised shares summing to 100%, so users never see a "108% market".
 - **Pricing:** raw on-chain prices (with overround) drive payout math.
-- **API:** `applyPriceMargin()` in `quoteEngine.ts` mirrors contract quoting.
+- **API:** `applyPriceMargin()` in `quoteEngine.ts` mirrors the contract's integer overround math and quote rails.
 
 That margin only protects the vault while flow cannot push price *past* it, so the book
 enforces the bound directly. Fair mid may drift from its seed by at most
@@ -142,8 +142,9 @@ open ──► lock ──► pause (10s) ──► observation ──► resolv
 
 ### 4. Seed odds from the feed
 New markets estimate a fair mid from live structure before applying overround — BTC from
-recent return (random-walk prior), London temp with a modest YES tilt (temperature is
-sticky over 60s). No free lunch on mispriced flat 50/50 tickets.
+recent return (random-walk prior), London temp with a modest YES tilt. The weather
+reference window is 30 minutes because Open-Meteo publishes on a 15-minute grid. No free
+lunch on mispriced flat 50/50 tickets.
 
 > **Deploy note:** overround and boost fee live in **contract bytecode**. Redeploy after changing those constants.
 
@@ -159,7 +160,7 @@ assumed. `pnpm contracts:test` → **50 passing**: 25 scenario + 3 registry + 6 
 | Area | Guarantee | Test |
 |------|-----------|------|
 | **Book integrity** | No reachable book state quotes a side below its seed fair value, under any sequence of legal trades — so flow can never push price past the overround that funds the book. Virtual depth scales with LP capital rather than a fixed constant | [`BookManipulation.t.sol`](./contracts/test/BookManipulation.t.sol) |
-| **Quote integrity** | Price impact is strictly proportional to stake; `MIN_USER_RISK_PER_TICKET` (0.25 USDC) rejects sub-minimum stakes outright | [`DustManipulation.t.sol`](./contracts/test/DustManipulation.t.sol) |
+| **Quote integrity** | At a fixed book depth, price impact is linear in stake until `MAX_IMPACT`; there is no minimum-impact floor, and `MIN_USER_RISK_PER_TICKET` (0.25 USDC) rejects sub-minimum stakes outright | [`DustManipulation.t.sol`](./contracts/test/DustManipulation.t.sol) |
 | **Resolution timing** | `resolve()` reverts until the full observation window has elapsed (`observationEnd`), independent of resolver-key discipline | [`ObservationResolve.t.sol`](./contracts/test/ObservationResolve.t.sol) |
 | **Share pricing** | Vault prices shares off an internal ledger (`internalAssets`), not token balance — direct transfers cannot inflate share value | [`DonationAttack.t.sol`](./contracts/test/DonationAttack.t.sol) |
 | **Reserve accounting** | Every payout, loss and refund reconciles reserved + locked balances | [`ReserveAccounting.t.sol`](./contracts/test/ReserveAccounting.t.sol) |
@@ -190,22 +191,22 @@ self-call so one bad ticket cannot revert the batch.
 ## Architecture
 
 ```text
-┌────────────────┐     HTTPS      ┌────────────────────┐     ┌─────────────────────────┐
-│  Next.js UI    │───────────────▶│  Standalone API    │────▶│  Arc Testnet            │
-│  Vercel        │                │  Railway apps/api  │     │  Engine · Vault · Mkts  │
-└───────┬────────┘                │  + market workers  │     └───────────┬─────────────┘
-        │                         └─────────┬──────────┘                 │ USDC
-        │                                   │                            │
-        │                         ┌─────────▼────────┐           ┌───────▼───────┐
-        └────────────────────────▶│ Circle / Gmail  │           │ App Kit       │
-            browser wallet        │ Aiven Valkey    │           │ Send · Bridge │
-                                  └──────────────────┘           └───────────────┘
+┌──────────────────────────────────────┐     ┌─────────────────────────┐
+│ Railway: Next.js full-stack service  │────▶│ Arc Testnet             │
+│ apps/web UI + same-origin API routes │     │ Engine · Vault · Mkts   │
+│ apps/api services + market workers   │     └───────────┬─────────────┘
+└──────────────────┬───────────────────┘                 │ USDC
+                   │                                     │
+          ┌────────▼────────┐                    ┌────────▼──────┐
+          │ Circle / Gmail  │                    │ App Kit / CCTP│
+          │ Aiven Valkey    │                    │ Send · Bridge │
+          └─────────────────┘                    └───────────────┘
 ```
 
 | Package | Role |
 |---------|------|
-| `apps/web` | Vercel-hosted Markets, portfolio, LP, admin and funding UI |
-| `apps/api` | Railway-hosted API, quotes, Circle, Gmail, CCTP and persistent market workers |
+| `apps/web` | Railway-hosted Next.js UI and same-origin route handlers |
+| `apps/api` | API services, quotes, Circle, Gmail, CCTP and persistent market workers imported by the Next.js runtime |
 | `contracts` | Foundry sources + [tests](./contracts/test/) |
 | `scripts/` | `deploy-arc`, smoke, demo markets, RPC preflight |
 
@@ -246,7 +247,7 @@ Full deployment JSON: [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_T
 |------------|----------------|
 | Email login | Circle **Developer-Controlled** wallets on `ARC-TESTNET` |
 | Fallback | Local encrypted session EOA if `CIRCLE_*` incomplete |
-| OTP | App-issued 6-digit code through Gmail API; `EMAIL_OTP_DEV_ECHO=1` shows code in UI locally |
+| OTP | App-issued 6-digit code through Gmail API; in non-production local runs, `EMAIL_OTP_DEV_ECHO=1` returns and shows the code in the login UI |
 | **Send** | App Kit `kit.send` on Arc; Circle DCW transfer via `tokenId`; raw viem fallback |
 | **Bridge** | App Kit `kit.bridge` (CCTP v2 underneath); manual CCTP Forwarding fallback |
 | **LP liquidity** | On-Arc vault deposit, plus **Any chain** tab — Unified Balance where available, else App Kit bridge → deposit |

@@ -272,12 +272,14 @@ function hasEmailProvider(): boolean {
 }
 
 /**
- * Dev echo: show code in API response.
- * - EMAIL_OTP_DEV_ECHO=1 force on
- * - EMAIL_OTP_DEV_ECHO=0 force off
- * - default: on when Gmail API is not configured
+ * Local-development OTP echo.
+ * - Never enabled when NODE_ENV=production, even if the flag is accidentally set.
+ * - EMAIL_OTP_DEV_ECHO=1 enables it in non-production runtimes.
+ * - EMAIL_OTP_DEV_ECHO=0 disables it.
+ * - Default: enabled locally when Gmail API is not configured.
  */
 export function otpDevEchoEnabled(): boolean {
+  if (process.env.NODE_ENV === "production") return false;
   if (process.env.EMAIL_OTP_DEV_ECHO === "0") return false;
   if (process.env.EMAIL_OTP_DEV_ECHO === "1") return true;
   return !hasEmailProvider();
@@ -460,6 +462,8 @@ export async function requestEmailOtp(
   /** Signed challenge — must be sent back with verify (required on multi-instance deployments). */
   otpToken: string;
   emailSent?: boolean;
+  /** Present only in non-production development when EMAIL_OTP_DEV_ECHO is enabled. */
+  devCode?: string;
 }> {
   const email = normalizeEmail(emailInput);
   if (!isValidEmail(email)) throw new Error("Enter a valid email address.");
@@ -494,7 +498,7 @@ export async function requestEmailOtp(
     console.warn(`[email-otp] delivery failed: ${delivery.error}`);
   }
 
-  // Never return the OTP to the client UI — code only goes by email (and server logs).
+  const devEcho = otpDevEchoEnabled();
   let message: string;
   if (delivery.sent) {
     message = `We sent a code to ${email}. Check inbox and Spam/Promotions.`;
@@ -503,6 +507,8 @@ export async function requestEmailOtp(
       "Email provider blocked this recipient. Verify your domain or use an allowed test address.";
   } else if (hasEmailProvider()) {
     message = `Could not send email (${shortProviderError(delivery.error)}). Try again in a moment.`;
+  } else if (devEcho) {
+    message = "Email is not configured. Use the development code shown in the login form.";
   } else {
     message = "Email is not configured on the server. Set the Gmail API OAuth variables.";
   }
@@ -512,7 +518,8 @@ export async function requestEmailOtp(
     expiresInSec: Math.floor(OTP_TTL_MS / 1000),
     message,
     otpToken,
-    emailSent: delivery.sent
+    emailSent: delivery.sent,
+    ...(devEcho ? { devCode: code } : {})
   };
 }
 

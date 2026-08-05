@@ -8,7 +8,7 @@ The previous runtime could repeatedly:
 - scan approximately 250,000 blocks of `TicketBought` logs every 20 seconds for aggregate stats;
 - reread every cached ticket and its market on every Portfolio poll;
 - send full chart histories to each browser every one to three seconds;
-- run a full Next server on Railway even though the UI was hosted by Vercel.
+- run duplicate frontend and API deployments with overlapping runtime work.
 
 The optimized runtime now:
 
@@ -21,7 +21,7 @@ The optimized runtime now:
 - stores each new market's creation block and begins strict settlement scans there;
 - sends one full chart payload, then lightweight current-value payloads;
 - pauses browser polling in hidden tabs;
-- starts only `apps/api` on Railway;
+- runs one Next.js full-stack Railway process; API routes and workers share its caches;
 - caps JSON-RPC batches at three methods so dRPC does not reject a large batch and force the same calls to be retried individually.
 
 ## Approximate dRPC usage
@@ -36,18 +36,17 @@ With the defaults in `.env.example`, 18 markets in the factory tail and continuo
 | Market create/resolve/receipt/settlement overhead | about 0.7–1.5M |
 | **Expected base range** | **about 2–3M** |
 
-This is an estimate, not a hard guarantee. Wallet balances, quotes, buys, claims, first-time Portfolio log scans, RPC retries and additional browser users add to it. Keep only the private dRPC endpoint in Railway `ARC_RPC_URL`, leave `ARC_RPC_URLS` empty and keep `RPC_ENABLE_PUBLIC_FALLBACK=0`; this prevents hidden retry traffic to other gateways. On Vercel use Arc public RPC for `NEXT_PUBLIC_ARC_RPC_URL` so ordinary browser reads do not consume the private dRPC project. Keep `RPC_BATCH_SIZE=3` for dRPC free-tier compatibility.
+This is an estimate, not a hard guarantee. Wallet balances, quotes, buys, claims, first-time Portfolio log scans, RPC retries and additional browser users add to it. Keep only the private dRPC endpoint in Railway `ARC_RPC_URL`, leave `ARC_RPC_URLS` empty and keep `RPC_ENABLE_PUBLIC_FALLBACK=0`; this prevents hidden retry traffic to other gateways. Use Arc public RPC for `NEXT_PUBLIC_ARC_RPC_URL` so browser reads do not consume the private server-side dRPC project. Keep `RPC_BATCH_SIZE=3` for dRPC free-tier compatibility.
 
 ## Railway $5 target
 
 Use these deployment choices:
 
-- one `@probx/api` service and one replica;
-- no Next frontend process on Railway;
+- one full-stack `@probx/web` Railway service and one replica;
+- same-origin API routes and workers in that process;
 - no separate cron service;
 - no separate auto-resolver service;
 - sleeping/serverless disabled because the oracle workers must remain alive;
-- Vercel serves all static/UI traffic;
 - set a Railway usage alert before $5 and a hard limit only if automatic shutdown is acceptable.
 
 Memory is usually the largest always-on cost. Check Railway Metrics after a full day. If the API consistently uses too much memory for the $5 credit, the next step is reducing optional Circle SDK initialization or moving noncritical wallet features to a separate on-demand service; do not solve it by sleeping the oracle process.

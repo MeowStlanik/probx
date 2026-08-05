@@ -29,7 +29,7 @@ import {
   demoFundViaCctp,
   verifyInjectedDemoFundAuth
 } from "../services/cctpDemoFundService.js";
-import { requestEmailOtp, consumeEmailOtp, otpDevEchoEnabled } from "../services/emailOtpService.js";
+import { requestEmailOtp, consumeEmailOtp } from "../services/emailOtpService.js";
 
 function getAddressSafe(value: string): `0x${string}` | undefined {
   try {
@@ -186,7 +186,7 @@ export async function handleWalletPost(
         status: 200,
         body: {
           ...result,
-          devEcho: otpDevEchoEnabled(),
+          devEcho: Boolean(result.devCode),
           next: "POST /api/wallet/session/verify-otp with { email, code }"
         }
       };

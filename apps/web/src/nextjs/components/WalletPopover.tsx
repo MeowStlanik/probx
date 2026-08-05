@@ -11,6 +11,8 @@ interface Props {
   busy?: boolean;
   /** Last wallet error (OTP / connect) to surface in the popover. */
   error?: string | null;
+  /** Development-only code returned by the backend; never present in production. */
+  devOtpCode?: string | null;
   onConnectBrowser: () => void | Promise<void>;
   /** Request OTP. Return true only on success so we advance to step 2. */
   onSendCode: (email: string) => Promise<boolean>;
@@ -30,6 +32,7 @@ export function WalletPopover({
   wallet,
   busy = false,
   error = null,
+  devOtpCode = null,
   onConnectBrowser,
   onSendCode,
   onVerifyCode,
@@ -465,6 +468,25 @@ export function WalletPopover({
                   <p style={{ fontSize: 11.5, color: theme.color.muted, margin: '0 0 8px' }}>
                     Code sent to <strong style={{ color: theme.color.ink }}>{email}</strong>
                   </p>
+                  {devOtpCode ? (
+                    <div
+                      role="status"
+                      style={{
+                        marginBottom: 10,
+                        padding: '9px 10px',
+                        border: `1px solid ${theme.color.purpleBorder}`,
+                        borderRadius: 9,
+                        background: theme.color.purpleSoft,
+                        color: theme.color.purple,
+                        fontSize: 11.5
+                      }}
+                    >
+                      Development code:{' '}
+                      <strong style={{ fontFamily: theme.font.mono, letterSpacing: '.16em' }}>
+                        {devOtpCode}
+                      </strong>
+                    </div>
+                  ) : null}
                   <div style={{ display: 'flex', gap: 8 }}>
                     <input
                       type="text"

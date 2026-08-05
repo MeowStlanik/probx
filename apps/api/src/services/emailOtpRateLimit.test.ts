@@ -3,7 +3,7 @@
  * On shared runtime without KV, fail closed (not silent process-local).
  */
 import assert from "node:assert/strict";
-import { requestEmailOtp } from "./emailOtpService.js";
+import { otpDevEchoEnabled, requestEmailOtp } from "./emailOtpService.js";
 
 /**
  * Next.js types NODE_ENV as a readonly literal union, and this file is inside the web
@@ -20,6 +20,7 @@ async function main() {
   const prevNodeEnv = process.env.NODE_ENV;
   mutableEnv.NODE_ENV = "development";
   process.env.EMAIL_OTP_DEV_ECHO = "1";
+  assert.equal(otpDevEchoEnabled(), true, "dev echo should be available locally when enabled");
   // Ensure OTP secret path works locally
   if (!process.env.OTP_HMAC_SECRET) process.env.OTP_HMAC_SECRET = "test-otp-hmac-secret-for-unit";
 
@@ -72,6 +73,11 @@ async function main() {
 
   // Shared runtime without KV must fail closed on rate-limit path.
   mutableEnv.NODE_ENV = "production";
+  assert.equal(
+    otpDevEchoEnabled(),
+    false,
+    "production must suppress OTP echo even when EMAIL_OTP_DEV_ECHO=1"
+  );
   // Ensure no KV
   const kvEnvNames = [
     "AIVEN_VALKEY_URL",

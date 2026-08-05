@@ -22,6 +22,8 @@ interface Props {
   onClearOtp?: (email?: string) => void;
   walletBusy?: boolean;
   walletError?: string | null;
+  /** Non-production OTP echo, shown only when the backend explicitly returns it. */
+  devOtpCode?: string | null;
   onDisconnect: () => void;
   onFixNetwork: () => void;
   onDeposit: (amount: number) => void;
@@ -162,6 +164,7 @@ export function Header(props: Props) {
             wallet={props.wallet}
             busy={props.walletBusy}
             error={props.walletError}
+            devOtpCode={props.devOtpCode}
             onConnectBrowser={props.onConnectBrowser}
             onSendCode={props.onSendCode}
             onVerifyCode={props.onVerifyCode}

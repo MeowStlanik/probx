@@ -1,33 +1,56 @@
-# ProbX — Vercel UI + Railway API
+# ProbX — full-stack Railway deployment
 
-Production is split into two deployments:
+The checked-in `railway.json` deploys **one persistent Railway service** containing:
 
-- **Vercel:** `apps/web` UI only. All browser and SSR API calls use the Railway origin.
-- **Railway:** lightweight `apps/api` Node server plus persistent market workers.
-- **Gmail API:** email OTP over HTTPS; SMTP ports are not used.
+- the Next.js UI from `apps/web`;
+- same-origin `/api/*` route handlers backed by `apps/api`;
+- persistent market-cycle and oracle-snapshot workers started by Next.js instrumentation;
+- Gmail API OTP, Circle, CCTP and Valkey integrations.
 
-`railway.json` intentionally builds and starts only `@probx/api`. Do not replace its start command with the root `pnpm start`, because that starts the full Next server and uses more memory.
+This is the canonical deployment shape for this archive. A split Vercel UI / standalone
+Railway API is possible, but it requires a different Railway build/start configuration and
+is not what the checked-in `railway.json` does.
 
-## Vercel variables
+## Local run
 
-```dotenv
-NEXT_PUBLIC_API_BASE_URL=https://your-api.up.railway.app
-NEXT_PUBLIC_SITE_URL=https://your-ui.vercel.app
-# Browser reads use the public Arc RPC instead of consuming the private dRPC project.
-NEXT_PUBLIC_ARC_RPC_URL=https://rpc.testnet.arc.network
-NEXT_PUBLIC_ARC_RPC_URLS=
-BACKGROUND_WORKERS_ENABLED=0
+```bash
+corepack enable
+pnpm install
+cp .env.example .env.local
+pnpm dev
 ```
 
-Redeploy Vercel after changing `NEXT_PUBLIC_*`; those values are embedded at build time.
+The local Next.js process serves the UI and same-origin API. Background workers remain
+opt-in through `BACKGROUND_WORKERS_ENABLED`.
 
-## Railway variables
+## Railway
+
+1. Create a Railway project and deploy this repository from its root.
+2. Add the variables from `.env.railway.fullstack.example`.
+3. Generate a public domain for the service.
+4. Set both `NEXT_PUBLIC_SITE_URL` and `SITE_URL` to that domain.
+5. Keep `NEXT_PUBLIC_API_BASE_URL` empty so browser calls remain same-origin.
+6. Redeploy after changing a `NEXT_PUBLIC_*` value because Next.js embeds it at build time.
+
+The checked-in configuration is:
+
+```text
+Build:  pnpm --filter @probx/web build
+Start:  pnpm --filter @probx/web start
+Health: /api/health
+```
+
+## Core Railway variables
 
 ```dotenv
 NODE_ENV=production
 HOST=0.0.0.0
-SITE_URL=https://your-ui.vercel.app
-CORS_ORIGINS=https://your-ui.vercel.app
+
+NEXT_PUBLIC_SITE_URL=https://your-app.up.railway.app
+SITE_URL=https://your-app.up.railway.app
+NEXT_PUBLIC_API_BASE_URL=
+CORS_ORIGINS=https://your-app.up.railway.app
+
 BACKGROUND_WORKERS_ENABLED=1
 
 ARC_RPC_URL=https://your-private-or-drpc-endpoint
@@ -36,12 +59,8 @@ RPC_ENABLE_PUBLIC_FALLBACK=0
 ARC_FROM_BLOCK=53938140
 ORACLE_PRIVATE_KEY=
 
-# TLS Service URI copied from the Aiven Valkey Overview page.
+# TLS URI from the Valkey provider.
 AIVEN_VALKEY_URL=rediss://...
-
-# Keep only during the migration rollback window.
-UPSTASH_REDIS_REST_URL=
-UPSTASH_REDIS_REST_TOKEN=
 
 ADMIN_SECRET=
 CRON_SECRET=
@@ -50,9 +69,10 @@ SESSION_HMAC_SECRET=
 SESSION_WALLET_SECRET=
 ```
 
-Add the Circle and Gmail values from `.env.example` when those flows are enabled.
+Add the Circle, Gmail and CCTP values from `.env.railway.fullstack.example` when those
+flows are enabled.
 
-## Low-cost worker configuration
+## Worker configuration
 
 ```dotenv
 MARKET_CYCLE_ENABLED=1
@@ -61,10 +81,10 @@ MARKET_CYCLE_INTERVAL_MS=30000
 ORACLE_SNAPSHOT_ENABLED=1
 ORACLE_SNAPSHOT_INTERVAL_MS=7000
 
-# The market cycle already resolves and settles. A second resolver loop only duplicates RPC.
+# Market-cycle already resolves and settles. Do not run a duplicate resolver in the
+# same process unless you are deliberately testing recovery behaviour.
 AUTO_RESOLVE_ENABLED=0
 
-# Shared dRPC cache and bounded log scans.
 RPC_MARKET_CACHE_MS=300000
 RPC_PUBLIC_MARKET_CACHE_MS=60000
 RPC_TICKET_CACHE_MS=60000
@@ -75,9 +95,13 @@ RPC_BATCH=1
 RPC_BATCH_SIZE=3
 ```
 
-The 7-second snapshot timer does not reread all contracts. It uses the shared five-minute schedule cache and fetches BTC/weather only near an active market's start or end boundary. The 30-second market cycle creates the next round, resolves finished rounds and settles tickets.
+The snapshot timer uses cached market schedules and fetches feeds only near active start
+or end boundaries. BTC reference markets observe for 60 seconds. London weather markets
+observe for 30 minutes because Open-Meteo publishes on a 15-minute grid and the resolver
+needs distinct start and end prints.
 
-Keep **one Railway replica**, disable sleeping/serverless mode, and do not configure an external cron as the primary scheduler. The protected endpoints remain available for emergency recovery:
+Keep **one Railway replica**, disable sleeping/serverless mode, and do not use an external
+cron as the primary scheduler. Protected endpoints remain available for recovery:
 
 ```text
 GET /api/cron/market-cycle?secret=CRON_SECRET
@@ -97,7 +121,7 @@ GMAIL_OAUTH_CLIENT_SECRET='...' \
 pnpm gmail:oauth
 ```
 
-4. Add to Railway:
+4. Add the values to Railway:
 
 ```dotenv
 GMAIL_OAUTH_CLIENT_ID=
@@ -109,12 +133,15 @@ EMAIL_OTP_DEV_ECHO=0
 EMAIL_OTP_REQUIRED=1
 ```
 
+`EMAIL_OTP_DEV_ECHO=1` is a local-development aid. The API refuses to return the code when
+`NODE_ENV=production`, even if the flag is accidentally enabled.
+
 ## Verification
 
 After deployment:
 
 ```bash
-curl https://your-api.up.railway.app/api/health
+curl https://your-app.up.railway.app/api/health
 ```
 
 Expected worker state:
@@ -124,20 +151,20 @@ Expected worker state:
   "ok": true,
   "workers": {
     "enabled": true,
-    "marketCycle": { "started": true, "intervalMs": 30000 },
-    "oracleSnapshot": { "started": true, "intervalMs": 7000 },
+    "marketCycle": { "started": true },
+    "oracleSnapshot": { "started": true },
     "autoResolve": { "started": false }
   }
 }
 ```
 
-Railway logs should include:
+Railway logs should include Next.js startup plus:
 
 ```text
-ProbX Arc API listening on http://0.0.0.0:<PORT>
 [workers] starting persistent Railway workers
-[oracle-snapshot] worker started (every 7000ms)
-[market-cycle] background timer every 30000ms
+[oracle-snapshot] worker started
+[market-cycle] background timer
 ```
 
-See `docs/AIVEN_VALKEY_MIGRATION.md` for the Upstash cutover/rollback runbook and `docs/RPC_BUDGET.md` for the request budget and Railway cost controls.
+See `docs/AIVEN_VALKEY_MIGRATION.md` for the Valkey cutover/rollback runbook and
+`docs/RPC_BUDGET.md` for request-budget guidance.

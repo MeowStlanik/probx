@@ -41,6 +41,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
   const [fundOpen, setFundOpen] = useState(false);
   const [fundTab, setFundTab] = useState<"direct" | "bridge" | "send">("direct");
   const [otpToken, setOtpToken] = useState<string | null>(null);
+  const [devOtpCode, setDevOtpCode] = useState<string | null>(null);
   const [pendingEmail, setPendingEmail] = useState("");
   const [quickTradeHref, setQuickTradeHref] = useState("/markets");
   const [quickBusy, setQuickBusy] = useState(false);
@@ -106,6 +107,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
         quickTradeBusy={quickBusy}
         walletBusy={connecting}
         walletError={walletError}
+        devOtpCode={devOtpCode}
         onConnectBrowser={() => {
           void connect();
         }}
@@ -113,13 +115,16 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
           const normalized = email.trim().toLowerCase();
           setPendingEmail(normalized);
           setOtpToken(null);
+          setDevOtpCode(null);
           clearEmailOtp(normalized);
           const res = await requestEmailOtp(normalized);
           if (!res?.otpToken) {
             setOtpToken(null);
+            setDevOtpCode(null);
             return false;
           }
           setOtpToken(res.otpToken);
+          setDevOtpCode(res.devCode ?? null);
           return true;
         }}
         onVerifyCode={async (email, code) => {
@@ -127,6 +132,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
           const addr = await verifyEmailOtp(normalized, code, otpToken ?? undefined);
           if (addr) {
             setOtpToken(null);
+            setDevOtpCode(null);
             setPendingEmail("");
             return true;
           }
@@ -134,11 +140,13 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
         }}
         onClearOtp={(email) => {
           setOtpToken(null);
+          setDevOtpCode(null);
           if (email) setPendingEmail("");
           clearEmailOtp(email);
         }}
         onDisconnect={() => {
           setOtpToken(null);
+          setDevOtpCode(null);
           setPendingEmail("");
           disconnect();
         }}

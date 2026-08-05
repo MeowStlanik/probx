@@ -153,7 +153,7 @@ type WalletContextValue = {
   /** Step 1: request 6-digit email OTP (returns otpToken for multi-instance verification). */
   requestEmailOtp: (
     email: string
-  ) => Promise<{ email: string; message: string; otpToken: string } | null>;
+  ) => Promise<{ email: string; message: string; otpToken: string; devCode?: string } | null>;
   /** Step 2: verify OTP → Circle Developer-Controlled wallet session. */
   verifyEmailOtp: (email: string, code: string, otpToken?: string) => Promise<`0x${string}` | null>;
   /** @deprecated use requestEmailOtp + verifyEmailOtp */
@@ -433,6 +433,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         email?: string;
         message?: string;
         otpToken?: string;
+        devCode?: string;
       };
       if (!response.ok) throw new Error(payload.error || `OTP HTTP ${response.status}`);
       if (!payload.email) throw new Error("Invalid OTP response.");
@@ -443,7 +444,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       return {
         email: payload.email,
         message: payload.message || "Enter the verification code.",
-        otpToken: payload.otpToken
+        otpToken: payload.otpToken,
+        ...(payload.devCode ? { devCode: payload.devCode } : {})
       };
     } catch (caught) {
       setError(readableWalletError(caught));

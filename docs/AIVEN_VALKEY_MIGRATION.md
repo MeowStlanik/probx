@@ -12,7 +12,7 @@ The application connects with `ioredis` using the TLS service URI from the Aiven
 AIVEN_VALKEY_URL=rediss://USER:PASSWORD@HOST:PORT
 ```
 
-Do not put the URI in browser/Vercel `NEXT_PUBLIC_*` variables. Configure it only on the Railway API service.
+Do not put the URI in browser/Vercel `NEXT_PUBLIC_*` variables. Configure it only on the server-side Railway service.
 
 ## 1. Prepare and validate
 

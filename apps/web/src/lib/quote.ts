@@ -4,7 +4,7 @@ export const MAX_USER_RISK = 100;
 export const MAX_PAYOUT = 2_500;
 export const MAX_BOOST = 5;
 export const BASE_FEE_RATE = 0.003;
-export const BOOST_FEE_RATE = 0.004;
+export const BOOST_FEE_RATE = 0.04; // mirrors BOOST_FEE_BPS = 400
 
 export interface Quote {
   price: number;

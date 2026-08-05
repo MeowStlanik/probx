@@ -48,9 +48,16 @@ const starvedQuote = quoteTicket({
 // NOT bumped to ECONOMIC_MAX_BOOST like the old buggy max() did.
 assert.equal(starvedQuote.maxAvailableBoost, 1);
 
-// Regression: quoted prices never exceed on-chain MAX_PRICE (0.95) or 100%.
+// Regression: API mirrors MicroMarket._setQuotedFromMid integer math.
+// 0.93 × 1.08 exceeds PRICE_SCALE, so the contract caps the quote at 0.999999,
+// while the opposite side remains 0.0756. Quotes are not capped at 0.95.
 const extreme = applyPriceMargin(0.93);
-assert.ok(extreme.yesPrice <= 0.95);
-assert.ok(extreme.yesPrice + 0.0001 < 1);
+assert.equal(extreme.yesPrice, 0.999999);
+assert.equal(extreme.noPrice, 0.0756);
+
+// Constructor mid clamp and Solidity floor division are mirrored exactly.
+const clamped = applyPriceMargin(1);
+assert.equal(clamped.yesPrice, 0.999999);
+assert.equal(clamped.noPrice, 0.054);
 
 console.log("quoteEngine tests passed");

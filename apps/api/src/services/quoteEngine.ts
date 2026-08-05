@@ -81,17 +81,31 @@ export function maxBoost(riskAmount: number, price: number, availableReserve: nu
   return roundBoost(Math.min(MAX_BOOST, Math.max(1, fromLp)));
 }
 
-/** Apply sportsbook-style overround so quoted YES+NO ≈ 1 + PRICE_MARGIN. */
-export function applyPriceMargin(fairYes: number, margin = PRICE_MARGIN): { yesPrice: number; noPrice: number } {
-  const mid = Math.min(0.95, Math.max(0.05, fairYes));
-  const vig = 1 + margin;
-  // Clamp QUOTED prices too, mirroring MicroMarket MIN_PRICE/MAX_PRICE (5%–95%).
-  // Without this, mid > ~0.88 quotes above the on-chain cap and mid > ~0.926
-  // quotes above 100% (payout < stake, negative reserve).
-  const clampQuoted = (value: number) => Math.min(0.95, Math.max(0.05, value));
+/**
+ * Apply the same integer overround math as MicroMarket._setQuotedFromMid().
+ * The constructor accepts a fair mid in [5%, 95%]. Quoted prices are multiplied
+ * by OVERROUND_BPS, floored like Solidity integer division, capped at 0.999999
+ * for QuoteMath, and floored at 0.05. They are not capped at 0.95.
+ */
+export function applyPriceMargin(
+  fairYes: number,
+  margin = PRICE_MARGIN
+): { yesPrice: number; noPrice: number } {
+  const priceScale = 1_000_000;
+  const minPrice = 50_000;
+  const maxQuotedPrice = priceScale - 1;
+  const midYes = Math.min(950_000, Math.max(50_000, Math.round(fairYes * priceScale)));
+  const midNo = priceScale - midYes;
+  const overroundBps = Math.round((1 + margin) * 10_000);
+
+  const quote = (mid: number): number => {
+    const scaled = Math.floor((mid * overroundBps) / 10_000);
+    return Math.min(maxQuotedPrice, Math.max(minPrice, scaled)) / priceScale;
+  };
+
   return {
-    yesPrice: roundUsdc(clampQuoted(mid * vig)),
-    noPrice: roundUsdc(clampQuoted((1 - mid) * vig))
+    yesPrice: quote(midYes),
+    noPrice: quote(midNo)
   };
 }
 
