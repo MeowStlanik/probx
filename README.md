@@ -180,7 +180,7 @@ self-call so one bad ticket cannot revert the batch.
 - **Circle Wallets** — email → Developer-Controlled EOA on Arc (fallback: local session EOA)
 - **App Kits** — Send, Bridge and Unified Balance via `@circle-fin/app-kit`
 - **CCTP** — USDC from Base Sepolia / Eth Sepolia → Arc
-- **Durable wallet mapping** — email → walletId in Redis KV; recovery via Circle `listWallets(refId)`, no duplicate wallets after logout
+- **Durable wallet mapping** — email → walletId in Aiven Valkey; recovery via Circle `listWallets(refId)`, no duplicate wallets after logout
 - **Email OTP** — app-issued 6-digit code via Gmail API over HTTPS (dev-echo locally)
 - **Tx tracking** — position / claim / deposit / send tracked `pending → confirmed / failed`, reconciled server-side
 - **Dual path** — email session or MetaMask throughout
@@ -198,7 +198,7 @@ self-call so one bad ticket cannot revert the batch.
         │                                   │                            │
         │                         ┌─────────▼────────┐           ┌───────▼───────┐
         └────────────────────────▶│ Circle / Gmail  │           │ App Kit       │
-            browser wallet        │ Redis KV        │           │ Send · Bridge │
+            browser wallet        │ Aiven Valkey    │           │ Send · Bridge │
                                   └──────────────────┘           └───────────────┘
 ```
 
@@ -291,7 +291,7 @@ Testnet deployment built for a hackathon. Honest limits:
 - **Custodial by design (email path).** Circle Developer-Controlled wallets (or a local session EOA fallback) mean the server can sign for email users. MetaMask users hold their own keys.
 - **Oracle is centralized today.** Owner/oracle can resolve; feeds are server-side (Coinbase / Open-Meteo). No quorum, on-chain attestation, or dispute period yet — acceptable for demo, not production infrastructure claims.
 - **Demo risk parameters.** **100000 USDC** seeded vault with loose exposure caps (`MAX_LP_RESERVE_PER_USER_BPS = 8000`). Sized so a demo can exercise full boost range.
-- **Ops dependencies.** One persistent Railway service plus Redis KV; `ADMIN_SECRET`, `OTP_HMAC_SECRET`, session secrets, and Gmail OAuth credentials are required for production.
+- **Ops dependencies.** One persistent Railway service plus Aiven Valkey; `ADMIN_SECRET`, `OTP_HMAC_SECRET`, session secrets, and Gmail OAuth credentials are required for production.
 - **Contract security.** Engine only accepts markets from the factory registry (`isMarket`). **Live stack must be redeployed** after this change — frontend alone cannot patch the old engine.
 
 ---
@@ -301,6 +301,7 @@ Testnet deployment built for a hackathon. Honest limits:
 | Doc | Contents |
 |-----|----------|
 | **[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)** | Local run, Railway deploy, Gmail API OAuth, workers |
+| **[`docs/AIVEN_VALKEY_MIGRATION.md`](docs/AIVEN_VALKEY_MIGRATION.md)** | Upstash migration, validation, cutover, and rollback |
 | [`railway.json`](railway.json) | Railpack build/start/healthcheck configuration |
 | [`docs/DEPLOYMENT_ARC_TESTNET.json`](docs/DEPLOYMENT_ARC_TESTNET.json) | Live contract addresses |
 | [`contracts/test/`](./contracts/test/) | **50** forge tests: 25 scenario + 3 registry + 6 LP + 12 accounting/fuzz + 4 book-manipulation — `pnpm contracts:test` |
@@ -312,3 +313,4 @@ Testnet deployment built for a hackathon. Honest limits:
 <p align="center">
   <sub>Built for Arc · Programmable money · USDC all the way down</sub>
 </p>
+

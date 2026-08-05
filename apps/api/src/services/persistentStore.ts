@@ -1,21 +1,80 @@
 /**
  * Durable key/value store for wallet mappings and transaction records.
  *
- * Production uses Upstash Redis over HTTPS so state survives Railway restarts
- * and remains safe if the service is scaled beyond one process. Local
- * development falls back to JSON files in the runtime directory.
+ * Production prefers Aiven for Valkey over its TLS service URI. During the
+ * migration window the legacy Upstash REST configuration remains available as
+ * a rollback path. Local development falls back to JSON files in the runtime
+ * directory when neither remote backend is configured.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import Redis from "ioredis";
 import { runtimeFile } from "../runtimePaths.js";
 
-type KvConfig = { url: string; token: string };
+type ValkeyConfig = { kind: "valkey"; url: string; source: string };
+type UpstashRestConfig = { kind: "upstash-rest"; url: string; token: string };
+type KvConfig = ValkeyConfig | UpstashRestConfig;
+
+let valkeyClient: Redis | null = null;
+let valkeyClientUrl = "";
+let lastValkeyErrorLogAt = 0;
+
+function parseValkeyUrl(source: string, raw: string): ValkeyConfig {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`${source} must be a valid redis:// or rediss:// URI.`);
+  }
+  if (parsed.protocol !== "redis:" && parsed.protocol !== "rediss:") {
+    throw new Error(`${source} must use redis:// or rediss://.`);
+  }
+  if (source === "AIVEN_VALKEY_URL" && parsed.protocol !== "rediss:") {
+    throw new Error("AIVEN_VALKEY_URL must use rediss:// because Aiven requires TLS.");
+  }
+  return { kind: "valkey", url: raw, source };
+}
 
 function kvConfig(): KvConfig | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL || "";
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN || "";
+  for (const source of ["AIVEN_VALKEY_URL", "VALKEY_URL", "REDIS_URL"] as const) {
+    const value = String(process.env[source] || "").trim();
+    if (value) return parseValkeyUrl(source, value);
+  }
+
+  const url = String(process.env.UPSTASH_REDIS_REST_URL || "").trim();
+  const token = String(process.env.UPSTASH_REDIS_REST_TOKEN || "").trim();
   if (!url || !token) return null;
-  return { url: url.replace(/\/$/, ""), token };
+  return { kind: "upstash-rest", url: url.replace(/\/$/, ""), token };
+}
+
+function getValkeyClient(cfg: ValkeyConfig): Redis {
+  if (valkeyClient && valkeyClientUrl === cfg.url && valkeyClient.status !== "end") {
+    return valkeyClient;
+  }
+
+  if (valkeyClient) {
+    valkeyClient.disconnect(false);
+  }
+
+  valkeyClientUrl = cfg.url;
+  valkeyClient = new Redis(cfg.url, {
+    lazyConnect: true,
+    connectTimeout: 10_000,
+    maxRetriesPerRequest: 2,
+    enableReadyCheck: true,
+    keepAlive: 10_000,
+    retryStrategy(times) {
+      return Math.min(200 * times, 2_000);
+    }
+  });
+  valkeyClient.on("error", (error) => {
+    const now = Date.now();
+    if (now - lastValkeyErrorLogAt >= 30_000) {
+      lastValkeyErrorLogAt = now;
+      console.error(`[kv:${cfg.source}] Valkey connection error:`, error);
+    }
+  });
+  return valkeyClient;
 }
 
 export function persistenceMode(): "kv" | "file" {
@@ -35,7 +94,7 @@ export function requireDurableKv(feature: string): void {
   if (!isSharedRuntime()) return;
   if (persistenceMode() !== "kv") {
     throw new Error(
-      `${feature} requires durable KV (UPSTASH_REDIS_REST_URL) in production.`
+      `${feature} requires durable KV (AIVEN_VALKEY_URL or legacy Upstash REST) in production.`
     );
   }
 }
@@ -46,6 +105,13 @@ export function marketCreateLockKey(role: "btc" | "weather"): string {
 }
 
 async function kvCommand<T = unknown>(cfg: KvConfig, command: unknown[]): Promise<T | null> {
+  if (cfg.kind === "valkey") {
+    const [name, ...args] = command.map((value) => String(value));
+    if (!name) throw new Error("KV command is empty");
+    const client = getValkeyClient(cfg);
+    return (await client.call(name, ...args)) as T | null;
+  }
+
   const res = await fetch(cfg.url, {
     method: "POST",
     headers: {

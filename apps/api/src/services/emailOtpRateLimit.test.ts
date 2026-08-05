@@ -73,10 +73,17 @@ async function main() {
   // Shared runtime without KV must fail closed on rate-limit path.
   mutableEnv.NODE_ENV = "production";
   // Ensure no KV
-  const savedUrl = process.env.UPSTASH_REDIS_REST_URL;
-  const savedTok = process.env.UPSTASH_REDIS_REST_TOKEN;
-  delete process.env.UPSTASH_REDIS_REST_URL;
-  delete process.env.UPSTASH_REDIS_REST_TOKEN;
+  const kvEnvNames = [
+    "AIVEN_VALKEY_URL",
+    "VALKEY_URL",
+    "REDIS_URL",
+    "UPSTASH_REDIS_REST_URL",
+    "UPSTASH_REDIS_REST_TOKEN"
+  ] as const;
+  const savedKvEnv = Object.fromEntries(
+    kvEnvNames.map((name) => [name, process.env[name]])
+  ) as Record<(typeof kvEnvNames)[number], string | undefined>;
+  for (const name of kvEnvNames) delete mutableEnv[name];
   // OTP_HMAC_SECRET required on shared — already set
   let failedClosed = false;
   try {
@@ -91,8 +98,11 @@ async function main() {
   // restore
   if (prevNodeEnv === undefined) delete mutableEnv.NODE_ENV;
   else mutableEnv.NODE_ENV = prevNodeEnv;
-  if (savedUrl !== undefined) process.env.UPSTASH_REDIS_REST_URL = savedUrl;
-  if (savedTok !== undefined) process.env.UPSTASH_REDIS_REST_TOKEN = savedTok;
+  for (const name of kvEnvNames) {
+    const value = savedKvEnv[name];
+    if (value === undefined) delete mutableEnv[name];
+    else mutableEnv[name] = value;
+  }
 
   console.log("emailOtpRateLimit tests passed");
 }

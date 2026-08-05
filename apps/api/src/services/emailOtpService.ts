@@ -62,7 +62,7 @@ async function incrWithTtl(
   } else if (isSharedRuntime()) {
     // Shared host without KV: fail closed rather than per-instance memory counters.
     throw new Error(
-      "Login rate limits require durable KV (UPSTASH_REDIS_REST_URL) on shared deploys."
+      "Login rate limits require durable KV (AIVEN_VALKEY_URL or legacy Upstash REST) on shared deploys."
     );
   }
   const now = Date.now();

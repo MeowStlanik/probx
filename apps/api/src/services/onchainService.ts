@@ -2448,7 +2448,7 @@ const weatherTickHistory: HistoryPoint[] = [];
  * KV-backed tick history persistence.
  * In-memory arrays are lost on restarts and differ across replicas,
  * so observation charts looked empty. Load last ~10 min from KV once per isolate;
- * write back every 45s (throttled) so free-tier Upstash stays comfortable.
+ * write back every 45s (throttled) to keep remote KV write volume bounded.
  */
 let kvTicksLoaded = false;
 let lastKvTickSaveAt = 0;

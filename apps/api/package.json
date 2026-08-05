@@ -8,12 +8,14 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "tsx src/services/quoteEngine.test.ts && tsx src/services/sessionRevoke.test.ts && tsx src/services/observationSnapshots.test.ts && tsx src/services/emailOtpRateLimit.test.ts"
+    "test": "tsx src/services/quoteEngine.test.ts && tsx src/services/sessionRevoke.test.ts && tsx src/services/observationSnapshots.test.ts && tsx src/services/emailOtpRateLimit.test.ts",
+    "kv:smoke": "node scripts/valkey-smoke.mjs"
   },
   "dependencies": {
     "@circle-fin/adapter-viem-v2": "1.14.0",
     "@circle-fin/app-kit": "1.10.0",
     "@circle-fin/developer-controlled-wallets": "^10.8.0",
+    "ioredis": "^5.11.1",
     "viem": "^2.21.53"
   },
   "devDependencies": {

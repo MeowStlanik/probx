@@ -36,6 +36,10 @@ RPC_ENABLE_PUBLIC_FALLBACK=0
 ARC_FROM_BLOCK=53938140
 ORACLE_PRIVATE_KEY=
 
+# TLS Service URI copied from the Aiven Valkey Overview page.
+AIVEN_VALKEY_URL=rediss://...
+
+# Keep only during the migration rollback window.
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 
@@ -136,4 +140,4 @@ ProbX Arc API listening on http://0.0.0.0:<PORT>
 [market-cycle] background timer every 30000ms
 ```
 
-See `docs/RPC_BUDGET.md` for the request budget and Railway cost controls.
+See `docs/AIVEN_VALKEY_MIGRATION.md` for the Upstash cutover/rollback runbook and `docs/RPC_BUDGET.md` for the request budget and Railway cost controls.

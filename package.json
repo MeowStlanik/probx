@@ -19,7 +19,8 @@
     "rpc:arc": "node scripts/arc-rpc-preflight.mjs",
     "pack:release": "bash scripts/pack-release.sh",
     "start": "node apps/web/node_modules/next/dist/bin/next start apps/web -H 0.0.0.0 -p ${PORT:-3000}",
-    "gmail:oauth": "node scripts/gmail-oauth-token.mjs"
+    "gmail:oauth": "node scripts/gmail-oauth-token.mjs",
+    "kv:smoke": "pnpm --filter @probx/api kv:smoke"
   },
   "keywords": [
     "settlement",
